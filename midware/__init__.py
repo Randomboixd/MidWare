@@ -47,4 +47,23 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     register_template_helpers(app)
 
+    # Kick off a model-catalogue refresh when it has gone stale (roughly daily).
+    from .models import refresh_if_stale
+
+    app.extensions["midware_model_refresh"] = lambda: refresh_if_stale(app)
+    app.before_request(_maybe_refresh_models)
+
     return app
+
+
+def _maybe_refresh_models() -> None:
+    from flask import current_app
+
+    if current_app.config.get("TESTING"):
+        return
+    checker = current_app.extensions.get("midware_model_refresh")
+    if checker is not None:
+        try:
+            checker()
+        except Exception:  # never block a request on catalogue bookkeeping
+            current_app.logger.debug("model refresh check failed", exc_info=True)

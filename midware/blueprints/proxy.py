@@ -192,6 +192,35 @@ def _server_header() -> tuple[str, str]:
     return ("Server", "MidWare")
 
 
+def _models_catalogue() -> Response:
+    """Serve MidWare's own model list instead of proxying the upstream's.
+
+    The default route's models are bare; every other route's are prefixed with
+    ``[Name]`` so the slug can be copied straight into a request.
+    """
+    db = get_db()
+    entries = db.list_models()
+    payload = {
+        "object": "list",
+        "data": [
+            {
+                "id": entry["slug"],
+                "object": "model",
+                "created": 0,
+                "owned_by": entry["route_name"],
+                "midware": {
+                    "model": entry["model_id"],
+                    "route_id": entry["route_id"],
+                    "route": entry["route_name"],
+                    "default": entry["is_default"],
+                },
+            }
+            for entry in entries
+        ],
+    }
+    return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+
+
 def _json_error(message: str, status: int, code: str, err_type: str = "midware_error") -> Response:
     body = {"error": {"message": message, "type": err_type, "code": code}}
     return Response(json.dumps(body), status=status, mimetype="application/json")
@@ -420,6 +449,8 @@ def proxy_v1(subpath: str = ""):
     if error:
         payload, status = error
         return Response(json.dumps(payload), status=status, mimetype="application/json")
+    if request.method == "GET" and (subpath or "").strip("/") == "models":
+        return _models_catalogue()
     if request.method != "POST":
         return _json_error("Only POST requests are proxied.", 405, "method_not_allowed")
     return _forward(ctx, subpath)

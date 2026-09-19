@@ -150,6 +150,29 @@
     <p>No model data yet.</p>
     {% endif %}
 
+    <h2>Available models</h2>
+    {% if model_slugs %}
+    <p><small>{{ model_slugs | length }} slug(s); copy one straight into your client.
+       The default route's models have no prefix.</small></p>
+    <table class="compact">
+      <thead><tr><th>Route</th><th>Model</th></tr></thead>
+      <tbody>
+        {% for m in model_slugs[:12] %}
+        <tr>
+          <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
+          <td class="mono">{{ m.slug }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if model_slugs | length > 12 %}
+    <p><a href="{{ url_for('admin.routes') }}">See all {{ model_slugs | length }} models →</a></p>
+    {% endif %}
+    {% else %}
+    <p>No models discovered yet.
+       <a href="{{ url_for('admin.routes') }}">Refresh the catalogue</a>.</p>
+    {% endif %}
+
     <h2>Quick start</h2>
     <p>Point any OpenAI-compatible client at this server:</p>
     <pre class="mono">BASE_URL={{ request.url_root }}v1

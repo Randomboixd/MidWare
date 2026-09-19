@@ -40,6 +40,7 @@ def index():
         models=models,
         hosts=hosts,
         recent=recent,
+        model_slugs=db.list_models(),
         api_keys=db.list_api_keys(),
         routes=db.list_routes(),
         selected_key=api_key_id,

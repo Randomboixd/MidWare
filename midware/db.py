@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS models (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    route_id   INTEGER NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+    model_id   TEXT    NOT NULL,
+    fetched_at TEXT    NOT NULL,
+    UNIQUE(route_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_models_route ON models(route_id);
 """
 
 
@@ -285,6 +295,95 @@ class Database:
     def active_route(self) -> sqlite3.Row | None:
         route = self._row("SELECT * FROM routes WHERE is_active = 1 ORDER BY id LIMIT 1")
         return route or self._row("SELECT * FROM routes ORDER BY id LIMIT 1")
+
+    # -- discovered models --------------------------------------------------
+
+    def replace_models(self, route_id: int, model_ids: list[str]) -> int:
+        """Store the model list for a route, replacing whatever was there."""
+        cleaned: list[str] = []
+        for model_id in model_ids:
+            text = str(model_id).strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        stamp = to_iso(utcnow())
+        with self.write() as conn:
+            conn.execute("DELETE FROM models WHERE route_id = ?", (route_id,))
+            conn.executemany(
+                "INSERT INTO models (route_id, model_id, fetched_at) VALUES (?, ?, ?)",
+                [(route_id, model_id, stamp) for model_id in cleaned],
+            )
+        return len(cleaned)
+
+    def list_models(self, route_id: int | None = None, *, active_only: bool = False) -> list[dict[str, Any]]:
+        """Discovered models as ``{"model_id", "route_id", ...}`` dicts.
+
+        For the default route the ``model_id`` is returned bare; every other
+        route prefixes it with ``[Name]`` so it can be sent back verbatim. With
+        ``active_only`` only the default route's models plus the other routes'
+        namespaced ones are kept (which is always the case today, but keeps the
+        default/prefix contract explicit).
+        """
+        routes = {row["id"]: row for row in self.list_routes()}
+        active = self.active_route()
+        active_id = active["id"] if active else None
+        params: list[Any] = []
+        sql = "SELECT * FROM models"
+        if route_id is not None:
+            sql += " WHERE route_id = ?"
+            params.append(route_id)
+        sql += " ORDER BY route_id, model_id"
+
+        models: list[dict[str, Any]] = []
+        for row in self._rows(sql, tuple(params)):
+            route = routes.get(row["route_id"])
+            if route is None:
+                continue
+            if active_only and row["route_id"] == active_id:
+                pass
+            model_id = row["model_id"]
+            slug = model_id if row["route_id"] == active_id else f"[{route['name']}]{model_id}"
+            models.append(
+                {
+                    "model_id": model_id,
+                    "slug": slug,
+                    "raw_id": model_id,
+                    "route_id": row["route_id"],
+                    "route_name": route["name"],
+                    "is_default": row["route_id"] == active_id,
+                    "fetched_at": row["fetched_at"],
+                }
+            )
+        return models
+
+    def model_summary(self) -> list[dict[str, Any]]:
+        """Per-route counts for the UI, keyed by route id order."""
+        counts = {
+            row["route_id"]: row["total"]
+            for row in self._rows(
+                "SELECT route_id, COUNT(*) AS total, MAX(fetched_at) AS last FROM models GROUP BY route_id"
+            )
+        }
+        last = {
+            row["route_id"]: row["last"]
+            for row in self._rows("SELECT route_id, MAX(fetched_at) AS last FROM models GROUP BY route_id")
+        }
+        active = self.active_route()
+        active_id = active["id"] if active else None
+        summary = []
+        for route in self.list_routes():
+            summary.append(
+                {
+                    "route_id": route["id"],
+                    "route_name": route["name"],
+                    "count": int(counts.get(route["id"], 0)),
+                    "fetched_at": last.get(route["id"]),
+                    "is_default": route["id"] == active_id,
+                }
+            )
+        return summary
+
+    def count_models(self) -> int:
+        return int(self._scalar("SELECT COUNT(*) FROM models"))
 
     # -- api keys -----------------------------------------------------------
 

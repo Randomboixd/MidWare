@@ -13,6 +13,7 @@ from flask import (
 )
 
 from ..auth import get_db
+from ..models import refresh_all
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -24,6 +25,14 @@ def _form_int(name: str, default: int, minimum: int = 0, maximum: int = 100_000)
     except (TypeError, ValueError):
         return default
     return max(minimum, min(value, maximum))
+
+
+def _flash_refresh(result: dict) -> None:
+    if result["errors"]:
+        detail = "; ".join(f"{e['route_name']}: {e['error']}" for e in result["errors"])
+        flash(f"Model fetch failed — {detail}", "error")
+    else:
+        flash(f"Fetched {result['total']} model slug(s) across {len(result['routes'])} route(s).", "success")
 
 
 @bp.route("/setup", methods=["GET", "POST"])
@@ -63,6 +72,7 @@ def setup():
         )
         db.set_setting("request_log_limit", str(log_limit))
         db.mark_configured()
+        refresh_all(current_app)
 
         if new_token:
             flash(
@@ -103,11 +113,14 @@ def routes():
                 )
                 db.mark_configured()
                 flash(f"Route '{name}' created.", "success")
+                _flash_refresh(refresh_all(current_app))
         elif action == "activate":
             route_id = request.form.get("route_id", type=int)
             for route in db.list_routes():
                 db.update_route(route["id"], is_active=route["id"] == route_id)
-            flash("Active route updated.", "success")
+            _flash_refresh(refresh_all(current_app))
+        elif action == "refresh":
+            _flash_refresh(refresh_all(current_app))
         elif action == "update":
             route_id = request.form.get("route_id", type=int)
             name = (request.form.get("name") or "").strip()
@@ -123,6 +136,7 @@ def routes():
                     updates["upstream_key"] = upstream_key
                 db.update_route(route_id, **updates)
                 flash(f"Route '{name}' updated.", "success")
+                _flash_refresh(refresh_all(current_app))
         elif action == "delete":
             route_id = request.form.get("route_id", type=int)
             db.delete_route(route_id)
@@ -134,6 +148,10 @@ def routes():
         routes=db.list_routes(),
         active_route_id=db.active_route()["id"] if db.active_route() else None,
         api_keys=db.list_api_keys(),
+        model_summary={entry["route_id"]: entry for entry in db.model_summary()},
+        model_slugs=db.list_models(),
+        models_refreshed_at=db.get_meta("models_refreshed_at"),
+        models_refresh_error=db.get_meta("models_refresh_error"),
     )
 
 

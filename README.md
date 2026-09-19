@@ -20,6 +20,10 @@ Storage is a single SQLite file. No frontend framework, no build step.
   (`input_tokens`/`output_tokens`) usage blocks.
 - Multiple routes with exactly one default upstream; the rest are reached with a
   `[Host]` model prefix. Routes are editable (name, target, key) from the UI.
+- Aggregated **model catalogue**: every route's `/v1/models` is fetched on route
+  changes and roughly daily, then served back at MidWare's own `/v1/models` as a
+  single deduplicated list — default-route models bare, all others prefixed with
+  `[Name]`. Routes sharing a `target_host` are only fetched once.
 - Multiple client keys, each with its own usage totals.
 - Every request is logged with the resolved host, model, status, latency, token counts
   and optional request/response bodies. The log is capped at **N requests per key**
@@ -135,6 +139,28 @@ upstream key (`Authorization: Bearer …`, or `x-api-key: …` for Anthropic tar
 If a route was saved **without** an upstream key, MidWare falls back to passing the
 caller's credential through — handy for keyless local models like Ollama or LM Studio.
 
+### The aggregated model list
+
+Most providers expose a `GET /v1/models`. MidWare fetches each route's list — on route
+create/edit, whenever the default route changes, and roughly once a day — and serves
+one merged catalogue at its own `/v1/models`:
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-4o-mini", "owned_by": "Default",  "midware": { "default": true } },
+    { "id": "[NanoGPT]xiaomi/mimo-v2.5-pro", "owned_by": "NanoGPT" }
+  ]
+}
+```
+
+The default route's models are emitted **bare**, every other route's models are
+prefixed with `[Name]`, so a slug copied straight from the response is also a valid
+`model` value on the next request. The list is regenerated whenever the default route
+changes, and two routes pointing at the same host are only ever fetched once. Refresh
+on demand with **Refresh models** on the Routes page.
+
 ## Reading a captured request
 
 `/requests/<id>` renders the captured bodies as a conversation instead of raw JSON.
@@ -158,6 +184,7 @@ Raw bodies stay available under *Raw payloads*.
 | `/requests` | Paginated request log, filterable by key/route |
 | `/requests/<id>` | Single request: readable conversation + raw bodies |
 | `/requests/<id>/messages.json` | Normalized conversation JSON (used by the **Fetch** button) |
+| `/v1/models` | Aggregated, deduplicated model catalogue across every route |
 | `/admin/setup` | First-run wizard / add another route |
 | `/admin/routes` | Add, edit, activate and delete routes |
 | `/admin/keys` | Create and revoke MidWare client keys |

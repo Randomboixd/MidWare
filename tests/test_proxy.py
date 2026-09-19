@@ -6,15 +6,21 @@ import pytest
 
 
 class StubResponse:
-    def __init__(self, status_code=200, content=b"", headers=None, stream_chunks=None):
+    def __init__(self, status_code=200, content=b"", headers=None, stream_chunks=None, json_body=None):
         self.status_code = status_code
         self.content = content
         self.headers = headers or {"content-type": "application/json"}
         self._chunks = stream_chunks or []
+        self._json = json_body
 
     def iter_bytes(self):
         for chunk in self._chunks:
             yield chunk
+
+    def json(self):
+        if self._json is not None:
+            return self._json
+        return json.loads(self.content or b"{}")
 
     def close(self):
         pass
@@ -25,6 +31,7 @@ class StubClient:
         self.response = response
         self.error = error
         self.sent = []
+        self.gets = []
 
     def build_request(self, method, url, content=None, headers=None):
         return {"method": method, "url": url, "content": content, "headers": headers}
@@ -33,6 +40,10 @@ class StubClient:
         self.sent.append((request, stream))
         if self.error:
             raise self.error
+        return self.response
+
+    def get(self, url, headers=None):
+        self.gets.append((url, headers))
         return self.response
 
 
@@ -178,5 +189,5 @@ def test_x_api_key_style_auth(configured):
 
 def test_get_method_not_allowed(configured_client):
     client, token = configured_client
-    response = client.get("/v1/models", headers=auth_header(token))
+    response = client.get("/v1/chat/completions", headers=auth_header(token))
     assert response.status_code == 405

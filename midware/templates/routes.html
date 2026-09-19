@@ -8,6 +8,41 @@
      prefixing the model with <code>[Name]</code>.</p>
 </hgroup>
 
+<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
+  <div>
+    <h2 style="margin-bottom:0.2rem">Model catalogue</h2>
+    <p style="margin:0">
+      {{ model_slugs | length }} slug(s) across {{ model_summary | length }} route(s).
+      {% if models_refreshed_at %}Last refreshed {{ models_refreshed_at | datetime }}.{% else %}Never refreshed.{% endif %}
+    </p>
+  </div>
+  <form method="post">
+    <input type="hidden" name="action" value="refresh">
+    <button type="submit">Refresh models</button>
+  </form>
+</div>
+
+{% if models_refresh_error %}
+<article class="flash flash-error">Last refresh error: {{ models_refresh_error }}</article>
+{% endif %}
+
+{% if model_slugs %}
+<details class="edit-drawer" style="margin-top:0.6rem">
+  <summary style="padding:0.4rem 0.6rem;font-size:0.9rem">View model slugs</summary>
+  <table class="compact" style="margin:0.5rem 0.6rem">
+    <thead><tr><th>Route</th><th>Slug to send</th></tr></thead>
+    <tbody>
+      {% for m in model_slugs %}
+      <tr>
+        <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
+        <td class="mono">{{ m.slug }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
 <h2>Add a route</h2>
 <form method="post">
   <input type="hidden" name="action" value="create">
@@ -22,7 +57,7 @@
 <h2>Configured routes</h2>
 {% if routes %}
 <table class="compact">
-  <thead><tr><th>Name</th><th>Target</th><th>Key</th><th>Role</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Target</th><th>Key</th><th>Models</th><th>Role</th><th></th></tr></thead>
   <tbody>
     {% for r in routes %}
     {% set is_default = r['id'] == active_route_id %}
@@ -33,6 +68,14 @@
       </td>
       <td class="mono">{{ r['target_host'] }}</td>
       <td>{% if r['upstream_key'] %}<span class="pill ok">stored</span>{% else %}<span class="pill warn">none</span>{% endif %}</td>
+      <td>
+        {% set summary = model_summary.get(r['id']) %}
+        {% if summary and summary.count %}
+          <span class="pill ok">{{ summary.count }}</span>
+        {% else %}
+          <span class="pill warn">0</span>
+        {% endif %}
+      </td>
       <td>
         {% if is_default %}
           <span class="pill ok">default</span>
@@ -53,7 +96,7 @@
       </td>
     </tr>
     <tr>
-      <td colspan="5" style="padding:0">
+      <td colspan="6" style="padding:0">
         <details id="edit-{{ r['id'] }}" class="edit-drawer">
           <summary style="padding:0.4rem 0.6rem;font-size:0.85rem">Edit route</summary>
           <form method="post" style="padding:0.5rem 0.6rem 1rem">
@@ -97,4 +140,19 @@ route alone and still reach every other host.</p>
   <li><code>[#3]</code> or <code>[Name#3]</code> → route by id, handy when names are ambiguous.</li>
   <li>Unknown name → <code>404 unknown_host</code> (traffic is never silently misrouted).</li>
 </ul>
+
+<h2>The model list</h2>
+<p><code>GET /v1/models</code> returns MidWare's own catalogue rather than the upstream's,
+so one request covers every configured host. The default route's models are bare and
+every other route's are prefixed with <code>[Name]</code>:</p>
+<pre class="mono">{
+  "object": "list",
+  "data": [
+    { "id": "gpt-4o-mini",            ... },   ← default route
+    { "id": "[NanoGPT]xiaomi/mimo",   ... }    ← accepted verbatim
+  ]
+}</pre>
+<p>The catalogue is refreshed automatically when a route is added or edited, when the
+default route changes, and roughly once a day. Use <strong>Refresh models</strong>
+above to update it on demand.</p>
 {% endblock %}
