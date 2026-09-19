@@ -39,6 +39,42 @@ python run.py
 
 Then open <http://127.0.0.1:5000>. The first visit redirects to `/admin/setup`.
 
+Bind address is configurable:
+
+```powershell
+$env:HOST="0.0.0.0"; $env:PORT="8080"; python run.py
+```
+
+## Docker
+
+```bash
+docker compose up -d --build
+```
+
+Then open <http://127.0.0.1:5000>. The SQLite database lives on the named volume
+`midware-data`, so the container can be recreated without losing routes, keys or
+usage history.
+
+Change the published port (and the port the app binds inside the container) with
+`PORT`:
+
+```bash
+HOST=0.0.0.0 PORT=80 docker compose up -d --build
+```
+
+Or run the image directly:
+
+```bash
+docker build -t midware .
+docker run -d --name midware -p 80:80 \
+  -e HOST=0.0.0.0 -e PORT=80 \
+  -e MIDWARE_SECRET_KEY="$(openssl rand -hex 32)" \
+  -v midware-data:/data midware
+```
+
+`HOST`/`PORT` are read by `wsgi.py`. The container defaults to `0.0.0.0:5000` and
+`MIDWARE_DB=/data/midware.db`.
+
 ### Configure
 
 | Field | Meaning |
@@ -99,6 +135,20 @@ upstream key (`Authorization: Bearer …`, or `x-api-key: …` for Anthropic tar
 If a route was saved **without** an upstream key, MidWare falls back to passing the
 caller's credential through — handy for keyless local models like Ollama or LM Studio.
 
+## Reading a captured request
+
+`/requests/<id>` renders the captured bodies as a conversation instead of raw JSON.
+Each request message and each assistant reply becomes a numbered, collapsible block.
+Reasoning is pulled out of every spelling MidWare knows (`reasoning`,
+`reasoning_content`, `thinking`, `thought`, `analysis`, `reasoning_details`, Anthropic
+`thinking` content parts) into its own collapsible section, so presets that emit more
+than one variant still show all of them. The last user message and the last assistant
+message are open by default; **Expand all** / **Collapse all** override that.
+
+The **Fetch** button re-requests the conversation from
+`/requests/<id>/messages.json`, re-renders it and downloads the normalized JSON.
+Raw bodies stay available under *Raw payloads*.
+
 ## Pages
 
 | Path | Purpose |
@@ -106,7 +156,8 @@ caller's credential through — handy for keyless local models like Ollama or LM
 | `/` | Dashboard: totals, heatmap, top models, recent requests |
 | `/activity` | Full 52-week heatmap + last 30 days breakdown |
 | `/requests` | Paginated request log, filterable by key/route |
-| `/requests/<id>` | Single request with captured bodies |
+| `/requests/<id>` | Single request: readable conversation + raw bodies |
+| `/requests/<id>/messages.json` | Normalized conversation JSON (used by the **Fetch** button) |
 | `/admin/setup` | First-run wizard / add another route |
 | `/admin/routes` | Add, edit, activate and delete routes |
 | `/admin/keys` | Create and revoke MidWare client keys |
@@ -118,6 +169,8 @@ Environment variables override `midware/config.py`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `HOST` | `0.0.0.0` | Bind address for `run.py` / `wsgi.py` |
+| `PORT` | `5000` | Bind port for `run.py` / `wsgi.py` |
 | `MIDWARE_DB` | `./midware.db` | SQLite path (`:memory:` supported) |
 | `MIDWARE_SECRET_KEY` | dev value | Flask secret key — **set this in production** |
 | `MIDWARE_UPSTREAM_TIMEOUT` | `300` | Upstream read timeout, seconds |

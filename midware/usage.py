@@ -103,7 +103,13 @@ def usage_from_response(raw: bytes | str | None) -> TokenUsage | None:
 
 
 def parse_sse_events(raw: bytes | str | None) -> list[dict[str, Any]]:
-    """Parse an SSE transcript into the list of JSON payloads it carried."""
+    """Parse an SSE transcript into the list of JSON payloads it carried.
+
+    The spec separates events with a blank line, but captured bodies frequently
+    lose those separators (re-framing proxies, concatenated chunk buffers). We
+    therefore also start a new event on every ``data:`` line so no payload is
+    silently dropped.
+    """
     if not raw:
         return []
     if isinstance(raw, bytes):
@@ -112,23 +118,33 @@ def parse_sse_events(raw: bytes | str | None) -> list[dict[str, Any]]:
         text = raw
 
     events: list[dict[str, Any]] = []
-    for block in re.split(r"\r?\n\r?\n", text):
-        data_lines: list[str] = []
-        for line in block.splitlines():
-            line = line.rstrip("\r")
-            if not line or line.startswith(":"):
-                continue
-            if line.startswith("data:"):
-                data_lines.append(line[5:].lstrip(" "))
+    data_lines: list[str] = []
+
+    def flush() -> None:
         if not data_lines:
-            continue
+            return
         data = "\n".join(data_lines).strip()
+        data_lines.clear()
         if not data or data == "[DONE]":
-            continue
+            return
         try:
             events.append(json.loads(data))
         except (ValueError, TypeError):
+            pass
+
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if not line:
+            flush()
             continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            flush()
+            data_lines.append(line[5:].lstrip(" "))
+        # Other SSE fields (event:, id:, retry:) carry no JSON payload.
+    flush()
+
     return events
 
 

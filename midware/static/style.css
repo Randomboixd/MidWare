@@ -164,3 +164,156 @@ details.edit-drawer {
   border-top: 1px solid var(--pico-muted-border-color);
 }
 
+.conversation-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.conversation-toolbar button {
+  width: auto;
+  margin: 0;
+}
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+details.message {
+  border: 1px solid var(--pico-muted-border-color);
+  border-left: 4px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: color-mix(in srgb, var(--pico-card-background-color) 75%, transparent);
+  overflow: hidden;
+}
+
+details.message > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+details.message > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.message > summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--pico-muted-color);
+  font-size: 0.8rem;
+}
+
+details.message[open] > summary::after {
+  content: "▾";
+}
+
+.message-badge {
+  flex: none;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--pico-secondary-background);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.message-title {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.message-meta {
+  color: var(--pico-muted-color);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-body {
+  padding: 0 0.75rem 0.75rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.message-body .msg-text {
+  margin: 0.6rem 0 0;
+  padding: 0.6rem 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--pico-code-background-color, #111) 70%, transparent);
+  border-radius: var(--pico-border-radius);
+}
+
+details.message.is-user {
+  border-left-color: #4c8bf5;
+}
+
+details.message.is-assistant {
+  border-left-color: #39d353;
+}
+
+details.message.is-system {
+  border-left-color: #d9a400;
+}
+
+details.message.is-tool {
+  border-left-color: #a06bff;
+}
+
+details.reasoning,
+details.tool-calls,
+details.extra {
+  margin-top: 0.6rem;
+  border: 1px dashed var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+}
+
+details.reasoning > summary,
+details.tool-calls > summary,
+details.extra > summary {
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--pico-muted-color);
+  user-select: none;
+}
+
+details.reasoning[open] > summary,
+details.tool-calls[open] > summary,
+details.extra[open] > summary {
+  border-bottom: 1px dashed var(--pico-muted-border-color);
+}
+
+details.reasoning .msg-text {
+  color: var(--pico-muted-color);
+  font-style: italic;
+}
+
+details.raw-drawer {
+  margin-top: 2rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  padding-top: 0.75rem;
+}
+
+details.raw-drawer > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+details.raw-drawer pre {
+  max-height: 24rem;
+  overflow: auto;
+}
+

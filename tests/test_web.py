@@ -62,6 +62,50 @@ def test_request_detail_404_for_missing(configured_client):
     assert client.get("/requests/999").status_code == 404
 
 
+def test_request_detail_renders_conversation(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    import json
+
+    request_body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "Hi"}]})
+    response_body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "Hello", "reasoning": "greet"}}]})
+    request_id = db.record_request(
+        api_key_id=db.list_api_keys()[0]["id"], route_id=None, method="POST",
+        request_path="chat/completions", model="m", status_code=200, latency_ms=1,
+        streamed=False, prompt_tokens=1, completion_tokens=1, total_tokens=2,
+        request_body=request_body, response_body=response_body,
+    )
+
+    html = client.get(f"/requests/{request_id}").get_data(as_text=True)
+    assert 'id="conversation"' in html
+    assert 'id="message-list"' in html
+    assert "conversation-data" in html
+    assert "request_detail.js" in html
+    assert "greet" in html
+
+
+def test_request_messages_json_endpoint(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    import json
+
+    request_id = db.record_request(
+        api_key_id=db.list_api_keys()[0]["id"], route_id=None, method="POST",
+        request_path="chat/completions", model="m", status_code=200, latency_ms=1,
+        streamed=False, prompt_tokens=1, completion_tokens=1, total_tokens=2,
+        request_body=json.dumps({"messages": [{"role": "user", "content": "Hi"}]}),
+        response_body=json.dumps({"choices": [{"message": {"role": "assistant", "content": "Yo"}}]}),
+    )
+
+    response = client.get(f"/requests/{request_id}/messages.json")
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    assert [m["role"] for m in payload["messages"]] == ["user", "assistant"]
+    assert "midware-request-" in response.headers["Content-Disposition"]
+
+    assert client.get("/requests/999/messages.json").status_code == 404
+
+
 def test_create_and_delete_key(configured_client):
     client, _ = configured_client
     app = client.application
@@ -133,8 +177,8 @@ def test_routes_page_marks_exactly_one_default(configured_client):
     html = client.get("/admin/routes").get_data(as_text=True)
     assert html.count('<span class="pill ok">default</span>') == 1
     assert html.count(">Make default</button>") >= 1
-    assert html.count(">Edit</button>") == 2
     assert html.count(">Delete</button>") == 2
+    assert html.count('class="edit-drawer"') == 2
     assert "edit-" + str(client.application.extensions["midware_db"].active_route()["id"]) in html
 
 

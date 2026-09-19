@@ -29,9 +29,32 @@
   </tbody>
 </table>
 
-<h2>Request body <small>(prefix stripped before forwarding)</small></h2>
-<pre class="mono">{{ row['request_body'] or '(not captured)' }}</pre>
+<h2>Messages <small>(request + response)</small></h2>
+<section id="conversation" class="conversation" data-source="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">
+  <div class="conversation-toolbar">
+    <button type="button" id="fetch-messages">Fetch</button>
+    <button type="button" id="expand-all" class="outline secondary">Expand all</button>
+    <button type="button" id="collapse-all" class="outline secondary">Collapse all</button>
+    <small id="conversation-status">
+      {{ conversation.messages | length }} message{{ '' if conversation.messages | length == 1 else 's' }}
+      {%- if conversation.messages %} · last user + assistant opened{% endif %}
+    </small>
+  </div>
+  <noscript><p><small>JavaScript is required to unfold messages. <a href="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">Download the raw JSON</a> instead.</small></p></noscript>
+  <div id="message-list" class="message-list"></div>
+</section>
 
-<h2>Response body</h2>
-<pre class="mono">{{ row['response_body'] or '(not captured)' }}</pre>
+<details class="raw-drawer">
+  <summary>Raw payloads</summary>
+  <h3>Request body <small>(prefix stripped before forwarding)</small></h3>
+  <pre class="mono">{{ row['request_body'] or '(not captured)' }}</pre>
+
+  <h3>Response body</h3>
+  <pre class="mono">{{ row['response_body'] or '(not captured)' }}</pre>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script id="conversation-data" type="application/json">{{ conversation | tojson }}</script>
+<script src="{{ url_for('static', filename='request_detail.js') }}"></script>
 {% endblock %}

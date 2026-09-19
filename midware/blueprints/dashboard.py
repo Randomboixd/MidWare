@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, abort, redirect, render_template, request, url_for
+import json
+
+from flask import Blueprint, Response, abort, redirect, render_template, request, url_for
 
 from ..auth import get_db
+from ..conversation import build_conversation
 
 bp = Blueprint("dashboard", __name__)
 
@@ -79,7 +82,25 @@ def request_detail(request_id: int):
     row = db.get_request(request_id)
     if row is None:
         abort(404)
-    return render_template("request_detail.html", row=row)
+    conversation = build_conversation(row["request_body"], row["response_body"])
+    return render_template("request_detail.html", row=row, conversation=conversation)
+
+
+@bp.get("/requests/<int:request_id>/messages.json")
+def request_messages(request_id: int):
+    """The normalized conversation, for the client-side ``Fetch`` button."""
+    db = get_db()
+    row = db.get_request(request_id)
+    if row is None:
+        abort(404)
+    conversation = build_conversation(row["request_body"], row["response_body"])
+    payload = json.dumps(conversation, ensure_ascii=False)
+    filename = f"midware-request-{request_id}-messages.json"
+    return Response(
+        payload,
+        mimetype="application/json",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @bp.get("/activity")
