@@ -102,6 +102,45 @@ def test_sse_stream_is_rebuilt():
     assert assistant["reasoning"] == ["step one step two"]
 
 
+def test_sse_mirrored_reasoning_details_are_not_duplicated():
+    # NanoGPT streams the same text through both ``reasoning`` and
+    # ``reasoning_details``; naive concatenation doubles every chunk.
+    sse = (
+        'data: {"choices":[{"delta":{"reasoning":"The user","reasoning_details":'
+        '[{"type":"reasoning.text","text":"The user"}]}}]}\n\n'
+        'data: {"choices":[{"delta":{"reasoning":" is here","reasoning_details":'
+        '[{"type":"reasoning.text","text":" is here"}]}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+        'data: [DONE]\n\n'
+    )
+    convo = build_conversation(None, sse)
+    assistant = convo["messages"][0]
+    assert assistant["reasoning"] == ["The user is here"]
+    assert assistant["text"] == "Hi"
+
+
+def test_sse_mirrored_reasoning_content_is_not_duplicated():
+    sse = (
+        'data: {"choices":[{"delta":{"reasoning":"one ","reasoning_content":"one "}}]}\n\n'
+        'data: {"choices":[{"delta":{"reasoning":"two","reasoning_content":"two"}}]}\n\n'
+        'data: [DONE]\n\n'
+    )
+    convo = build_conversation(None, sse)
+    assert convo["messages"][0]["reasoning"] == ["one two"]
+
+
+def test_sse_distinct_reasoning_spellings_are_kept():
+    sse = (
+        'data: {"choices":[{"delta":{"reasoning":"first thought"}}]}\n\n'
+        'data: {"choices":[{"delta":{"thinking":"second thought"}}]}\n\n'
+        'data: [DONE]\n\n'
+    )
+    convo = build_conversation(None, sse)
+    joined = "\n".join(convo["messages"][0]["reasoning"])
+    assert "first thought" in joined
+    assert "second thought" in joined
+
+
 def test_unknown_body_yields_no_messages():
     convo = build_conversation("not json", "")
     assert convo["messages"] == []

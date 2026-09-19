@@ -15,6 +15,7 @@ import httpx
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
 from ..auth import authenticate, get_db
+from ..tokens import estimate_usage
 from ..usage import (
     model_from_request_body,
     parse_sse_events,
@@ -264,13 +265,38 @@ def _persist(
     else:
         usage = usage_from_response(response_body)
 
+    token_source = "upstream"
     if usage is not None:
         model = model or usage.model
         prompt = usage.prompt_tokens
         completion = usage.completion_tokens
         total = usage.total_tokens
+        if prompt == 0 and completion == 0 and total == 0:
+            estimate = estimate_usage(request_body, response_body, model)
+            if estimate.total_tokens:
+                prompt, completion, total = (
+                    estimate.prompt_tokens,
+                    estimate.completion_tokens,
+                    estimate.total_tokens,
+                )
+                token_source = estimate.source
+            else:
+                token_source = "none"
+    elif status_code < 400:
+        estimate = estimate_usage(request_body, response_body, model)
+        if estimate.total_tokens:
+            prompt, completion, total = (
+                estimate.prompt_tokens,
+                estimate.completion_tokens,
+                estimate.total_tokens,
+            )
+            token_source = estimate.source
+        else:
+            prompt = completion = total = 0
+            token_source = "none"
     else:
         prompt = completion = total = 0
+        token_source = "none"
 
     upstream_request_id = None
     if response_body:
@@ -293,6 +319,7 @@ def _persist(
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=total,
+        token_source=token_source,
         upstream_request_id=upstream_request_id,
         error=error,
         request_body=request_body,

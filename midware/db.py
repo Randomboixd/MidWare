@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS requests (
     prompt_tokens       INTEGER NOT NULL DEFAULT 0,
     completion_tokens   INTEGER NOT NULL DEFAULT 0,
     total_tokens        INTEGER NOT NULL DEFAULT 0,
+    token_source        TEXT    NOT NULL DEFAULT 'upstream',
     upstream_request_id TEXT,
     error               TEXT,
     request_body        TEXT,
@@ -180,6 +181,7 @@ class Database:
             "response_body": "TEXT",
             "route_id": "INTEGER",
             "api_key_id": "INTEGER",
+            "token_source": "TEXT NOT NULL DEFAULT 'upstream'",
         }
         with self.write() as conn:
             for column, definition in added.items():
@@ -446,6 +448,7 @@ class Database:
         prompt_tokens: int,
         completion_tokens: int,
         total_tokens: int,
+        token_source: str = "upstream",
         upstream_request_id: str | None = None,
         error: str | None = None,
         request_body: str | None = None,
@@ -459,9 +462,9 @@ class Database:
                 INSERT INTO requests (
                     created_at, request_path, method, model, model_raw, host_prefix,
                     status_code, latency_ms, streamed, prompt_tokens, completion_tokens,
-                    total_tokens, upstream_request_id, error, request_body, response_body,
-                    route_id, api_key_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    total_tokens, token_source, upstream_request_id, error, request_body,
+                    response_body, route_id, api_key_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     to_iso(utcnow()),
@@ -476,6 +479,7 @@ class Database:
                     int(prompt_tokens),
                     int(completion_tokens),
                     int(total_tokens),
+                    token_source or "upstream",
                     upstream_request_id,
                     error,
                     request_body,

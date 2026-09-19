@@ -263,6 +263,52 @@ def _parse_json(raw: Any) -> Any:
         return None
 
 
+def _append_reasoning(target: dict[str, Any], field: str, value: Any) -> None:
+    """Append a reasoning delta without double-counting mirrored fields.
+
+    Providers such as NanoGPT stream the same text through both ``reasoning``
+    and ``reasoning_details`` (and sometimes ``reasoning_content``), so naive
+    concatenation duplicates every chunk. We keep one string per spelling and
+    collapse a spelling whose text is a prefix of another's, which is exactly
+    the relationship of the mirrored streams.
+    """
+    if not isinstance(value, str) or not value:
+        return
+    key = "_reasoning_" + field
+    target[key] = target.get(key, "") + value
+
+
+def _flatten_reasoning(target: dict[str, Any]) -> str:
+    """Collapse mirrored reasoning streams into a single string.
+
+    ``reasoning``/``reasoning_details``/``reasoning_content`` frequently carry
+    the same text, so we take the longest stream and drop every other stream
+    that is a prefix of it. A stream that merely shares a long prefix (two
+    genuinely different spellings that happen to agree early) must not be
+    discarded, hence the coverage guard: a prefix is only treated as a mirror
+    when it is either an exact match or covers most of the longest stream.
+    """
+    streams = sorted(
+        (target[key] for key in target if key.startswith("_reasoning_")),
+        key=len,
+        reverse=True,
+    )
+    if not streams:
+        return ""
+    best = streams[0]
+    for stream in streams[1:]:
+        if not stream:
+            continue
+        if best.startswith(stream):
+            coverage = len(stream) / len(best) if best else 0
+            if stream == best or coverage >= 0.9:
+                continue
+        best = best if len(best) >= len(stream) else stream
+        if not best.startswith(stream) and not stream.startswith(best):
+            best = best + "\n\n" + stream
+    return best
+
+
 def _from_sse(raw: Any) -> list[dict[str, Any]]:
     """Rebuild assistant turns from a captured streaming transcript."""
     from .usage import parse_sse_events
@@ -292,7 +338,7 @@ def _from_sse(raw: Any) -> list[dict[str, Any]]:
                     kind = str(part.get("type") or "").lower()
                     target = ensure()
                     if kind in REASONING_PART_TYPES:
-                        target["reasoning"] += str(part.get("thinking") or part.get("text") or "")
+                        _append_reasoning(target, "part", str(part.get("thinking") or part.get("text") or ""))
                     elif kind == "text":
                         target["content"] += str(part.get("text") or "")
 
@@ -305,15 +351,13 @@ def _from_sse(raw: Any) -> list[dict[str, Any]]:
                     ensure()["content"] += part["text"]
 
         for field in REASONING_FIELDS:
-            value = payload.get(field)
-            if isinstance(value, str) and value:
-                ensure()["reasoning"] += value
+            _append_reasoning(ensure(), field, payload.get(field))
 
         delta_details = payload.get("reasoning_details")
         if isinstance(delta_details, list):
             for part in delta_details:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    ensure()["reasoning"] += part["text"]
+                if isinstance(part, dict):
+                    _append_reasoning(ensure(), "details", part.get("text"))
 
         choices = event.get("choices")
         if isinstance(choices, list):
@@ -325,27 +369,27 @@ def _from_sse(raw: Any) -> list[dict[str, Any]]:
                     if isinstance(delta.get("content"), str):
                         ensure()["content"] += delta["content"]
                     for field in REASONING_FIELDS:
-                        if isinstance(delta.get(field), str):
-                            ensure()["reasoning"] += delta[field]
+                        _append_reasoning(ensure(), field, delta.get(field))
                     delta_details = delta.get("reasoning_details")
                     if isinstance(delta_details, list):
                         for part in delta_details:
-                            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                                ensure()["reasoning"] += part["text"]
+                            if isinstance(part, dict):
+                                _append_reasoning(ensure(), "details", part.get("text"))
                 message = choice.get("message")
                 if isinstance(message, dict):
                     if isinstance(message.get("content"), str) and message["content"]:
                         ensure()["content"] += message["content"]
                     for field in REASONING_FIELDS:
-                        if isinstance(message.get(field), str):
-                            ensure()["reasoning"] += message[field]
+                        _append_reasoning(ensure(), field, message.get(field))
 
         if event.get("type") in {"message_stop", "message_end"} or event.get("stop_reason"):
             turns.append(ensure())
             current = None
 
-    if current is not None and (current["content"] or current["reasoning"]):
-        turns.append(current)
+    if current is not None:
+        current["reasoning"] = _flatten_reasoning(current)
+        if current["content"] or current["reasoning"]:
+            turns.append(current)
     return turns
 
 

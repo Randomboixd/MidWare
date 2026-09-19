@@ -102,13 +102,74 @@ def usage_from_response(raw: bytes | str | None) -> TokenUsage | None:
     return usage_from_mapping(payload)
 
 
+def _is_complete_json(text: str) -> bool:
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _is_json_prefix(text: str) -> bool:
+    """True when ``text`` looks like an unfinished JSON value worth growing."""
+    decoder = json.JSONDecoder()
+    try:
+        decoder.raw_decode(text)
+    except json.JSONDecodeError as exc:
+        # ``JSONDecodeError.pos`` is garbled whenever the offending token is
+        # unterminated (a dangling string/key/escape), so it cannot be trusted
+        # here. Instead re-scan tracking string state to work out how much of
+        # the text was consumed; if nothing remains the text is a valid prefix
+        # of a longer JSON value rather than trailing garbage.
+        return _consumed(text) >= len(text)
+    except (ValueError, TypeError):
+        return False
+    return False
+
+
+def _consumed(text: str) -> int:
+    """How many leading characters ``text`` uses up as JSON before it breaks."""
+    in_string = False
+    escaped = False
+    index = 0
+    depth = 0
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            if depth == 0:
+                return index
+            depth -= 1
+        elif char in ",:":
+            continue
+        elif char.isspace():
+            continue
+        elif char not in "-+.eE0123456789tfn":
+            return index
+    _ = depth
+    return len(text)
+
+
 def parse_sse_events(raw: bytes | str | None) -> list[dict[str, Any]]:
     """Parse an SSE transcript into the list of JSON payloads it carried.
 
-    The spec separates events with a blank line, but captured bodies frequently
-    lose those separators (re-framing proxies, concatenated chunk buffers). We
-    therefore also start a new event on every ``data:`` line so no payload is
-    silently dropped.
+    Per the spec an event ends at a blank line, which lets a payload span
+    several ``data:`` lines. Captured bodies occasionally lose those separators
+    (re-framing proxies, concatenated chunk buffers), so once we are *inside* an
+    event an unseparated ``data:`` line only starts a new one when it looks like
+    the beginning of a fresh payload — i.e. its content parses on its own as a
+    complete JSON value. Continuation lines that happen to parse (truncated
+    captures) are still joined because they nest inside an incomplete value.
     """
     if not raw:
         return []
@@ -118,13 +179,14 @@ def parse_sse_events(raw: bytes | str | None) -> list[dict[str, Any]]:
         text = raw
 
     events: list[dict[str, Any]] = []
-    data_lines: list[str] = []
+    current: list[str] | None = None
 
     def flush() -> None:
-        if not data_lines:
+        nonlocal current
+        if current is None:
             return
-        data = "\n".join(data_lines).strip()
-        data_lines.clear()
+        data = "\n".join(current).strip()
+        current = None
         if not data or data == "[DONE]":
             return
         try:
@@ -140,8 +202,18 @@ def parse_sse_events(raw: bytes | str | None) -> list[dict[str, Any]]:
         if line.startswith(":"):
             continue
         if line.startswith("data:"):
-            flush()
-            data_lines.append(line[5:].lstrip(" "))
+            segment = line[5:].lstrip(" ")
+            if current is not None:
+                # A complete standalone payload means the previous event ended
+                # without a blank-line separator. An incomplete fragment is a
+                # multi-line continuation of the same payload and must be joined.
+                previous = "\n".join(current).strip()
+                joined = "\n".join(current + [segment]).strip()
+                if _is_complete_json(previous) or not (
+                    _is_json_prefix(previous) and _is_complete_json(joined)
+                ):
+                    flush()
+            current = [segment] if current is None else current + [segment]
         # Other SSE fields (event:, id:, retry:) carry no JSON payload.
     flush()
 

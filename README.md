@@ -175,6 +175,21 @@ The **Fetch** button re-requests the conversation from
 `/requests/<id>/messages.json`, re-renders it and downloads the normalized JSON.
 Raw bodies stay available under *Raw payloads*.
 
+Reasoning is de-duplicated: providers that stream the same text through several
+spellings at once (for example `reasoning` *and* `reasoning_details`, as NanoGPT
+does) are collapsed to a single section instead of repeating every chunk.
+
+### Token counting
+
+Usage is taken from the upstream when it reports it. When a response carries no
+`usage` block — common for streamed replies on some hosts — MidWare rebuilds the
+prompt and the visible output from the captured bodies and counts tokens locally:
+`o200k_base` via `tiktoken` for OpenAI-family models, and a character-ratio
+heuristic for everything else. The request detail page labels the origin as
+*reported by upstream* or *estimated locally*. Install `tiktoken` (it is in
+`requirements.txt`) for exact OpenAI counts; without it MidWare silently falls
+back to the heuristic.
+
 ## Pages
 
 | Path | Purpose |

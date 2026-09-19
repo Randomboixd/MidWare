@@ -14,7 +14,7 @@
   <article class="stat-card"><header>Route</header><div class="value" style="font-size:1.1rem">{{ row['route_name'] or '—' }}</div>
     <div class="sub">{% if row['host_prefix'] %}via [{{ row['host_prefix'] }}]{% else %}default route{% endif %}</div>
   </article>
-  <article class="stat-card"><header>Total tokens</header><div class="value">{{ row['total_tokens'] | comma }}</div><div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}</div></article>
+  <article class="stat-card"><header>Total tokens</header><div class="value">{{ row['total_tokens'] | comma }}</div><div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %} · {{ row['token_source'] }} estimate{% endif %}</div></article>
   <article class="stat-card"><header>Status</header><div class="value">{{ row['status_code'] }}</div><div class="sub">{{ row['latency_ms'] | ms }}{% if row['streamed'] %} · streamed{% endif %}</div></article>
   <article class="stat-card"><header>When</header><div class="value" style="font-size:1.1rem">{{ row['created_at'] | datetime }}</div><div class="sub">{{ row['created_at'] | relative }}</div></article>
 </section>
@@ -24,6 +24,16 @@
     <tr><th>API key</th><td>{{ row['api_key_name'] or '—' }}</td></tr>
     <tr><th>Route</th><td>{{ row['route_name'] or '—' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
     <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
+    <tr><th>Token source</th><td>
+      {% if row['token_source'] == 'upstream' %}reported by upstream
+      {% elif row['token_source'] == 'none' %}not available
+      {% else %}estimated locally ({{ row['token_source'] }}) — the upstream reported no usage{% endif %}
+    </td></tr>
+    <tr><th>Token source</th><td>
+      {% if row['token_source'] == 'upstream' %}reported by upstream
+      {% elif row['token_source'] == 'none' %}not available
+      {% else %}estimated locally ({{ row['token_source'] }}) — upstream reported no usage{% endif %}
+    </td></tr>
     <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or '—' }}</td></tr>
     {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
   </tbody>

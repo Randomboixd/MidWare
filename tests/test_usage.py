@@ -70,3 +70,23 @@ def test_usage_from_anthropic_stream_merges_events():
 def test_model_from_request_body():
     assert model_from_request_body(b'{"model":"llama3"}') == "llama3"
     assert model_from_request_body(b"garbage") is None
+
+
+def test_parse_sse_events_joins_multiline_data():
+    # A complete first line ends the event, so a following ``data: `` line
+    # belongs to the next (here continuation-less) payload.
+    stream = 'data: {"a":\ndata:  1}\n\n'
+    assert parse_sse_events(stream) == [{"a": 1}]
+
+
+def test_parse_sse_events_splits_unseparated_complete_payloads():
+    stream = 'data: {"a":1}\ndata: {"b":2}'
+    assert parse_sse_events(stream) == [{"a": 1}, {"b": 2}]
+
+
+def test_parse_sse_events_keeps_unseparated_continuation():
+    # A truncated capture can split one JSON value across lines; the first
+    # fragment does not parse on its own so it must be joined, not discarded.
+    stream = 'data: {"a":\ndata:   1}\ndata: ["x"]\n\n'
+    assert parse_sse_events(stream) == [{"a": 1}, ["x"]]
+

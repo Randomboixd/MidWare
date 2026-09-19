@@ -153,6 +153,73 @@ def test_proxy_streams_and_records_usage(configured):
     assert row["streamed"] == 1
     assert row["total_tokens"] == 12
     assert row["model"] == "gpt-4o"
+    assert row["token_source"] == "upstream"
+
+
+def test_stream_without_usage_is_estimated_locally(configured):
+    app, token = configured
+    client = app.test_client()
+    chunks = [
+        b'data: {"id":"1","model":"gpt-4o","choices":[{"delta":{"content":"Hello"}}]}\n\n',
+        b'data: {"id":"1","model":"gpt-4o","choices":[{"delta":{"content":" world"}}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    install_stub(
+        app,
+        StubResponse(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream_chunks=chunks,
+        ),
+    )
+
+    b"".join(
+        client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "Say hello world."}]},
+            headers=auth_header(token),
+        ).response
+    )
+
+    row = app.extensions["midware_db"].list_requests(limit=1)[0]
+    assert row["total_tokens"] > 0
+    assert row["prompt_tokens"] > 0
+    assert row["completion_tokens"] > 0
+    assert row["token_source"] in {"tiktoken", "chars"}
+
+
+def test_non_streamed_response_without_usage_is_estimated(configured):
+    app, token = configured
+    client = app.test_client()
+    body = b'{"id":"1","model":"gpt-4o","choices":[{"message":{"role":"assistant","content":"Hi there"}}]}'
+    install_stub(app, StubResponse(status_code=200, content=body))
+
+    client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Say hi."}]},
+        headers=auth_header(token),
+    )
+
+    row = app.extensions["midware_db"].list_requests(limit=1)[0]
+    assert row["total_tokens"] > 0
+    assert row["token_source"] in {"tiktoken", "chars"}
+
+
+def test_error_response_never_gets_estimated_tokens(configured):
+    app, token = configured
+    client = app.test_client()
+    install_stub(app, StubResponse(status_code=500, content=b'{"error":"boom"}'))
+
+    client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Say hi."}]},
+        headers=auth_header(token),
+    )
+
+    row = app.extensions["midware_db"].list_requests(limit=1)[0]
+    assert row["status_code"] == 500
+    assert row["total_tokens"] == 0
+    assert row["token_source"] == "none"
 
 
 def test_upstream_failure_is_recorded(configured):
