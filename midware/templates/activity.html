@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Activity · MidWare{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
+  <hgroup>
+    <h1>Activity</h1>
+    <p>{{ heatmap.start }} → {{ heatmap.end }} · {{ heatmap.total_tokens | comma }} tokens over {{ heatmap.active_days }} active days</p>
+  </hgroup>
+  <form method="get" action="{{ url_for('dashboard.activity') }}">
+    <fieldset role="group">
+      <select name="key" onchange="this.form.submit()">
+        <option value="">All keys</option>
+        {% for k in api_keys %}
+          <option value="{{ k['id'] }}" {% if selected_key == k['id'] %}selected{% endif %}>{{ k['name'] }}</option>
+        {% endfor %}
+      </select>
+      <select name="route" onchange="this.form.submit()">
+        <option value="">All routes</option>
+        {% for r in routes %}
+          <option value="{{ r['id'] }}" {% if selected_route == r['id'] %}selected{% endif %}>{{ r['name'] }}</option>
+        {% endfor %}
+      </select>
+    </fieldset>
+  </form>
+</div>
+
+<h2>Day-by-day usage</h2>
+<div class="heatmap-wrap">
+  <div class="heatmap">
+    {% for week in heatmap.weeks %}
+      {% for cell in week %}
+        <span class="cell{% if cell.future %} future{% endif %}" data-level="{{ cell.level }}"
+              title="{{ cell.date }}: {{ cell.tokens | comma }} tokens ({{ cell.requests }} req)"></span>
+      {% endfor %}
+    {% endfor %}
+  </div>
+</div>
+<div class="heat-legend">
+  <span>Peak day: {{ heatmap.peak | comma }} tokens</span>
+</div>
+
+<h2>Last 30 days</h2>
+{% if series %}
+<table class="compact">
+  <thead><tr><th>Date</th><th>Requests</th><th>Prompt</th><th>Completion</th><th>Total</th></tr></thead>
+  <tbody>
+    {% for day, entry in series %}
+    <tr>
+      <td>{{ day }}</td>
+      <td>{{ entry.requests }}</td>
+      <td>{{ entry.prompt_tokens | comma }}</td>
+      <td>{{ entry.completion_tokens | comma }}</td>
+      <td>{{ entry.total_tokens | comma }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No activity in the last 30 days.</p>
+{% endif %}
+{% endblock %}

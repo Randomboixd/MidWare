@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local database / secrets
+*.db
+*.db-wal
+*.db-shm
+.env
+instance/

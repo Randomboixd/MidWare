@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Routes · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Routes</h1>
+  <p>Upstream providers. One route is the default; the rest are reachable by
+     prefixing the model with <code>[Name]</code>.</p>
+</hgroup>
+
+<h2>Add a route</h2>
+<form method="post">
+  <input type="hidden" name="action" value="create">
+  <div class="grid-2" style="grid-template-columns: 1fr 2fr;">
+    <label>Name <input type="text" name="name" placeholder="NanoGPT" required></label>
+    <label>Target host <input type="url" name="target_host" placeholder="https://nano-gpt.com/subscription/v1" required></label>
+  </div>
+  <label>Upstream API key <input type="password" name="upstream_key" autocomplete="off" placeholder="sk-..."></label>
+  <button type="submit">Add route</button>
+</form>
+
+<h2>Configured routes</h2>
+{% if routes %}
+<table class="compact">
+  <thead><tr><th>Name</th><th>Target</th><th>Key</th><th>Role</th><th></th></tr></thead>
+  <tbody>
+    {% for r in routes %}
+    {% set is_default = r['id'] == active_route_id %}
+    <tr>
+      <td>
+        {{ r['name'] }}
+        <br><small class="mono">[{{ r['name'] }}]</small>
+      </td>
+      <td class="mono">{{ r['target_host'] }}</td>
+      <td>{% if r['upstream_key'] %}<span class="pill ok">stored</span>{% else %}<span class="pill warn">none</span>{% endif %}</td>
+      <td>
+        {% if is_default %}
+          <span class="pill ok">default</span>
+        {% else %}
+          <form method="post" class="inline-form">
+            <input type="hidden" name="action" value="activate">
+            <input type="hidden" name="route_id" value="{{ r['id'] }}">
+            <button type="submit" class="outline" style="padding:0.25rem 0.6rem;font-size:0.8rem">Make default</button>
+          </form>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" class="inline-form" onsubmit="return confirm('Delete route &quot;{{ r['name'] }}&quot;?')">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="route_id" value="{{ r['id'] }}">
+          <button type="submit" class="outline secondary" style="padding:0.25rem 0.6rem;font-size:0.8rem">Delete</button>
+        </form>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="5" style="padding:0">
+        <details id="edit-{{ r['id'] }}" class="edit-drawer">
+          <summary style="padding:0.4rem 0.6rem;font-size:0.85rem">Edit route</summary>
+          <form method="post" style="padding:0.5rem 0.6rem 1rem">
+            <input type="hidden" name="action" value="update">
+            <input type="hidden" name="route_id" value="{{ r['id'] }}">
+            <div class="grid-2" style="grid-template-columns: 1fr 2fr;">
+              <label>Name <input type="text" name="name" value="{{ r['name'] }}" required></label>
+              <label>Target host <input type="url" name="target_host" value="{{ r['target_host'] }}" required></label>
+            </div>
+            <label>
+              Upstream API key
+              <input type="password" name="upstream_key" autocomplete="off"
+                     placeholder="{{ 'leave blank to keep current key' if r['upstream_key'] else 'sk-...' }}">
+              <small>Leave blank to keep the stored key.</small>
+            </label>
+            <button type="submit" style="width:auto">Save changes</button>
+            <button type="button" class="secondary outline" style="width:auto"
+                    onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+          </form>
+        </details>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No routes yet. <a href="{{ url_for('admin.setup') }}">Run setup</a>.</p>
+{% endif %}
+
+<h2>Calling a specific host</h2>
+<p>Prefix the <code>model</code> with a route name in square brackets. MidWare strips the
+prefix and sends the rest upstream untouched, so you can leave your client's default
+route alone and still reach every other host.</p>
+<pre class="mono">{
+  "model": "[NanoGPT]xiaomi/mimo-v2.5-pro:thinking",
+  "messages": [...]
+}</pre>
+<ul>
+  <li>No prefix → the <strong>default</strong> route.</li>
+  <li><code>[Name]</code> → that route, matched case-insensitively.</li>
+  <li><code>[#3]</code> or <code>[Name#3]</code> → route by id, handy when names are ambiguous.</li>
+  <li>Unknown name → <code>404 unknown_host</code> (traffic is never silently misrouted).</li>
+</ul>
+{% endblock %}

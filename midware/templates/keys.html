@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Keys · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>API keys</h1>
+  <p>Client credentials. Send one as <code>Authorization: Bearer &lt;key&gt;</code> or <code>x-api-key: &lt;key&gt;</code>.</p>
+</hgroup>
+
+<h2>Create a key</h2>
+<form method="post">
+  <input type="hidden" name="action" value="create">
+  <fieldset role="group">
+    <input type="text" name="name" placeholder="key name" required>
+    <button type="submit">Create</button>
+  </fieldset>
+</form>
+
+<h2>Existing keys</h2>
+{% if api_keys %}
+<table class="compact">
+  <thead><tr><th>Name</th><th>Key</th><th>Requests</th><th>Tokens</th><th>Last used</th><th></th></tr></thead>
+  <tbody>
+    {% for k in api_keys %}
+    <tr>
+      <td>{{ k['name'] }}</td>
+      <td class="mono token">{{ k['token'] }}</td>
+      <td>{{ k['request_count'] }}</td>
+      <td>{{ k['token_count'] | tokens }}</td>
+      <td>{{ k['last_used_at'] | relative }}</td>
+      <td>
+        <form method="post" class="inline-form" onsubmit="return confirm('Delete this key?')">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="key_id" value="{{ k['id'] }}">
+          <button type="submit" class="outline secondary" style="padding:0.25rem 0.6rem;font-size:0.8rem">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No keys yet.</p>
+{% endif %}
+{% endblock %}

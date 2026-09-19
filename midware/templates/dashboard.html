@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · MidWare{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
+  <hgroup>
+    <h1>Dashboard</h1>
+    <p>Token accounting for your LLM traffic.</p>
+  </hgroup>
+  <form method="get" action="{{ url_for('dashboard.index') }}">
+    <fieldset role="group">
+      <select name="key" onchange="this.form.submit()">
+        <option value="">All keys</option>
+        {% for k in api_keys %}
+          <option value="{{ k['id'] }}" {% if selected_key == k['id'] %}selected{% endif %}>{{ k['name'] }}</option>
+        {% endfor %}
+      </select>
+      <select name="route" onchange="this.form.submit()">
+        <option value="">All routes</option>
+        {% for r in routes %}
+          <option value="{{ r['id'] }}" {% if selected_route == r['id'] %}selected{% endif %}>{{ r['name'] }}</option>
+        {% endfor %}
+      </select>
+    </fieldset>
+  </form>
+</div>
+
+{% if not routes %}
+<article class="flash flash-error">
+  No upstream route configured. <a href="{{ url_for('admin.setup') }}">Run setup</a> to start proxying.
+</article>
+{% endif %}
+
+<section class="stat-grid">
+  <article class="stat-card highlight">
+    <header>Today</header>
+    <div class="value">{{ overview.day.total_tokens | tokens }}</div>
+    <div class="sub">↑ {{ overview.day.prompt_tokens | tokens }} · ↓ {{ overview.day.completion_tokens | tokens }} · {{ overview.day.requests }} req</div>
+  </article>
+  <article class="stat-card">
+    <header>This month</header>
+    <div class="value">{{ overview.month.total_tokens | tokens }}</div>
+    <div class="sub">↑ {{ overview.month.prompt_tokens | tokens }} · ↓ {{ overview.month.completion_tokens | tokens }} · {{ overview.month.requests }} req</div>
+  </article>
+  <article class="stat-card">
+    <header>This year</header>
+    <div class="value">{{ overview.year.total_tokens | tokens }}</div>
+    <div class="sub">↑ {{ overview.year.prompt_tokens | tokens }} · ↓ {{ overview.year.completion_tokens | tokens }} · {{ overview.year.requests }} req</div>
+  </article>
+  <article class="stat-card">
+    <header>All time</header>
+    <div class="value">{{ overview.all_time.total_tokens | tokens }}</div>
+    <div class="sub">{{ overview.all_time.requests }} req · avg {{ overview.all_time.avg_latency_ms | ms }}</div>
+  </article>
+</section>
+
+<section>
+  <h2>Last 52 weeks</h2>
+  <div class="heatmap-wrap">
+    <div class="heatmap">
+      {% for week in heatmap.weeks %}
+        {% for cell in week %}
+          {% if cell.future %}
+            <span class="cell future" data-level="0" title="{{ cell.date }}"></span>
+          {% else %}
+            <span class="cell" data-level="{{ cell.level }}"
+                  title="{{ cell.date }}: {{ cell.tokens | comma }} tokens ({{ cell.requests }} req)"></span>
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="heat-legend">
+    <span>{{ heatmap.active_days }} active days</span>
+    <span style="margin-left:auto">Less</span>
+    <span class="swatch" style="background:#0e4429"></span>
+    <span class="swatch" style="background:#006d32"></span>
+    <span class="swatch" style="background:#26a641"></span>
+    <span class="swatch" style="background:#39d353"></span>
+    <span>More</span>
+  </div>
+</section>
+
+<div class="grid-2">
+  <section>
+    <h2>Recent requests</h2>
+    {% if recent %}
+    <table class="compact">
+      <thead>
+        <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th>Total</th><th>Latency</th></tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
+          <td class="mono">{{ r['model'] or '—' }}</td>
+          <td>{{ r['api_key_name'] or '—' }}</td>
+          <td>
+            <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">
+              {{ r['status_code'] }}
+            </span>
+            {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
+          </td>
+          <td>{{ r['total_tokens'] | tokens }}</td>
+          <td>{{ r['latency_ms'] | ms }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><a href="{{ url_for('dashboard.requests_page') }}">View all requests →</a></p>
+    {% else %}
+    <p>No requests recorded yet.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Top hosts</h2>
+    {% if hosts %}
+    <table class="compact">
+      <thead><tr><th>Host</th><th>Req</th><th>Tokens</th></tr></thead>
+      <tbody>
+        {% for h in hosts[:8] %}
+        <tr>
+          <td>{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
+          <td>{{ h.requests }}</td>
+          <td>{{ h.total_tokens | tokens }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p>No host data yet.</p>
+    {% endif %}
+
+    <h2>Top models</h2>
+    {% if models %}
+    <table class="compact">
+      <thead><tr><th>Model</th><th>Req</th><th>Tokens</th></tr></thead>
+      <tbody>
+        {% for m in models[:8] %}
+        <tr>
+          <td class="mono">{{ m.model }}</td>
+          <td>{{ m.requests }}</td>
+          <td>{{ m.total_tokens | tokens }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p>No model data yet.</p>
+    {% endif %}
+
+    <h2>Quick start</h2>
+    <p>Point any OpenAI-compatible client at this server:</p>
+    <pre class="mono">BASE_URL={{ request.url_root }}v1
+API_KEY=&lt;your MidWare key&gt;
+
+model: [NanoGPT]xiaomi/mimo-v2.5-pro
+       └ default route when omitted</pre>
+  </section>
+</div>
+{% endblock %}

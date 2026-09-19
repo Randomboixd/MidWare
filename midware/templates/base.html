@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MidWare{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul>
+        <li><a href="{{ url_for('dashboard.index') }}"><strong>MidWare Admin Panel</strong></a></li>
+      </ul>
+      <ul>
+        <li><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
+        <li><a href="{{ url_for('dashboard.activity') }}">Activity</a></li>
+        <li><a href="{{ url_for('dashboard.requests_page') }}">Requests</a></li>
+        <li><a href="{{ url_for('admin.keys') }}">Keys</a></li>
+        <li><a href="{{ url_for('admin.routes') }}">Routes</a></li>
+        <li><a href="{{ url_for('admin.settings') }}">Settings</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <article class="flash {{ 'flash-error' if category == 'error' else 'flash-success' }}">{{ message }}</article>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="container">
+    <small>MW v{{ app_version }}</small>
+  </footer>
+</body>
+</html>

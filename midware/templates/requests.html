@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Requests · MidWare{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
+  <hgroup>
+    <h1>Requests</h1>
+    <p>{{ total }} logged · keeping the newest {{ log_limit }} per key</p>
+  </hgroup>
+  <form method="get" action="{{ url_for('dashboard.requests_page') }}">
+    <fieldset role="group">
+      <select name="key" onchange="this.form.submit()">
+        <option value="">All keys</option>
+        {% for k in api_keys %}
+          <option value="{{ k['id'] }}" {% if selected_key == k['id'] %}selected{% endif %}>{{ k['name'] }}</option>
+        {% endfor %}
+      </select>
+      <select name="route" onchange="this.form.submit()">
+        <option value="">All routes</option>
+        {% for r in routes %}
+          <option value="{{ r['id'] }}" {% if selected_route == r['id'] %}selected{% endif %}>{{ r['name'] }}</option>
+        {% endfor %}
+      </select>
+    </fieldset>
+  </form>
+</div>
+
+{% if requests %}
+<table class="compact">
+  <thead>
+    <tr>
+      <th>When</th><th>Host</th><th>Model</th><th>Key</th><th>Path</th>
+      <th>Status</th><th>Prompt</th><th>Completion</th><th>Total</th><th>Latency</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in requests %}
+    <tr>
+      <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
+      <td>{% if r['host_prefix'] %}<span class="pill ok">[{{ r['host_prefix'] }}]</span>{% else %}<span class="pill">default</span>{% endif %}</td>
+      <td class="mono">{{ r['model'] or '—' }}</td>
+      <td>{{ r['api_key_name'] or '—' }}</td>
+      <td class="mono">/{{ r['request_path'] }}</td>
+      <td>
+        <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">{{ r['status_code'] }}</span>
+        {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
+      </td>
+      <td>{{ r['prompt_tokens'] | comma }}</td>
+      <td>{{ r['completion_tokens'] | comma }}</td>
+      <td>{{ r['total_tokens'] | comma }}</td>
+      <td>{{ r['latency_ms'] | ms }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if pages > 1 %}
+<nav>
+  <ul>
+    <li>
+      {% if page > 1 %}
+        <a href="{{ url_for('dashboard.requests_page', page=page-1, key=selected_key, route=selected_route) }}">← Newer</a>
+      {% else %}<span>← Newer</span>{% endif %}
+    </li>
+    <li><small>Page {{ page }} / {{ pages }}</small></li>
+    <li>
+      {% if page < pages %}
+        <a href="{{ url_for('dashboard.requests_page', page=page+1, key=selected_key, route=selected_route) }}">Older →</a>
+      {% else %}<span>Older →</span>{% endif %}
+    </li>
+  </ul>
+</nav>
+{% endif %}
+{% else %}
+<p>No requests match this filter.</p>
+{% endif %}
+{% endblock %}

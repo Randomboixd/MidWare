@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Setup · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Setup</h1>
+  <p>Tell MidWare where to route traffic and give it the upstream key. It will mint your first client key.</p>
+</hgroup>
+
+{% if routes %}
+<article class="flash flash-success">
+  MidWare is already configured. Adding another route here creates an additional
+  upstream (only one is active at a time; manage that on the Routes page).
+</article>
+{% endif %}
+
+<form method="post">
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Route name
+      <input type="text" name="name" placeholder="OpenAI" value="{{ form.get('name', 'Default') }}">
+    </label>
+    <label>
+      Target host
+      <input type="url" name="target_host" required
+             placeholder="https://api.openai.com"
+             value="{{ form.get('target_host', defaults.DEFAULT_TARGET_HOST) }}">
+      <small>Base URL of the provider. A trailing <code>/v1</code> is fine.</small>
+    </label>
+  </div>
+
+  <label>
+    Upstream API key
+    <input type="password" name="upstream_key" autocomplete="off"
+           placeholder="sk-..." value="{{ form.get('upstream_key', '') }}">
+    <small>Stored locally in SQLite and injected into upstream requests. Clients never see it.</small>
+  </label>
+
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Your first MidWare key name
+      <input type="text" name="key_name" placeholder="laptop" value="{{ form.get('key_name', 'default') }}">
+      <small>Created only if you don't have any keys yet.</small>
+    </label>
+    <label>
+      Saved requests per key
+      <input type="number" name="request_log_limit" min="0" max="100000"
+             value="{{ form.get('request_log_limit', defaults.DEFAULT_REQUEST_LOG_LIMIT) }}">
+      <small>How many request/response bodies to keep. 0 disables logging.</small>
+    </label>
+  </div>
+
+  <button type="submit">Save &amp; start proxying</button>
+</form>
+
+<h2>After setup</h2>
+<pre class="mono">export OPENAI_BASE_URL="{{ request.url_root }}v1"
+export OPENAI_API_KEY="&lt;the MidWare key you just created&gt;"</pre>
+{% endblock %}

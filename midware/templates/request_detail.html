@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Request #{{ row['id'] }} · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Request #{{ row['id'] }}</h1>
+  <p><a href="{{ url_for('dashboard.requests_page') }}">← Back to requests</a></p>
+</hgroup>
+
+<section class="stat-grid">
+  <article class="stat-card"><header>Model</header><div class="value mono" style="font-size:1.1rem">{{ row['model'] or '—' }}</div>
+    <div class="sub">{% if row['model_raw'] and row['model_raw'] != row['model'] %}sent as <span class="mono">{{ row['model_raw'] }}</span>{% else %}&nbsp;{% endif %}</div>
+  </article>
+  <article class="stat-card"><header>Route</header><div class="value" style="font-size:1.1rem">{{ row['route_name'] or '—' }}</div>
+    <div class="sub">{% if row['host_prefix'] %}via [{{ row['host_prefix'] }}]{% else %}default route{% endif %}</div>
+  </article>
+  <article class="stat-card"><header>Total tokens</header><div class="value">{{ row['total_tokens'] | comma }}</div><div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}</div></article>
+  <article class="stat-card"><header>Status</header><div class="value">{{ row['status_code'] }}</div><div class="sub">{{ row['latency_ms'] | ms }}{% if row['streamed'] %} · streamed{% endif %}</div></article>
+  <article class="stat-card"><header>When</header><div class="value" style="font-size:1.1rem">{{ row['created_at'] | datetime }}</div><div class="sub">{{ row['created_at'] | relative }}</div></article>
+</section>
+
+<table class="compact">
+  <tbody>
+    <tr><th>API key</th><td>{{ row['api_key_name'] or '—' }}</td></tr>
+    <tr><th>Route</th><td>{{ row['route_name'] or '—' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
+    <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
+    <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or '—' }}</td></tr>
+    {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
+  </tbody>
+</table>
+
+<h2>Request body <small>(prefix stripped before forwarding)</small></h2>
+<pre class="mono">{{ row['request_body'] or '(not captured)' }}</pre>
+
+<h2>Response body</h2>
+<pre class="mono">{{ row['response_body'] or '(not captured)' }}</pre>
+{% endblock %}

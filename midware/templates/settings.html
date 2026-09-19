@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Settings · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Control panel</h1>
+  <p>Runtime knobs and maintenance.</p>
+</hgroup>
+
+<h2>Request logging</h2>
+<form method="post">
+  <label>
+    Saved requests per API key
+    <input type="number" name="request_log_limit" min="0" max="100000" value="{{ log_limit }}">
+    <small>Each key keeps its newest N request/response bodies. MidWare trims older rows immediately. Set 0 to keep none.</small>
+  </label>
+  <button type="submit">Save</button>
+</form>
+
+<h2>Maintenance</h2>
+<form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
+  <input type="hidden" name="action" value="purge">
+  <button type="submit" class="secondary outline">Purge all logged requests</button>
+  <small class="sub">Deletes {{ request_count }} row(s). Keys and routes are untouched.</small>
+</form>
+
+<h2>Runtime state</h2>
+<table class="compact">
+  <tbody>
+    <tr><th>Configured</th><td>{{ 'yes' if configured else 'no' }}{% if configured_at %} · {{ configured_at | datetime }}{% endif %}</td></tr>
+    <tr><th>Routes</th><td>{{ route_count }}</td></tr>
+    <tr><th>API keys</th><td>{{ key_count }}</td></tr>
+    <tr><th>Logged requests</th><td>{{ request_count }}</td></tr>
+    <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
+    <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
+    <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
+  </tbody>
+</table>
+{% endblock %}
