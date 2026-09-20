@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from flask import (
     Blueprint,
+    abort,
     current_app,
     flash,
     redirect,
@@ -14,6 +17,15 @@ from flask import (
 
 from ..auth import get_db
 from ..models import probe_route, refresh_all
+from ..premodels import (
+    DESCRIPTION_MAX,
+    MERGE_MODES,
+    PROMPT_MODES,
+    SAMPLING_KEYS,
+    normalize_preset,
+    normalize_slug,
+    parse_params,
+)
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -243,3 +255,153 @@ def settings():
         upstream_timeout=current_app.config["UPSTREAM_TIMEOUT"],
         verify_tls=current_app.config["UPSTREAM_VERIFY_TLS"],
     )
+
+
+# -- premodels ---------------------------------------------------------------
+
+
+def _read_premodel_form(db, existing):
+    form = request.form
+    name = (form.get("name") or "").strip()
+    description = (form.get("description") or "").strip()[:DESCRIPTION_MAX]
+    slug = normalize_slug(form.get("slug") or "", name)
+    route_id = form.get("route_id", type=int)
+    model = (form.get("model") or "").strip()
+    merge_mode = form.get("merge_mode") or "append"
+    if merge_mode not in MERGE_MODES:
+        merge_mode = "append"
+    accept_mwvars = _form_bool("accept_mwvars")
+    prompt_mode = form.get("prompt_mode") or "simple"
+    if prompt_mode not in PROMPT_MODES:
+        prompt_mode = "simple"
+    system_prompt = form.get("system_prompt") or ""
+    params_enabled = _form_bool("params_enabled")
+    params: dict[str, float | int] = {}
+    param_errors: list[str] = []
+    for key in SAMPLING_KEYS:
+        raw_value = (form.get(key) or "").strip()
+        if not raw_value:
+            continue
+        try:
+            number = float(raw_value)
+        except ValueError:
+            param_errors.append(f"'{key}' must be a number.")
+            continue
+        params[key] = int(number) if key == "max_tokens" and number.is_integer() else number
+    params_json = json.dumps(params, ensure_ascii=False) if params else None
+
+    preset_json = existing["preset_json"] if existing is not None else None
+    preset_raw = (form.get("preset_json") or "").strip()
+    if prompt_mode == "simple":
+        preset_json = None
+    elif preset_raw:
+        preset_json = None
+        try:
+            normalized = normalize_preset(json.loads(preset_raw))
+        except (ValueError, TypeError):
+            normalized = None
+        if normalized and normalized["prompts"]:
+            preset_json = json.dumps(normalized, ensure_ascii=False)
+
+    fields = {
+        "name": name,
+        "slug": slug,
+        "description": description,
+        "route_id": route_id,
+        "model": model,
+        "merge_mode": merge_mode,
+        "accept_mwvars": accept_mwvars,
+        "prompt_mode": prompt_mode,
+        "system_prompt": system_prompt,
+        "preset_json": preset_json,
+        "params_enabled": params_enabled,
+        "params_json": params_json,
+    }
+
+    errors: list[str] = list(param_errors)
+    if not name:
+        errors.append("Name is required.")
+    if not slug:
+        errors.append("Slug is required.")
+    if route_id is None or db.get_route(route_id) is None:
+        errors.append("Choose a connection.")
+    if not model:
+        errors.append("Choose or type a model.")
+    if prompt_mode == "sillytavern" and not preset_json:
+        errors.append("Upload a SillyTavern preset with at least one prompt.")
+    clash = db.get_premodel_by_slug(slug) if slug else None
+    if clash is not None and (existing is None or clash["id"] != existing["id"]):
+        errors.append(f"Slug '{slug}' is already in use.")
+    return fields, errors
+
+
+def _render_premodel_form(db, form, premodel):
+    preset_data = {"prompts": []}
+    raw = form.get("preset_json") if isinstance(form, dict) else None
+    if raw:
+        try:
+            preset_data = json.loads(raw)
+        except (ValueError, TypeError):
+            preset_data = {"prompts": []}
+    params = parse_params(form.get("params_json")) if isinstance(form, dict) else {}
+    return render_template(
+        "premodel_form.html",
+        premodel=premodel,
+        routes=db.list_routes(),
+        models=db.list_models(),
+        form=form,
+        preset_data=preset_data,
+        params=params,
+        sampling_keys=SAMPLING_KEYS,
+    )
+
+
+def _save_premodel(db, existing):
+    fields, errors = _read_premodel_form(db, existing)
+    if errors:
+        for message in errors:
+            flash(message, "error")
+        return _render_premodel_form(db, fields, existing)
+    if existing is None:
+        db.create_premodel(**fields)
+        flash(f"Premodel '{fields['name']}' created.", "success")
+    else:
+        db.update_premodel(existing["id"], **fields)
+        flash(f"Premodel '{fields['name']}' updated.", "success")
+    return redirect(url_for("admin.premodels"))
+
+
+@bp.route("/premodels", methods=["GET", "POST"])
+def premodels():
+    db = get_db()
+    if request.method == "POST":
+        if request.form.get("action") == "delete":
+            db.delete_premodel(request.form.get("premodel_id", type=int))
+            flash("Premodel deleted.", "success")
+        return redirect(url_for("admin.premodels"))
+
+    routes = db.list_routes()
+    return render_template(
+        "premodels.html",
+        premodels=db.list_premodels(),
+        route_names={route["id"]: route["name"] for route in routes},
+    )
+
+
+@bp.route("/premodels/new", methods=["GET", "POST"])
+def premodel_new():
+    db = get_db()
+    if request.method == "POST":
+        return _save_premodel(db, None)
+    return _render_premodel_form(db, {}, None)
+
+
+@bp.route("/premodels/<int:premodel_id>/edit", methods=["GET", "POST"])
+def premodel_edit(premodel_id: int):
+    db = get_db()
+    existing = db.get_premodel(premodel_id)
+    if existing is None:
+        abort(404)
+    if request.method == "POST":
+        return _save_premodel(db, existing)
+    return _render_premodel_form(db, dict(existing), existing)

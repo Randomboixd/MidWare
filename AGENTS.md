@@ -45,6 +45,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); `truncate`, `strip_ansi`, `model_from_request_body`. |
 | `midware/conversation.py` | Normalize request/response bodies (JSON or streamed) into display blocks for the viewer. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
+| `midware/premodels.py` | Premodel overlays: slugging, SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
 | `midware/blueprints/proxy.py` | The proxy surface: `/v1/*`, `/proxy/*`; auth, routing, forwarding, teeing, persisting. |
@@ -123,6 +124,22 @@ Do not break these; several have regression tests.
   adding a route or during setup. A failed probe means the route is **not saved**.
   A host that answers with non-JSON is treated as reachable (accepted + warning).
   The edit drawer tests only when its checkbox is ticked.
+- **Premodels** (`premodels.py`): a premodel bundles a route, a model and a prompt
+  preset, addressed as `<p>-slug` in `model`. The prefix is parsed before
+  `[Host]`, so `<p>-slug[Host]model` lets the host win while the preset still
+  applies; trailing text after the slug overrides the premodel's model. Prompt
+  merge modes are `append` (default: premodel system prompt then caller's),
+  `premodel` (drop caller system prompts) and `caller` (ignore the preset when the
+  caller sent a system prompt). MWVAR messages (`!!!MWVAR!!!` + `@name=value`)
+  are read only when `accept_mwvars` is on; the marker is `!!!MWVAR!!!` or
+  `!!!MWVARS!!!` and any role may carry it (clients often use a system message).
+  The defining message and every later MWVAR message are removed before
+  substitution, and each definition also exposes capitalized/uppercased spellings
+  of the value. Macros expand in both the `{{ name }}` and `@@name@@` forms. When
+  `params_enabled` is set, `temperature`,
+  `top_p` and `max_tokens` fill in any value the caller omitted. Premodels are
+  merged into `GET /v1/models` as `<p>-slug`. Admin CRUD lives at
+  `/admin/premodels`.
 - **Conversation viewer**: table for request metadata excluding messages; messages are
   numbered, collapsible, and only the last user + last assistant start open. The
   client-side **Fetch** button re-requests `/requests/<id>/messages.json`.
@@ -142,7 +159,7 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `89 passed` — **update this number whenever the test count changes.**
+  `113 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

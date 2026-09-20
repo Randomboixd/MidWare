@@ -15,6 +15,7 @@ import httpx
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
 from ..auth import authenticate, get_db
+from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage
 from ..usage import (
     model_from_request_body,
@@ -122,20 +123,6 @@ def _extract_host_prefix(payload: dict | None) -> tuple[str | None, int | None]:
     return name or None, route_id
 
 
-def _rewrite_model(raw_body: bytes, payload: dict | None) -> bytes:
-    """Strip the host prefix from ``model`` before forwarding upstream."""
-    if not isinstance(payload, dict):
-        return raw_body
-    model = payload.get("model")
-    if not isinstance(model, str):
-        return raw_body
-    new_model = HOST_PREFIX_RE.sub("", model, count=1).lstrip()
-    if new_model == model or not new_model:
-        return raw_body
-    payload["model"] = new_model
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-
 def _filtered_headers(headers, drop: set[str] | None = None):
     drop = drop or set()
     for name, value in headers.items():
@@ -201,24 +188,42 @@ def _models_catalogue() -> Response:
     """
     db = get_db()
     entries = db.list_models()
-    payload = {
-        "object": "list",
-        "data": [
+    data = [
+        {
+            "id": entry["slug"],
+            "object": "model",
+            "created": 0,
+            "owned_by": entry["route_name"],
+            "midware": {
+                "model": entry["model_id"],
+                "route_id": entry["route_id"],
+                "route": entry["route_name"],
+                "default": entry["is_default"],
+            },
+        }
+        for entry in entries
+    ]
+
+    routes = {route["id"]: route for route in db.list_routes()}
+    for premodel in db.list_premodels():
+        route = routes.get(premodel["route_id"])
+        data.append(
             {
-                "id": entry["slug"],
+                "id": f"<p>-{premodel['slug']}",
                 "object": "model",
                 "created": 0,
-                "owned_by": entry["route_name"],
+                "owned_by": route["name"] if route else "premodel",
                 "midware": {
-                    "model": entry["model_id"],
-                    "route_id": entry["route_id"],
-                    "route": entry["route_name"],
-                    "default": entry["is_default"],
+                    "premodel": premodel["slug"],
+                    "model": premodel["model"],
+                    "route_id": premodel["route_id"],
+                    "route": route["name"] if route else None,
+                    "description": premodel["description"],
                 },
             }
-            for entry in entries
-        ],
-    }
+        )
+
+    payload = {"object": "list", "data": data}
     return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
 
 
@@ -362,6 +367,29 @@ def _forward(ctx: dict, path: str) -> Response:
     model_raw = model_from_request_body(raw_body)
     model = model_raw
     host_prefix = None
+    rewritten = False
+
+    model_field = parsed_body.get("model") if isinstance(parsed_body, dict) else None
+    premodel_slug, model_remainder = extract_premodel_prefix(model_field)
+    if premodel_slug:
+        premodel = db.get_premodel_by_slug(premodel_slug)
+        if premodel is None:
+            return _json_error(
+                f"Unknown premodel '<p>-{premodel_slug}'.",
+                404,
+                "unknown_premodel",
+                "midware_routing_error",
+            )
+        target = db.get_route(premodel["route_id"]) if premodel["route_id"] else None
+        if target is not None:
+            route = target
+        new_model = (model_remainder or "").strip() or (premodel["model"] or "").strip()
+        parsed_body["model"] = new_model
+        if isinstance(parsed_body.get("messages"), list):
+            parsed_body["messages"] = apply_premodel_messages(premodel, parsed_body["messages"])
+        apply_sampling_params(parsed_body, premodel)
+        model = new_model or None
+        rewritten = True
 
     prefix_name, prefix_route_id = _extract_host_prefix(parsed_body)
     if prefix_name or prefix_route_id is not None:
@@ -376,8 +404,15 @@ def _forward(ctx: dict, path: str) -> Response:
             )
         route = target
         host_prefix = _host_label(target["name"])
-        raw_body = _rewrite_model(raw_body, parsed_body)
-        model = HOST_PREFIX_RE.sub("", model_raw).lstrip() or None
+        current_model = parsed_body.get("model") if isinstance(parsed_body, dict) else None
+        parsed_body["model"] = HOST_PREFIX_RE.sub(
+            "", current_model if isinstance(current_model, str) else "", count=1
+        ).lstrip()
+        model = parsed_body["model"] or None
+        rewritten = True
+
+    if rewritten and isinstance(parsed_body, dict):
+        raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
 
     base_url, prefix = _split_target(route)
     upstream_path = f"{prefix}/{(path or '').lstrip('/')}"

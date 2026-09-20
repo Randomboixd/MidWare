@@ -81,6 +81,26 @@ CREATE TABLE IF NOT EXISTS models (
 );
 
 CREATE INDEX IF NOT EXISTS idx_models_route ON models(route_id);
+
+CREATE TABLE IF NOT EXISTS premodels (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    slug          TEXT    NOT NULL UNIQUE,
+    description   TEXT    NOT NULL DEFAULT '',
+    route_id      INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+    model         TEXT    NOT NULL DEFAULT '',
+    merge_mode    TEXT    NOT NULL DEFAULT 'append',
+    accept_mwvars INTEGER NOT NULL DEFAULT 0,
+    prompt_mode   TEXT    NOT NULL DEFAULT 'simple',
+    system_prompt TEXT    NOT NULL DEFAULT '',
+    preset_json   TEXT,
+    params_enabled INTEGER NOT NULL DEFAULT 0,
+    params_json   TEXT,
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_premodels_route ON premodels(route_id);
 """
 
 
@@ -169,24 +189,39 @@ class Database:
         indexes fail. We update the table *before* the script runs.
         """
         existing = {row["name"] for row in self._rows("PRAGMA table_info(requests)")}
-        if not existing:
-            return
+        if existing:
+            self._add_columns(
+                "requests",
+                existing,
+                {
+                    "model_raw": "TEXT",
+                    "host_prefix": "TEXT",
+                    "upstream_request_id": "TEXT",
+                    "error": "TEXT",
+                    "request_body": "TEXT",
+                    "response_body": "TEXT",
+                    "route_id": "INTEGER",
+                    "api_key_id": "INTEGER",
+                    "token_source": "TEXT NOT NULL DEFAULT 'upstream'",
+                },
+            )
 
-        added = {
-            "model_raw": "TEXT",
-            "host_prefix": "TEXT",
-            "upstream_request_id": "TEXT",
-            "error": "TEXT",
-            "request_body": "TEXT",
-            "response_body": "TEXT",
-            "route_id": "INTEGER",
-            "api_key_id": "INTEGER",
-            "token_source": "TEXT NOT NULL DEFAULT 'upstream'",
-        }
+        existing_premodels = {row["name"] for row in self._rows("PRAGMA table_info(premodels)")}
+        if existing_premodels:
+            self._add_columns(
+                "premodels",
+                existing_premodels,
+                {
+                    "params_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "params_json": "TEXT",
+                },
+            )
+
+    def _add_columns(self, table: str, existing: set[str], added: dict[str, str]) -> None:
         with self.write() as conn:
             for column, definition in added.items():
                 if column not in existing:
-                    conn.execute(f"ALTER TABLE requests ADD COLUMN {column} {definition}")
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)
@@ -386,6 +421,99 @@ class Database:
 
     def count_models(self) -> int:
         return int(self._scalar("SELECT COUNT(*) FROM models"))
+
+    # -- premodels ----------------------------------------------------------
+
+    _PREMODEL_FIELDS = (
+        "name",
+        "slug",
+        "description",
+        "route_id",
+        "model",
+        "merge_mode",
+        "accept_mwvars",
+        "prompt_mode",
+        "system_prompt",
+        "preset_json",
+        "params_enabled",
+        "params_json",
+    )
+
+    def create_premodel(
+        self,
+        *,
+        name: str,
+        slug: str,
+        description: str = "",
+        route_id: int | None = None,
+        model: str = "",
+        merge_mode: str = "append",
+        accept_mwvars: bool = False,
+        prompt_mode: str = "simple",
+        system_prompt: str = "",
+        preset_json: str | None = None,
+        params_enabled: bool = False,
+        params_json: str | None = None,
+    ) -> int:
+        stamp = to_iso(utcnow())
+        with self.write() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO premodels (
+                    name, slug, description, route_id, model, merge_mode,
+                    accept_mwvars, prompt_mode, system_prompt, preset_json,
+                    params_enabled, params_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name,
+                    slug,
+                    description,
+                    route_id,
+                    model,
+                    merge_mode,
+                    int(bool(accept_mwvars)),
+                    prompt_mode,
+                    system_prompt,
+                    preset_json,
+                    int(bool(params_enabled)),
+                    params_json,
+                    stamp,
+                    stamp,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def update_premodel(self, premodel_id: int, **fields: Any) -> None:
+        updates = {key: value for key, value in fields.items() if key in self._PREMODEL_FIELDS}
+        if not updates:
+            return
+        if "accept_mwvars" in updates:
+            updates["accept_mwvars"] = int(bool(updates["accept_mwvars"]))
+        if "params_enabled" in updates:
+            updates["params_enabled"] = int(bool(updates["params_enabled"]))
+        updates["updated_at"] = to_iso(utcnow())
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with self.write() as conn:
+            conn.execute(
+                f"UPDATE premodels SET {assignments} WHERE id = ?",
+                (*updates.values(), premodel_id),
+            )
+
+    def delete_premodel(self, premodel_id: int) -> None:
+        with self.write() as conn:
+            conn.execute("DELETE FROM premodels WHERE id = ?", (premodel_id,))
+
+    def get_premodel(self, premodel_id: int) -> sqlite3.Row | None:
+        return self._row("SELECT * FROM premodels WHERE id = ?", (premodel_id,))
+
+    def get_premodel_by_slug(self, slug: str) -> sqlite3.Row | None:
+        if not slug:
+            return None
+        return self._row("SELECT * FROM premodels WHERE slug = ? COLLATE NOCASE", (slug,))
+
+    def list_premodels(self) -> list[sqlite3.Row]:
+        return self._rows("SELECT * FROM premodels ORDER BY name COLLATE NOCASE, id")
 
     # -- api keys -----------------------------------------------------------
 

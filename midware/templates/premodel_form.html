@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if premodel else 'New' }} premodel · MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>{{ 'Edit premodel' if premodel else 'New premodel' }}</h1>
+  <p>A preset bound to one connection and model. Clients call it with
+     <code>&lt;p&gt;-&lt;slug&gt;</code>.</p>
+</hgroup>
+
+<form method="post" id="premodel-form">
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Name
+      <input type="text" id="premodel-name" name="name" value="{{ form.get('name', '') }}" required>
+    </label>
+    <label>
+      Slug
+      <input type="text" id="premodel-slug" name="slug" value="{{ form.get('slug', '') }}" required>
+      <small>Sent as <code>&lt;p&gt;-&lt;slug&gt;</code>. Lowercase letters, digits and dashes.</small>
+    </label>
+  </div>
+
+  <label>
+    Description
+    <textarea id="premodel-description" name="description" rows="2" maxlength="250"
+              placeholder="Short description">{{ form.get('description', '') }}</textarea>
+    <small><span id="description-count">0</span>/250 characters.</small>
+  </label>
+
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Connection
+      <select name="route_id" id="premodel-route">
+        <option value="">— choose —</option>
+        {% for r in routes %}
+        <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Model
+      <input type="text" id="premodel-model" name="model" list="premodel-models"
+             value="{{ form.get('model', '') }}" required>
+      <datalist id="premodel-models">
+        {% for m in models %}<option value="{{ m.model_id }}" data-route="{{ m.route_id }}"></option>{% endfor %}
+      </datalist>
+      <small>The model slug sent to the connection above.</small>
+    </label>
+  </div>
+
+  <fieldset>
+    <legend>Request merging</legend>
+    {% set merge = form.get('merge_mode', 'append') %}
+    <label><input type="radio" name="merge_mode" value="append" {% if merge == 'append' %}checked{% endif %}>
+      Append</label>
+    <small>Keep everything; the caller's prompt follows the premodel's.</small>
+    <label><input type="radio" name="merge_mode" value="caller" {% if merge == 'caller' %}checked{% endif %}>
+      Caller wins</label>
+    <small>If the caller sent a system prompt, ignore the premodel's prompt.</small>
+    <label><input type="radio" name="merge_mode" value="premodel" {% if merge == 'premodel' %}checked{% endif %}>
+      Premodel wins</label>
+    <small>Delete the caller's system prompts and use the premodel's.</small>
+  </fieldset>
+
+  <label>
+    <input type="checkbox" name="accept_mwvars" value="1" {% if form.get('accept_mwvars') %}checked{% endif %}>
+    Accept MWVARS
+  </label>
+  <small>Allow callers to define <code>@name=value</code> macro variables, used as <code>{{ '{{ name }}' }}</code> or <code>@@name@@</code>.</small>
+
+  <fieldset>
+    <legend>Sampling overrides</legend>
+    <label>
+      <input type="checkbox" role="switch" name="params_enabled" id="params-enabled" value="1"
+             {% if form.get('params_enabled') %}checked{% endif %}>
+      Apply sampling values the caller did not set
+    </label>
+    <div id="params-panel" hidden>
+      <div class="grid-2" style="grid-template-columns: repeat(3, 1fr);">
+        <label>Temperature <input type="number" step="0.01" min="0" name="temperature" id="temperature"
+               value="{{ params.get('temperature', '') }}"></label>
+        <label>Top P <input type="number" step="0.01" min="0" max="1" name="top_p" id="top_p"
+               value="{{ params.get('top_p', '') }}"></label>
+        <label>Max tokens <input type="number" step="1" min="1" name="max_tokens" id="max_tokens"
+               value="{{ params.get('max_tokens', '') }}"></label>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Prompt source</legend>
+    {% set mode = form.get('prompt_mode', 'simple') %}
+    <label><input type="radio" name="prompt_mode" value="simple" {% if mode == 'simple' %}checked{% endif %}> Simple system prompt</label>
+    <label><input type="radio" name="prompt_mode" value="sillytavern" {% if mode == 'sillytavern' %}checked{% endif %}> SillyTavern preset</label>
+  </fieldset>
+
+  <section id="simple-panel">
+    <label>
+      System prompt
+      <textarea name="system_prompt" rows="10" placeholder="You are...">{{ form.get('system_prompt', '') }}</textarea>
+    </label>
+  </section>
+
+  <section id="preset-panel" hidden>
+    <label>
+      Upload a SillyTavern preset (.json)
+      <input type="file" id="preset-file" accept=".json,application/json">
+      <small>Parsed in your browser. Toggle prompts below; the enabled set is saved.</small>
+    </label>
+    <input type="hidden" name="preset_json" id="preset-json" value="{{ form.get('preset_json', '') }}">
+    <p id="preset-status"><small>No preset loaded.</small></p>
+    <div id="preset-prompts" class="preset-prompts"></div>
+  </section>
+
+  <button type="submit">Save premodel</button>
+  <a role="button" class="secondary outline" href="{{ url_for('admin.premodels') }}">Cancel</a>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script id="preset-data" type="application/json">{{ preset_data | tojson }}</script>
+<script src="{{ url_for('static', filename='premodels.js') }}"></script>
+{% endblock %}
