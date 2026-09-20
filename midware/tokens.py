@@ -39,40 +39,49 @@ _FAMILY_RATIOS = {
     "command": 3.7,
 }
 
-_openai_encodings = (
-    "o200k_base",
-    "cl100k_base",
-    "p50k_base",
-    "r50k_base",
-)
+_openai_encodings = ("o200k_base", "cl100k_base")
 
 _encoder_cache: dict[str, Any] = {}
 _unavailable = False
 
 
-def _load_encoder(family: str) -> Any:
-    """Return a tiktoken encoding for an OpenAI-ish family, or ``None``."""
+def _load_encoder(model: str | None = None) -> Any:
+    """Return a tiktoken encoding compatible with ``model``, or ``None``.
+
+    The model decides the vocabulary: ``o200k_base`` for the o-series and the
+    GPT-4o/4.1/5 families, ``cl100k_base`` for older GPT-3.5/4 models. Anything
+    else (or a missing encoding file) returns ``None`` so the caller falls back
+    to the character heuristic — a few thousand tokens of error on a dashboard
+    is an acceptable trade for not bundling every tokenizer under the sun.
+    """
     global _unavailable
     if _unavailable:
         return None
-    if family in _encoder_cache:
-        return _encoder_cache[family]
+    lowered = (model or "").lower()
+    if lowered and not _is_openai_family(lowered):
+        return None
+    name = "cl100k_base" if lowered and not _wants_o200k(lowered) else "o200k_base"
+    if name in _encoder_cache:
+        return _encoder_cache[name]
     encoding = None
     try:
         import tiktoken
 
-        for name in _openai_encodings:
-            try:
-                encoding = tiktoken.get_encoding(name)
-                break
-            except Exception:  # missing BPE file / no network
-                continue
-    except Exception:
+        encoding = tiktoken.get_encoding(name)
+    except Exception:  # not installed / missing BPE file / no network
         encoding = None
     if encoding is None:
         _unavailable = True
-    _encoder_cache[family] = encoding
+    _encoder_cache[name] = encoding
     return encoding
+
+
+def _wants_o200k(model: str) -> bool:
+    """o-series and GPT-4o/4.1/5 families share the ``o200k_base`` vocabulary."""
+    for marker in ("o1", "o3", "o4", "gpt-4o", "gpt-4.1", "gpt-5"):
+        if marker in model:
+            return True
+    return False
 
 
 def _is_openai_family(model: str | None) -> bool:
@@ -103,16 +112,21 @@ def _heuristic_tokens(text: str, model: str | None) -> int:
 
 
 def count_text(text: str, model: str | None = None) -> tuple[int, str]:
-    """Return ``(tokens, source)`` for one string."""
+    """Return ``(tokens, source)`` for one string.
+
+    Estimation only ever happens for responses without an upstream ``usage``
+    block, so the number is labelled to make clear it is a guess. Token
+    accounting must never be the reason a request fails, hence the broad
+    ``except`` around encoding: an odd BPE payload degrades to the heuristic.
+    """
     if not text:
         return 0, "estimated"
-    if _is_openai_family(model):
-        encoder = _load_encoder("openai")
-        if encoder is not None:
-            try:
-                return len(encoder.encode(text)), "tiktoken"
-            except Exception:
-                pass
+    encoder = _load_encoder(model)
+    if encoder is not None:
+        try:
+            return len(encoder.encode(text)), "tiktoken"
+        except Exception:
+            pass
     return _heuristic_tokens(text, model), "chars"
 
 

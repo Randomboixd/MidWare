@@ -47,7 +47,9 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     register_template_helpers(app)
 
-    # Kick off a model-catalogue refresh when it has gone stale (roughly daily).
+    # Kick off a model-catalogue refresh when it has gone stale (roughly daily),
+    # and fetch it immediately on the very first proxied request after install so
+    # clients never see an empty /v1/models.
     from .models import refresh_if_stale
 
     app.extensions["midware_model_refresh"] = lambda: refresh_if_stale(app)
@@ -59,6 +61,9 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 def _maybe_refresh_models() -> None:
     from flask import current_app
 
+    from .auth import get_db
+    from .models import refresh_in_background
+
     if current_app.config.get("TESTING"):
         return
     checker = current_app.extensions.get("midware_model_refresh")
@@ -67,3 +72,9 @@ def _maybe_refresh_models() -> None:
             checker()
         except Exception:  # never block a request on catalogue bookkeeping
             current_app.logger.debug("model refresh check failed", exc_info=True)
+        try:
+            db = get_db()
+            if db.is_configured() and not db.get_meta("models_refreshed_at") and db.list_routes():
+                refresh_in_background(current_app._get_current_object())
+        except Exception:
+            current_app.logger.debug("initial model refresh failed", exc_info=True)

@@ -180,3 +180,39 @@ def test_activating_route_regenerates_slugs(multi_host):
     assert "m" in slugs                      # NanoGPT is now default → bare
     assert "[Default]m" in slugs             # old default now namespaced
     assert not any(m["slug"] == "[NanoGPT]m" for m in db.list_models())
+
+
+def test_probe_route_success():
+    from midware.models import probe_route
+    from test_proxy import StubClient, StubResponse
+
+    stub = StubClient(StubResponse(status_code=200, content=models_body(["a", "b"])))
+    result = probe_route(stub, "Host", "https://host.example.com", "k")
+
+    assert result["ok"] is True
+    assert result["models"] == ["a", "b"]
+    assert result["error"] is None
+
+
+def test_probe_route_fails_on_bad_status():
+    from midware.models import probe_route
+    from test_proxy import StubClient, StubResponse
+
+    stub = StubClient(StubResponse(status_code=401, content=b"{}"))
+    result = probe_route(stub, "Host", "https://host.example.com", "k")
+
+    assert result["ok"] is False
+    assert "401" in result["error"]
+
+
+def test_probe_route_treats_non_json_as_reachable():
+    from midware.models import probe_route
+    from test_proxy import StubClient, StubResponse
+
+    stub = StubClient(StubResponse(status_code=200, content=b"<html>hi</html>"))
+    result = probe_route(stub, "Host", "https://host.example.com", "k")
+
+    assert result["ok"] is True
+    assert result["models"] == []
+    assert result.get("warning")
+

@@ -36,6 +36,13 @@
     <small>Stored locally in SQLite and injected into upstream requests. Clients never see it.</small>
   </label>
 
+  <label>
+    <input type="checkbox" name="test_connection" value="1"
+           {% if form.get('test_connection', '1') %}checked{% endif %}>
+    Test the connection and fetch models before saving
+    <small>MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</small>
+  </label>
+
   <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
     <label>
       Your first MidWare key name

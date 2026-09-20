@@ -110,6 +110,24 @@ def fetch_route_models(client, route) -> tuple[list[str], str | None]:
     return extract_model_ids(payload), None
 
 
+def probe_route(client, name: str, target_host: str, upstream_key: str) -> dict[str, Any]:
+    """Try fetching a prospective route's models before it is saved.
+
+    Returns ``{"ok": bool, "error": str | None, "models": list[str], "url": str}``.
+    A reachable host that answers with something other than a model list (a
+    plain HTML page, a non-JSON body) still counts as reachable — we only fail
+    when the network call itself fails or the host rejects our credential.
+    """
+    route = {"name": name, "target_host": target_host, "upstream_key": upstream_key}
+    url = _models_url(target_host)
+    model_ids, error = fetch_route_models(client, route)
+    if error and "Invalid JSON" in error:
+        return {"ok": True, "error": None, "models": [], "url": url, "warning": error}
+    if error:
+        return {"ok": False, "error": error, "models": [], "url": url}
+    return {"ok": True, "error": None, "models": model_ids, "url": url}
+
+
 def refresh_all(app) -> dict[str, Any]:
     """Refresh every route's models, querying each distinct host only once."""
     db = app.extensions["midware_db"]

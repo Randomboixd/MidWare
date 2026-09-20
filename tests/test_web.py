@@ -202,3 +202,115 @@ def test_route_edit_updates_name_and_target(configured_client):
     assert updated["name"] == "Renamed"
     assert updated["target_host"] == "https://renamed.example.com/v1"
     assert updated["upstream_key"] == route["upstream_key"]
+
+
+def test_route_create_is_blocked_when_connection_test_fails(configured_client):
+    from test_proxy import install_stub, StubResponse
+
+    client, _ = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    install_stub(app, StubResponse(status_code=401, content=b'{"error":"bad key"}'))
+
+    response = client.post(
+        "/admin/routes",
+        data={
+            "action": "create",
+            "name": "Broken",
+            "target_host": "https://broken.example.com",
+            "test_connection": "1",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Connection test failed" in response.data
+    assert not any(r["name"] == "Broken" for r in db.list_routes())
+
+
+def test_route_create_skips_test_when_unchecked(configured_client):
+    from test_proxy import install_stub, StubResponse
+
+    client, _ = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    stub = install_stub(app, StubResponse(status_code=401, content=b"{}"))
+
+    client.post(
+        "/admin/routes",
+        data={
+            "action": "create",
+            "name": "Untested",
+            "target_host": "https://untested.example.com",
+            "test_connection": "0",
+        },
+    )
+
+    assert any(r["name"] == "Untested" for r in db.list_routes())
+
+
+def test_route_create_passes_and_reports_models(configured_client):
+    from test_proxy import install_stub, StubResponse
+
+    client, _ = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    install_stub(app, StubResponse(status_code=200, content=b'{"data":[{"id":"m1"},{"id":"m2"}]}'))
+
+    response = client.post(
+        "/admin/routes",
+        data={
+            "action": "create",
+            "name": "Healthy",
+            "target_host": "https://healthy.example.com",
+            "test_connection": "1",
+        },
+    )
+
+    assert response.status_code == 302
+    assert any(r["name"] == "Healthy" for r in db.list_routes())
+    assert db.count_models() >= 2
+
+
+def test_setup_blocked_when_connection_test_fails(app):
+    from test_proxy import install_stub, StubResponse
+
+    db = app.extensions["midware_db"]
+    install_stub(app, StubResponse(status_code=500, content=b"{}"))
+    client = app.test_client()
+
+    response = client.post(
+        "/admin/setup",
+        data={
+            "name": "Nope",
+            "target_host": "https://nope.example.com",
+            "upstream_key": "sk",
+            "test_connection": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"Connection test failed" in response.data
+    assert not db.is_configured()
+    assert db.list_routes() == []
+
+
+def test_setup_can_skip_connection_test(app):
+    from test_proxy import install_stub, StubResponse
+
+    db = app.extensions["midware_db"]
+    stub = install_stub(app, StubResponse(status_code=500, content=b"{}"))
+    client = app.test_client()
+
+    response = client.post(
+        "/admin/setup",
+        data={
+            "name": "Offline",
+            "target_host": "https://offline.example.com",
+            "test_connection": "0",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert db.is_configured()

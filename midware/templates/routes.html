@@ -51,6 +51,11 @@
     <label>Target host <input type="url" name="target_host" placeholder="https://nano-gpt.com/subscription/v1" required></label>
   </div>
   <label>Upstream API key <input type="password" name="upstream_key" autocomplete="off" placeholder="sk-..."></label>
+  <label>
+    <input type="checkbox" name="test_connection" value="1" checked>
+    Test the connection and fetch models before saving
+  </label>
+  <small>MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not added.</small>
   <button type="submit">Add route</button>
 </form>
 
@@ -111,6 +116,10 @@
               <input type="password" name="upstream_key" autocomplete="off"
                      placeholder="{{ 'leave blank to keep current key' if r['upstream_key'] else 'sk-...' }}">
               <small>Leave blank to keep the stored key.</small>
+            </label>
+            <label>
+              <input type="checkbox" name="test_connection" value="1">
+              Test the connection before saving
             </label>
             <button type="submit" style="width:auto">Save changes</button>
             <button type="button" class="secondary outline" style="width:auto"

@@ -12,12 +12,28 @@ if str(ROOT) not in sys.path:
 from midware import create_app  # noqa: E402
 
 
+class _ProbeClient:
+    """Upstream stand-in for admin connection tests: every host answers with an
+    empty (but valid) model list, so probes pass without touching the network."""
+
+    def get(self, url, headers=None):
+        class _Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"object": "list", "data": []}
+
+        return _Response()
+
+
 @pytest.fixture()
 def app():
     application = create_app(
         database_path=":memory:",
         config_overrides={"TESTING": True, "MAX_CAPTURE_BYTES": 64 * 1024},
     )
+    application.extensions["midware_http"] = _ProbeClient()
     yield application
 
 

@@ -13,7 +13,7 @@ from flask import (
 )
 
 from ..auth import get_db
-from ..models import refresh_all
+from ..models import probe_route, refresh_all
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -27,12 +27,40 @@ def _form_int(name: str, default: int, minimum: int = 0, maximum: int = 100_000)
     return max(minimum, min(value, maximum))
 
 
+def _form_bool(name: str, default: bool = False) -> bool:
+    raw = request.form.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _flash_refresh(result: dict) -> None:
     if result["errors"]:
         detail = "; ".join(f"{e['route_name']}: {e['error']}" for e in result["errors"])
         flash(f"Model fetch failed — {detail}", "error")
     else:
         flash(f"Fetched {result['total']} model slug(s) across {len(result['routes'])} route(s).", "success")
+
+
+def _connection_test(name: str, target_host: str, upstream_key: str) -> bool:
+    """Probe a prospective route; flash the outcome and report whether to keep it."""
+    client = current_app.extensions["midware_http"]
+    try:
+        result = probe_route(client, name, target_host, upstream_key)
+    except Exception as exc:  # a probe must never 500 the admin page
+        flash(f"Connection test errored: {type(exc).__name__}: {exc}", "error")
+        return False
+    if not result["ok"]:
+        flash(f"Connection test failed for '{name}' — {result['error']}", "error")
+        return False
+    if result.get("warning"):
+        flash(
+            f"Connected to '{name}', but {result['url']} did not return a model list.",
+            "warning",
+        )
+    else:
+        flash(f"Connection test passed for '{name}': {len(result['models'])} model(s) found.", "success")
+    return True
 
 
 @bp.route("/setup", methods=["GET", "POST"])
@@ -49,6 +77,15 @@ def setup():
 
         if not target_host.startswith(("http://", "https://")):
             flash("Target host must start with http:// or https://", "error")
+            return render_template(
+                "setup.html",
+                routes=routes,
+                defaults=current_app.config,
+                form=request.form,
+            )
+
+        test = _form_bool("test_connection", True)
+        if test and not _connection_test(name, target_host, upstream_key):
             return render_template(
                 "setup.html",
                 routes=routes,
@@ -103,6 +140,8 @@ def routes():
             upstream_key = (request.form.get("upstream_key") or "").strip()
             if not target_host.startswith(("http://", "https://")):
                 flash("Target host must start with http:// or https://", "error")
+            elif _form_bool("test_connection", True) and not _connection_test(name, target_host, upstream_key):
+                pass
             else:
                 existing = db.list_routes()
                 db.create_route(
@@ -131,12 +170,17 @@ def routes():
             elif not name:
                 flash("Route name cannot be empty.", "error")
             else:
-                updates = {"name": name, "target_host": target_host}
-                if upstream_key:
-                    updates["upstream_key"] = upstream_key
-                db.update_route(route_id, **updates)
-                flash(f"Route '{name}' updated.", "success")
-                _flash_refresh(refresh_all(current_app))
+                current = db.get_route(route_id)
+                probe_key = upstream_key or (current["upstream_key"] if current else "")
+                if _form_bool("test_connection", False) and not _connection_test(name, target_host, probe_key):
+                    pass
+                else:
+                    updates = {"name": name, "target_host": target_host}
+                    if upstream_key:
+                        updates["upstream_key"] = upstream_key
+                    db.update_route(route_id, **updates)
+                    flash(f"Route '{name}' updated.", "success")
+                    _flash_refresh(refresh_all(current_app))
         elif action == "delete":
             route_id = request.form.get("route_id", type=int)
             db.delete_route(route_id)

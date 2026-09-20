@@ -227,8 +227,25 @@ def _json_error(message: str, status: int, code: str, err_type: str = "midware_e
     return Response(json.dumps(body), status=status, mimetype="application/json")
 
 
-def _upstream_error_status(response: httpx.Response) -> int:
-    return response.status_code
+def _maybe_fetch_models_after_upstream_error(status_code: int) -> None:
+    """Re-fetch the catalogue when the upstream reports our stored key is bad.
+
+    A brand-new route added without a connection test (or one whose key rotated)
+    rejects the first proxied call with 401/403. That is exactly the moment to
+    pull ``/v1/models`` again so the Routes page shows a real error and the
+    catalogue self-heals once the key is fixed.
+    """
+    if status_code not in (401, 403):
+        return
+    try:
+        db = get_db()
+        if not db.list_routes():
+            return
+        from ..models import refresh_in_background
+
+        refresh_in_background(current_app._get_current_object())
+    except Exception:
+        current_app.logger.debug("post-401 model refresh skipped", exc_info=True)
 
 
 def _persist(
@@ -266,7 +283,11 @@ def _persist(
         usage = usage_from_response(response_body)
 
     token_source = "upstream"
-    if usage is not None:
+    if status_code >= 400:
+        # Error bodies carry no completion; never fabricate usage from them.
+        prompt = completion = total = 0
+        token_source = "none"
+    elif usage is not None:
         model = model or usage.model
         prompt = usage.prompt_tokens
         completion = usage.completion_tokens
@@ -282,7 +303,7 @@ def _persist(
                 token_source = estimate.source
             else:
                 token_source = "none"
-    elif status_code < 400:
+    else:
         estimate = estimate_usage(request_body, response_body, model)
         if estimate.total_tokens:
             prompt, completion, total = (
@@ -294,9 +315,6 @@ def _persist(
         else:
             prompt = completion = total = 0
             token_source = "none"
-    else:
-        prompt = completion = total = 0
-        token_source = "none"
 
     upstream_request_id = None
     if response_body:
@@ -409,6 +427,9 @@ def _forward(ctx: dict, path: str) -> Response:
     response_headers = list(_filtered_headers(upstream.headers))
     response_headers.append(_server_header())
     content_type = upstream.headers.get("content-type", "application/json")
+
+    if upstream.status_code >= 400:
+        _maybe_fetch_models_after_upstream_error(upstream.status_code)
 
     if not streamed:
         body = upstream.content
