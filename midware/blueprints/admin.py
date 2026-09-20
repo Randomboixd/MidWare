@@ -240,12 +240,15 @@ def settings():
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
-        flash(f"Request log limit set to {log_limit}.", "success")
+        if "cors_allow_origin" in request.form:
+            db.set_setting("cors_allow_origin", (request.form.get("cors_allow_origin") or "").strip())
+        flash(f"Settings saved. Request log limit set to {log_limit}.", "success")
         return redirect(url_for("admin.settings"))
 
     return render_template(
         "settings.html",
         log_limit=db.request_log_limit(),
+        cors_allow_origin=db.cors_allow_origin(current_app.config["CORS_ALLOW_ORIGIN"]),
         configured=db.is_configured(),
         configured_at=db.get_meta("configured_at"),
         route_count=len(db.list_routes()),

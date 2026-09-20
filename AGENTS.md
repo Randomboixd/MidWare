@@ -159,7 +159,7 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `113 passed` — **update this number whenever the test count changes.**
+  `119 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

@@ -43,9 +43,11 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     app.register_blueprint(admin_bp)
     app.register_blueprint(proxy_bp)
 
+    from .cors import register_cors
     from .jinja import register_template_helpers
 
     register_template_helpers(app)
+    register_cors(app)
 
     # Kick off a model-catalogue refresh when it has gone stale (roughly daily),
     # and fetch it immediately on the very first proxied request after install so

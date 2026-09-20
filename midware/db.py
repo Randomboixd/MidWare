@@ -281,6 +281,12 @@ class Database:
     def request_log_limit(self, default: int = 10) -> int:
         return max(0, self.get_int_setting("request_log_limit", default))
 
+    def cors_allow_origin(self, default: str = "*") -> str:
+        value = self.get_setting("cors_allow_origin")
+        if value is None:
+            return default
+        return value.strip()
+
     # -- setup / routes -----------------------------------------------------
 
     def is_configured(self) -> bool:

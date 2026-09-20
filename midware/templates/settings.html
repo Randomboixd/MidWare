@@ -17,6 +17,16 @@
   <button type="submit">Save</button>
 </form>
 
+<h2>Cross-origin access</h2>
+<form method="post">
+  <label>
+    Allowed CORS origin
+    <input type="text" name="cors_allow_origin" value="{{ cors_allow_origin }}" placeholder="*" autocomplete="off">
+    <small><code>*</code> allows any origin. Otherwise a comma-separated allowlist (e.g. <code>https://app.example.com</code>). Leave empty to disable CORS.</small>
+  </label>
+  <button type="submit">Save</button>
+</form>
+
 <h2>Maintenance</h2>
 <form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
   <input type="hidden" name="action" value="purge">
