@@ -16,7 +16,7 @@ from flask import Blueprint, Response, current_app, g, request, stream_with_cont
 
 from ..auth import authenticate, get_db
 from ..cors import check_origin
-from ..db import parse_id_list
+from ..db import model_key, parse_id_list, parse_model_list
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage
 from ..usage import (
@@ -73,6 +73,8 @@ def _key_limits(api_key) -> dict:
         "allowed_premodels": parse_id_list(api_key["allowed_premodel_ids"]),
         "restrict_providers": bool(api_key["restrict_providers"]),
         "allowed_routes": parse_id_list(api_key["allowed_route_ids"]),
+        "restrict_models": bool(api_key["restrict_models"]),
+        "allowed_models": parse_model_list(api_key["allowed_model_ids"]),
     }
 
 
@@ -80,6 +82,14 @@ def _route_allowed(limits: dict, route_id: int | None) -> bool:
     if not limits["restrict_providers"]:
         return True
     return route_id in limits["allowed_routes"]
+
+
+def _model_allowed(limits: dict, route_id: int | None, model: str | None) -> bool:
+    if not limits["restrict_models"]:
+        return True
+    if route_id is None or not model:
+        return False
+    return model_key(route_id, model) in limits["allowed_models"]
 
 
 def _premodel_allowed(limits: dict, premodel) -> bool:
@@ -243,13 +253,19 @@ def _models_catalogue(ctx: dict) -> Response:
         }
         for entry in entries
         if _route_allowed(limits, entry["route_id"])
+        and _model_allowed(limits, entry["route_id"], entry["model_id"])
     ]
 
     routes = {route["id"]: route for route in db.list_routes()}
+    active = db.active_route()
+    active_id = active["id"] if active else None
     for premodel in db.list_premodels():
         if not _premodel_allowed(limits, premodel):
             continue
         if not _route_allowed(limits, premodel["route_id"]):
+            continue
+        effective_route_id = premodel["route_id"] or active_id
+        if not _model_allowed(limits, effective_route_id, premodel["model"]):
             continue
         route = routes.get(premodel["route_id"])
         data.append(
@@ -466,6 +482,12 @@ def _forward(ctx: dict, path: str) -> Response:
         return _permission_error(
             f"Provider '{route['name']}' is not allowed for this API key.",
             "provider_not_allowed",
+        )
+
+    if not _model_allowed(limits, route["id"], model):
+        return _permission_error(
+            f"Model '{model or ''}' is not allowed for this API key.",
+            "model_not_allowed",
         )
 
     if rewritten and isinstance(parsed_body, dict):

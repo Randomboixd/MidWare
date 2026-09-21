@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     allowed_premodel_ids TEXT,
     restrict_providers  INTEGER NOT NULL DEFAULT 0,
     allowed_route_ids   TEXT,
+    restrict_models     INTEGER NOT NULL DEFAULT 0,
+    allowed_model_ids   TEXT,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -237,6 +239,8 @@ class Database:
                     "allowed_premodel_ids": "TEXT",
                     "restrict_providers": "INTEGER NOT NULL DEFAULT 0",
                     "allowed_route_ids": "TEXT",
+                    "restrict_models": "INTEGER NOT NULL DEFAULT 0",
+                    "allowed_model_ids": "TEXT",
                 },
             )
 
@@ -549,6 +553,8 @@ class Database:
         "allowed_premodel_ids",
         "restrict_providers",
         "allowed_route_ids",
+        "restrict_models",
+        "allowed_model_ids",
     )
 
     @staticmethod
@@ -566,6 +572,8 @@ class Database:
         allowed_premodel_ids: list[int] | None = None,
         restrict_providers: bool = False,
         allowed_route_ids: list[int] | None = None,
+        restrict_models: bool = False,
+        allowed_model_ids: list[str] | None = None,
     ) -> str:
         token = self.generate_token()
         with self.write() as conn:
@@ -574,8 +582,8 @@ class Database:
                 INSERT INTO api_keys (
                     name, description, token, cors_allow_origin, allow_premodels,
                     restrict_premodels, allowed_premodel_ids, restrict_providers,
-                    allowed_route_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    allowed_route_ids, restrict_models, allowed_model_ids, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -587,6 +595,8 @@ class Database:
                     dump_id_list(allowed_premodel_ids),
                     int(bool(restrict_providers)),
                     dump_id_list(allowed_route_ids),
+                    int(bool(restrict_models)),
+                    dump_model_list(allowed_model_ids),
                     to_iso(utcnow()),
                 ),
             )
@@ -596,12 +606,14 @@ class Database:
         updates = {key: value for key, value in fields.items() if key in self._API_KEY_FIELDS}
         if not updates:
             return
-        for flag in ("allow_premodels", "restrict_premodels", "restrict_providers"):
+        for flag in ("allow_premodels", "restrict_premodels", "restrict_providers", "restrict_models"):
             if flag in updates:
                 updates[flag] = int(bool(updates[flag]))
         for ids in ("allowed_premodel_ids", "allowed_route_ids"):
             if ids in updates:
                 updates[ids] = dump_id_list(updates[ids])
+        if "allowed_model_ids" in updates:
+            updates["allowed_model_ids"] = dump_model_list(updates["allowed_model_ids"])
         if "cors_allow_origin" in updates:
             updates["cors_allow_origin"] = str(updates["cors_allow_origin"]).strip()
         assignments = ", ".join(f"{key} = ?" for key in updates)
@@ -1089,3 +1101,43 @@ def parse_id_list(raw: Any) -> set[int]:
         except (TypeError, ValueError):
             continue
     return ids
+
+
+def model_key(route_id: int, model_id: str) -> str:
+    """Stable identity for a catalogue entry: ``"<route_id>:<model_id>"``.
+
+    A model id alone is not unique across providers, so the route is part of the
+    key. ``model_id`` may itself contain colons, so only the first one splits.
+    """
+    return f"{int(route_id)}:{model_id}"
+
+
+def dump_model_list(keys: Any) -> str | None:
+    """Serialize ``"<route_id>:<model_id>"`` keys for a ``TEXT`` json column."""
+    if not keys:
+        return None
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in keys:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+    return json.dumps(cleaned) if cleaned else None
+
+
+def parse_model_list(raw: Any) -> set[str]:
+    """Read model keys back; unknown or corrupt values are ignored, never raised."""
+    if not raw:
+        return set()
+    if isinstance(raw, (list, tuple, set)):
+        data: Any = list(raw)
+    else:
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return set()
+    if not isinstance(data, list):
+        return set()
+    return {str(item).strip() for item in data if str(item).strip()}

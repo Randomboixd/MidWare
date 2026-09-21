@@ -75,8 +75,11 @@ this development environment, so Docker changes are verified by reading only.
 
 - `api_keys(id, name, description, token UNIQUE, cors_allow_origin,
   allow_premodels, restrict_premodels, allowed_premodel_ids, restrict_providers,
-  allowed_route_ids, created_at, last_used_at)` — the two `allowed_*` columns hold a
-  JSON array of integer ids (`db.dump_id_list` / `db.parse_id_list`).
+  allowed_route_ids, restrict_models, allowed_model_ids, created_at, last_used_at)` —
+  `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
+  (`db.dump_id_list` / `db.parse_id_list`); `allowed_model_ids` holds a JSON array of
+  `"<route_id>:<model_id>"` strings (`db.dump_model_list` / `db.parse_model_list`),
+  because a model id alone is not unique across providers.
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, created_at)`
 - `requests(id, created_at, request_path, method, model, model_raw, host_prefix,
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
@@ -104,15 +107,17 @@ Do not break these; several have regression tests.
 - **`target_host` `/v1` handling** (`_split_target`): a configured host ending in
   `/v1` is not double-prefixed when building the upstream URL.
 - **API key permissions** (`proxy._key_limits`): each key carries its own CORS
-  allowlist, an `allow_premodels` flag, and optional premodel/provider allowlists
-  (route and premodel ids). The final route is checked **after** `[Host]` / `<p>-`
-  routing, so neither can bypass a provider limit. A denied premodel, provider or
-  browser origin is a hard `403` (`premodel_not_allowed` / `provider_not_allowed` /
-  `origin_not_allowed`), never a silent fallback. `GET /v1/models` is filtered to
-  the key's allowed providers/premodels. Per-key CORS lives in `cors.py` (admin and
-  dashboard responses send none); an `OPTIONS` preflight cannot identify the key, so
-  it is answered permissively and the *actual* request is rejected when its `Origin`
-  is not allowed. A request with no `Origin` (non-browser) is always allowed.
+  allowlist, an `allow_premodels` flag, and optional premodel/provider/model
+  allowlists (route and premodel ids, `"<route_id>:<model_id>"` keys). The final
+  route and upstream model are checked **after** `[Host]` / `<p>-` routing, so none
+  of them can bypass a provider or model limit. A denied premodel, provider, model
+  or browser origin is a hard `403` (`premodel_not_allowed` /
+  `provider_not_allowed` / `model_not_allowed` / `origin_not_allowed`), never a
+  silent fallback. `GET /v1/models` is filtered to the key's allowed
+  providers/premodels/models. Per-key CORS lives in `cors.py` (admin and dashboard
+  responses send none); an `OPTIONS` preflight cannot identify the key, so it is
+  answered permissively and the *actual* request is rejected when its `Origin` is
+  not allowed. A request with no `Origin` (non-browser) is always allowed.
 - **Token accounting** (`_persist`): prefer real upstream `usage`; if it is missing or
   all-zero on a non-error response, fall back to `tokens.estimate_usage` and record
   `token_source` (`upstream` / `tiktoken` / `chars` / `none`). Error responses are
@@ -172,7 +177,7 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `131 passed` — **update this number whenever the test count changes.**
+  `136 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

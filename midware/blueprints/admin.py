@@ -239,8 +239,12 @@ def _form_ids(name: str) -> list[int]:
     return ids
 
 
+def _form_model_ids(name: str) -> list[str]:
+    return [value.strip() for value in request.form.getlist(name) if value.strip()]
+
+
 def _key_form_from_row(row) -> dict:
-    from ..db import parse_id_list
+    from ..db import parse_id_list, parse_model_list
 
     return {
         "name": row["name"],
@@ -251,6 +255,8 @@ def _key_form_from_row(row) -> dict:
         "allowed_premodel_ids": sorted(parse_id_list(row["allowed_premodel_ids"])),
         "restrict_providers": bool(row["restrict_providers"]),
         "allowed_route_ids": sorted(parse_id_list(row["allowed_route_ids"])),
+        "restrict_models": bool(row["restrict_models"]),
+        "allowed_model_ids": sorted(parse_model_list(row["allowed_model_ids"])),
     }
 
 
@@ -264,7 +270,11 @@ def _read_key_form() -> tuple[dict, list[str]]:
         "allowed_premodel_ids": _form_ids("allowed_premodel_ids"),
         "restrict_providers": _form_bool("restrict_providers"),
         "allowed_route_ids": _form_ids("allowed_route_ids"),
+        "restrict_models": _form_bool("restrict_models"),
+        "allowed_model_ids": _form_model_ids("allowed_model_ids"),
     }
+    if not fields["restrict_models"]:
+        fields["allowed_model_ids"] = []
     errors: list[str] = []
     if not fields["name"]:
         errors.append("Name is required.")
@@ -278,6 +288,7 @@ def _render_key_form(db, form, api_key):
         form=form,
         routes=db.list_routes(),
         premodels=db.list_premodels(),
+        models=db.list_models(),
     )
 
 

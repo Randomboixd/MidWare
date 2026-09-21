@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from midware.db import parse_id_list
+from midware.db import parse_id_list, parse_model_list
 from test_proxy import StubResponse, auth_header, install_stub
 
 
@@ -184,6 +184,101 @@ def test_models_catalogue_filters_restricted_providers(multi_host):
 
     assert "base-model" in ids
     assert "[NanoGPT]nano-model" not in ids
+
+
+def test_key_new_form_renders_model_list(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    db.replace_models(db.active_route()["id"], ["m1", "m2"])
+
+    page = client.get("/admin/keys/new")
+
+    assert page.status_code == 200
+    assert b"allowed_model_ids" in page.data
+    assert b"models-enable-all" in page.data
+    assert b"models-disable-all" in page.data
+
+
+def test_key_create_stores_model_restriction(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    route_id = db.active_route()["id"]
+    db.replace_models(route_id, ["m1", "m2"])
+
+    client.post(
+        "/admin/keys/new",
+        data={
+            "name": "picky",
+            "allow_premodels": "1",
+            "restrict_models": "1",
+            "allowed_model_ids": [f"{route_id}:m1"],
+        },
+    )
+
+    key = [row for row in db.list_api_keys() if row["name"] == "picky"][0]
+    assert key["restrict_models"] == 1
+    assert parse_model_list(key["allowed_model_ids"]) == {f"{route_id}:m1"}
+
+
+def test_model_limit_blocks_unlisted_model(configured_client):
+    client, token = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    route_id = db.active_route()["id"]
+    db.replace_models(route_id, ["m1", "m2"])
+    db.update_api_key(
+        _key_id(app), restrict_models=True, allowed_model_ids=[f"{route_id}:m1"]
+    )
+    stub = install_stub(app, StubResponse(content=b"{}"))
+
+    ok = client.post("/v1/chat/completions", json={"model": "m1"}, headers=auth_header(token))
+    assert ok.status_code == 200
+
+    denied = client.post("/v1/chat/completions", json={"model": "m2"}, headers=auth_header(token))
+    assert denied.status_code == 403
+    assert denied.get_json()["error"]["code"] == "model_not_allowed"
+    assert len(stub.sent) == 1
+
+
+def test_model_limit_blocks_premodel_bypass(configured_client):
+    client, token = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    route_id = db.active_route()["id"]
+    _create_premodel(db, "story", route_id)
+    db.update_api_key(
+        _key_id(app),
+        allow_premodels=True,
+        restrict_models=True,
+        allowed_model_ids=[f"{route_id}:other-model"],
+    )
+    stub = install_stub(app, StubResponse(content=b"{}"))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-story", "messages": [{"role": "user", "content": "hi"}]},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "model_not_allowed"
+    assert stub.sent == []
+
+
+def test_models_catalogue_filters_restricted_models(configured_client):
+    client, token = configured_client
+    app = client.application
+    db = app.extensions["midware_db"]
+    route_id = db.active_route()["id"]
+    db.replace_models(route_id, ["m1", "m2"])
+    db.update_api_key(
+        _key_id(app), restrict_models=True, allowed_model_ids=[f"{route_id}:m1"]
+    )
+
+    payload = client.get("/v1/models", headers=auth_header(token)).get_json()
+    ids = [entry["id"] for entry in payload["data"]]
+
+    assert ids == ["m1"]
 
 
 def test_models_catalogue_hides_premodels_when_disabled(configured_client):
