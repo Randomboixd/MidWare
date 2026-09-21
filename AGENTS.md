@@ -49,7 +49,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
 | `midware/blueprints/proxy.py` | The proxy surface: `/v1/*`, `/proxy/*`; auth, routing, forwarding, teeing, persisting. |
-| `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys`, `/admin/settings`. |
+| `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
 | `midware/templates/`, `midware/static/` | Jinja2 templates (PicoCSS v2 from CDN) and `style.css` / `request_detail.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
@@ -73,7 +73,10 @@ this development environment, so Docker changes are verified by reading only.
 
 ## Data model (`db.py`)
 
-- `api_keys(id, name, token UNIQUE, created_at, last_used_at)`
+- `api_keys(id, name, description, token UNIQUE, cors_allow_origin,
+  allow_premodels, restrict_premodels, allowed_premodel_ids, restrict_providers,
+  allowed_route_ids, created_at, last_used_at)` — the two `allowed_*` columns hold a
+  JSON array of integer ids (`db.dump_id_list` / `db.parse_id_list`).
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, created_at)`
 - `requests(id, created_at, request_path, method, model, model_raw, host_prefix,
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
@@ -100,6 +103,16 @@ Do not break these; several have regression tests.
   the default.
 - **`target_host` `/v1` handling** (`_split_target`): a configured host ending in
   `/v1` is not double-prefixed when building the upstream URL.
+- **API key permissions** (`proxy._key_limits`): each key carries its own CORS
+  allowlist, an `allow_premodels` flag, and optional premodel/provider allowlists
+  (route and premodel ids). The final route is checked **after** `[Host]` / `<p>-`
+  routing, so neither can bypass a provider limit. A denied premodel, provider or
+  browser origin is a hard `403` (`premodel_not_allowed` / `provider_not_allowed` /
+  `origin_not_allowed`), never a silent fallback. `GET /v1/models` is filtered to
+  the key's allowed providers/premodels. Per-key CORS lives in `cors.py` (admin and
+  dashboard responses send none); an `OPTIONS` preflight cannot identify the key, so
+  it is answered permissively and the *actual* request is rejected when its `Origin`
+  is not allowed. A request with no `Origin` (non-browser) is always allowed.
 - **Token accounting** (`_persist`): prefer real upstream `usage`; if it is missing or
   all-zero on a non-error response, fall back to `tokens.estimate_usage` and record
   `token_source` (`upstream` / `tiktoken` / `chars` / `none`). Error responses are
@@ -159,7 +172,7 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `119 passed` — **update this number whenever the test count changes.**
+  `131 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

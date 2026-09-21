@@ -215,17 +215,104 @@ def routes():
 def keys():
     db = get_db()
     if request.method == "POST":
-        action = request.form.get("action", "create")
-        if action == "create":
-            name = (request.form.get("name") or "").strip() or "key"
-            token = db.create_api_key(name)
-            flash(f"Created key '{name}': {token}", "success")
-        elif action == "delete":
+        if request.form.get("action") == "delete":
             db.delete_api_key(request.form.get("key_id", type=int))
             flash("Key deleted.", "success")
         return redirect(url_for("admin.keys"))
 
     return render_template("keys.html", api_keys=db.list_api_keys())
+
+
+def _form_str(name: str, default: str = "") -> str:
+    if name not in request.form:
+        return default
+    return (request.form.get(name) or "").strip()
+
+
+def _form_ids(name: str) -> list[int]:
+    ids: list[int] = []
+    for raw in request.form.getlist(name):
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _key_form_from_row(row) -> dict:
+    from ..db import parse_id_list
+
+    return {
+        "name": row["name"],
+        "description": row["description"] or "",
+        "cors_allow_origin": row["cors_allow_origin"],
+        "allow_premodels": bool(row["allow_premodels"]),
+        "restrict_premodels": bool(row["restrict_premodels"]),
+        "allowed_premodel_ids": sorted(parse_id_list(row["allowed_premodel_ids"])),
+        "restrict_providers": bool(row["restrict_providers"]),
+        "allowed_route_ids": sorted(parse_id_list(row["allowed_route_ids"])),
+    }
+
+
+def _read_key_form() -> tuple[dict, list[str]]:
+    fields = {
+        "name": (request.form.get("name") or "").strip(),
+        "description": (request.form.get("description") or "").strip()[:DESCRIPTION_MAX],
+        "cors_allow_origin": _form_str("cors_allow_origin", "*"),
+        "allow_premodels": _form_bool("allow_premodels"),
+        "restrict_premodels": _form_bool("restrict_premodels"),
+        "allowed_premodel_ids": _form_ids("allowed_premodel_ids"),
+        "restrict_providers": _form_bool("restrict_providers"),
+        "allowed_route_ids": _form_ids("allowed_route_ids"),
+    }
+    errors: list[str] = []
+    if not fields["name"]:
+        errors.append("Name is required.")
+    return fields, errors
+
+
+def _render_key_form(db, form, api_key):
+    return render_template(
+        "key_form.html",
+        key=api_key,
+        form=form,
+        routes=db.list_routes(),
+        premodels=db.list_premodels(),
+    )
+
+
+def _save_key(db, existing):
+    fields, errors = _read_key_form()
+    if errors:
+        for message in errors:
+            flash(message, "error")
+        return _render_key_form(db, fields, existing)
+    if existing is None:
+        token = db.create_api_key(**fields)
+        flash(f"Created key '{fields['name']}': {token}", "success")
+    else:
+        db.update_api_key(existing["id"], **fields)
+        flash(f"Key '{fields['name']}' updated.", "success")
+    return redirect(url_for("admin.keys"))
+
+
+@bp.route("/keys/new", methods=["GET", "POST"])
+def key_new():
+    db = get_db()
+    if request.method == "POST":
+        return _save_key(db, None)
+    return _render_key_form(db, {}, None)
+
+
+@bp.route("/keys/<int:key_id>/edit", methods=["GET", "POST"])
+def key_edit(key_id: int):
+    db = get_db()
+    existing = db.get_api_key(key_id)
+    if existing is None:
+        abort(404)
+    if request.method == "POST":
+        return _save_key(db, existing)
+    return _render_key_form(db, _key_form_from_row(existing), existing)
 
 
 @bp.route("/settings", methods=["GET", "POST"])
@@ -240,15 +327,12 @@ def settings():
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
-        if "cors_allow_origin" in request.form:
-            db.set_setting("cors_allow_origin", (request.form.get("cors_allow_origin") or "").strip())
         flash(f"Settings saved. Request log limit set to {log_limit}.", "success")
         return redirect(url_for("admin.settings"))
 
     return render_template(
         "settings.html",
         log_limit=db.request_log_limit(),
-        cors_allow_origin=db.cors_allow_origin(current_app.config["CORS_ALLOW_ORIGIN"]),
         configured=db.is_configured(),
         configured_at=db.get_meta("configured_at"),
         route_count=len(db.list_routes()),

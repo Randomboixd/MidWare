@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Premodels · MidWare{% endblock %}
+{% block title %}Premodels - MidWare{% endblock %}
 
 {% block content %}
 <hgroup>
@@ -45,12 +45,13 @@
 <p>Send the slug as the whole <code>model</code> value. The trailing text after the
 slug overrides the premodel's model, and a <code>[Host]</code> prefix still wins for routing:</p>
 <pre class="mono">{
-  "model": "&lt;p&gt;-autistic-glm",
+  "model": "&lt;p&gt;-programming-model",
   "messages": [...]
 }</pre>
 <ul>
   <li><code>&lt;p&gt;-slug</code> → the premodel's connection and model.</li>
-  <li><code>&lt;p&gt;-slug[Host]model</code> → that host wins, the premodel's prompt still applies.</li>
   <li>Unknown slug → <code>404 unknown_premodel</code>.</li>
 </ul>
+<h2>Use for premodels</h2>
+<p>Premodels are essentially custom models built on top of api models! You can use it for aliasing models, or perhaps making a model with a custom system prompt (Sillytavern Presets accepted too!)</p>
 {% endblock %}

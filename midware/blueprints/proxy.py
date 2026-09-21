@@ -12,9 +12,11 @@ import time
 from typing import Iterator
 
 import httpx
-from flask import Blueprint, Response, current_app, request, stream_with_context
+from flask import Blueprint, Response, current_app, g, request, stream_with_context
 
 from ..auth import authenticate, get_db
+from ..cors import check_origin
+from ..db import parse_id_list
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage
 from ..usage import (
@@ -61,6 +63,42 @@ def _split_target(route) -> tuple[str, str]:
     if target.endswith("/v1"):
         return target[: -len("/v1")], "/v1"
     return target, ""
+
+
+def _key_limits(api_key) -> dict:
+    """Parse an API key's provider/premodel restrictions into lookup-friendly sets."""
+    return {
+        "allow_premodels": bool(api_key["allow_premodels"]),
+        "restrict_premodels": bool(api_key["restrict_premodels"]),
+        "allowed_premodels": parse_id_list(api_key["allowed_premodel_ids"]),
+        "restrict_providers": bool(api_key["restrict_providers"]),
+        "allowed_routes": parse_id_list(api_key["allowed_route_ids"]),
+    }
+
+
+def _route_allowed(limits: dict, route_id: int | None) -> bool:
+    if not limits["restrict_providers"]:
+        return True
+    return route_id in limits["allowed_routes"]
+
+
+def _premodel_allowed(limits: dict, premodel) -> bool:
+    if not limits["allow_premodels"]:
+        return False
+    if not limits["restrict_premodels"]:
+        return True
+    return premodel["id"] in limits["allowed_premodels"]
+
+
+def _permission_error(message: str, code: str) -> Response:
+    return _json_error(message, 403, code, "midware_permission_error")
+
+
+def _authorize(ctx: dict) -> tuple[dict, int] | None:
+    """Apply the key's CORS policy and stash it for the after-request hook."""
+    configured = ctx["api_key"]["cors_allow_origin"]
+    g.midware_cors_origin = configured
+    return check_origin(configured)
 
 
 def _host_label(name: str) -> str:
@@ -180,13 +218,15 @@ def _server_header() -> tuple[str, str]:
     return ("Server", "MidWare")
 
 
-def _models_catalogue() -> Response:
+def _models_catalogue(ctx: dict) -> Response:
     """Serve MidWare's own model list instead of proxying the upstream's.
 
     The default route's models are bare; every other route's are prefixed with
-    ``[Name]`` so the slug can be copied straight into a request.
+    ``[Name]`` so the slug can be copied straight into a request. The catalogue
+    is filtered to what the calling key is actually allowed to reach.
     """
     db = get_db()
+    limits = _key_limits(ctx["api_key"])
     entries = db.list_models()
     data = [
         {
@@ -202,10 +242,15 @@ def _models_catalogue() -> Response:
             },
         }
         for entry in entries
+        if _route_allowed(limits, entry["route_id"])
     ]
 
     routes = {route["id"]: route for route in db.list_routes()}
     for premodel in db.list_premodels():
+        if not _premodel_allowed(limits, premodel):
+            continue
+        if not _route_allowed(limits, premodel["route_id"]):
+            continue
         route = routes.get(premodel["route_id"])
         data.append(
             {
@@ -357,6 +402,7 @@ def _persist(
 def _forward(ctx: dict, path: str) -> Response:
     route = ctx["route"]
     db = get_db()
+    limits = _key_limits(ctx["api_key"])
 
     raw_body = request.get_data() or b""
     try:
@@ -379,6 +425,11 @@ def _forward(ctx: dict, path: str) -> Response:
                 404,
                 "unknown_premodel",
                 "midware_routing_error",
+            )
+        if not _premodel_allowed(limits, premodel):
+            return _permission_error(
+                f"Premodel '<p>-{premodel_slug}' is not allowed for this API key.",
+                "premodel_not_allowed",
             )
         target = db.get_route(premodel["route_id"]) if premodel["route_id"] else None
         if target is not None:
@@ -410,6 +461,12 @@ def _forward(ctx: dict, path: str) -> Response:
         ).lstrip()
         model = parsed_body["model"] or None
         rewritten = True
+
+    if not _route_allowed(limits, route["id"]):
+        return _permission_error(
+            f"Provider '{route['name']}' is not allowed for this API key.",
+            "provider_not_allowed",
+        )
 
     if rewritten and isinstance(parsed_body, dict):
         raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
@@ -530,10 +587,15 @@ def _forward(ctx: dict, path: str) -> Response:
 def proxy_v1(subpath: str = ""):
     ctx, error = authenticate()
     if error:
+        g.midware_cors_origin = "*"
         payload, status = error
         return Response(json.dumps(payload), status=status, mimetype="application/json")
+    origin_error = _authorize(ctx)
+    if origin_error:
+        payload, status = origin_error
+        return Response(json.dumps(payload), status=status, mimetype="application/json")
     if request.method == "GET" and (subpath or "").strip("/") == "models":
-        return _models_catalogue()
+        return _models_catalogue(ctx)
     if request.method != "POST":
         return _json_error("Only POST requests are proxied.", 405, "method_not_allowed")
     return _forward(ctx, subpath)
@@ -544,7 +606,12 @@ def proxy_explicit(subpath: str):
     """Explicit alias for hosts that already include ``/v1`` in their base URL."""
     ctx, error = authenticate()
     if error:
+        g.midware_cors_origin = "*"
         payload, status = error
+        return Response(json.dumps(payload), status=status, mimetype="application/json")
+    origin_error = _authorize(ctx)
+    if origin_error:
+        payload, status = origin_error
         return Response(json.dumps(payload), status=status, mimetype="application/json")
     if request.method != "POST":
         return _json_error("Only POST requests are proxied.", 405, "method_not_allowed")

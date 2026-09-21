@@ -1,20 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Keys · MidWare{% endblock %}
+{% block title %}Keys - MidWare{% endblock %}
 
 {% block content %}
 <hgroup>
   <h1>API keys</h1>
-  <p>Client credentials. Send one as <code>Authorization: Bearer &lt;key&gt;</code> or <code>x-api-key: &lt;key&gt;</code>.</p>
+  <p>Client credentials. Send one as <code>Authorization: Bearer &lt;key&gt;</code> or <code>x-api-key: &lt;key&gt;</code>.
+     Each key can carry its own CORS and provider/premodel limits.</p>
 </hgroup>
 
-<h2>Create a key</h2>
-<form method="post">
-  <input type="hidden" name="action" value="create">
-  <fieldset role="group">
-    <input type="text" name="name" placeholder="key name" required>
-    <button type="submit">Create</button>
-  </fieldset>
-</form>
+<p><a role="button" href="{{ url_for('admin.key_new') }}">Create API key</a></p>
 
 <h2>Existing keys</h2>
 {% if api_keys %}
@@ -23,12 +17,17 @@
   <tbody>
     {% for k in api_keys %}
     <tr>
-      <td>{{ k['name'] }}</td>
+      <td>
+        {{ k['name'] }}
+        {% if k['description'] %}<br><small>{{ k['description'] }}</small>{% endif %}
+      </td>
       <td class="mono token">{{ k['token'] }}</td>
       <td>{{ k['request_count'] }}</td>
       <td>{{ k['token_count'] | tokens }}</td>
       <td>{{ k['last_used_at'] | relative }}</td>
-      <td>
+      <td style="white-space:nowrap">
+        <a role="button" class="outline" style="padding:0.25rem 0.6rem;font-size:0.8rem"
+           href="{{ url_for('admin.key_edit', key_id=k['id']) }}">Edit</a>
         <form method="post" class="inline-form" onsubmit="return confirm('Delete this key?')">
           <input type="hidden" name="action" value="delete">
           <input type="hidden" name="key_id" value="{{ k['id'] }}">

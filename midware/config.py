@@ -51,7 +51,3 @@ SQLITE_TIMEOUT = float(os.environ.get("MIDWARE_SQLITE_TIMEOUT", "5"))
 
 # Hard cap on how much of an upstream response we buffer for parsing, in bytes.
 MAX_CAPTURE_BYTES = _env_int("MIDWARE_MAX_CAPTURE_BYTES", 8 * 1024 * 1024)
-
-# CORS allow-origin default. The live value lives in the settings table and is
-# editable from the control panel. "*" allows every origin.
-CORS_ALLOW_ORIGIN = os.environ.get("MIDWARE_CORS_ALLOW_ORIGIN", "*")

@@ -12,11 +12,9 @@
   <header class="container">
     <nav>
       <ul>
-        <li><a href="{{ url_for('dashboard.index') }}"><strong>MidWare Admin Panel</strong></a></li>
+        <li><a href="{{ url_for('dashboard.index') }}"><strong>MidWare</strong></a></li>
       </ul>
       <ul>
-        <li><a href="{{ url_for('dashboard.index') }}">Dashboard</a></li>
-        <li><a href="{{ url_for('dashboard.activity') }}">Activity</a></li>
         <li><a href="{{ url_for('dashboard.requests_page') }}">Requests</a></li>
         <li><a href="{{ url_for('admin.keys') }}">Keys</a></li>
         <li><a href="{{ url_for('admin.routes') }}">Routes</a></li>
@@ -39,7 +37,7 @@
   </main>
 
   <footer class="container">
-    <small>MW v{{ app_version }}</small>
+    <small>ver {{ app_version }}</small>
   </footer>
   {% block scripts %}{% endblock %}
 </body>

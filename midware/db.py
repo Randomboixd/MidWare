@@ -20,7 +20,14 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_keys (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
     token       TEXT    NOT NULL UNIQUE,
+    cors_allow_origin   TEXT    NOT NULL DEFAULT '*',
+    allow_premodels     INTEGER NOT NULL DEFAULT 1,
+    restrict_premodels  INTEGER NOT NULL DEFAULT 0,
+    allowed_premodel_ids TEXT,
+    restrict_providers  INTEGER NOT NULL DEFAULT 0,
+    allowed_route_ids   TEXT,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -217,6 +224,22 @@ class Database:
                 },
             )
 
+        existing_keys = {row["name"] for row in self._rows("PRAGMA table_info(api_keys)")}
+        if existing_keys:
+            self._add_columns(
+                "api_keys",
+                existing_keys,
+                {
+                    "description": "TEXT NOT NULL DEFAULT ''",
+                    "cors_allow_origin": "TEXT NOT NULL DEFAULT '*'",
+                    "allow_premodels": "INTEGER NOT NULL DEFAULT 1",
+                    "restrict_premodels": "INTEGER NOT NULL DEFAULT 0",
+                    "allowed_premodel_ids": "TEXT",
+                    "restrict_providers": "INTEGER NOT NULL DEFAULT 0",
+                    "allowed_route_ids": "TEXT",
+                },
+            )
+
     def _add_columns(self, table: str, existing: set[str], added: dict[str, str]) -> None:
         with self.write() as conn:
             for column, definition in added.items():
@@ -280,12 +303,6 @@ class Database:
 
     def request_log_limit(self, default: int = 10) -> int:
         return max(0, self.get_int_setting("request_log_limit", default))
-
-    def cors_allow_origin(self, default: str = "*") -> str:
-        value = self.get_setting("cors_allow_origin")
-        if value is None:
-            return default
-        return value.strip()
 
     # -- setup / routes -----------------------------------------------------
 
@@ -523,18 +540,73 @@ class Database:
 
     # -- api keys -----------------------------------------------------------
 
+    _API_KEY_FIELDS = (
+        "name",
+        "description",
+        "cors_allow_origin",
+        "allow_premodels",
+        "restrict_premodels",
+        "allowed_premodel_ids",
+        "restrict_providers",
+        "allowed_route_ids",
+    )
+
     @staticmethod
     def generate_token(prefix: str = "mw-") -> str:
         return prefix + secrets.token_urlsafe(24)
 
-    def create_api_key(self, name: str) -> str:
+    def create_api_key(
+        self,
+        name: str,
+        *,
+        description: str = "",
+        cors_allow_origin: str = "*",
+        allow_premodels: bool = True,
+        restrict_premodels: bool = False,
+        allowed_premodel_ids: list[int] | None = None,
+        restrict_providers: bool = False,
+        allowed_route_ids: list[int] | None = None,
+    ) -> str:
         token = self.generate_token()
         with self.write() as conn:
             conn.execute(
-                "INSERT INTO api_keys (name, token, created_at) VALUES (?, ?, ?)",
-                (name, token, to_iso(utcnow())),
+                """
+                INSERT INTO api_keys (
+                    name, description, token, cors_allow_origin, allow_premodels,
+                    restrict_premodels, allowed_premodel_ids, restrict_providers,
+                    allowed_route_ids, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name,
+                    description,
+                    token,
+                    cors_allow_origin,
+                    int(bool(allow_premodels)),
+                    int(bool(restrict_premodels)),
+                    dump_id_list(allowed_premodel_ids),
+                    int(bool(restrict_providers)),
+                    dump_id_list(allowed_route_ids),
+                    to_iso(utcnow()),
+                ),
             )
         return token
+
+    def update_api_key(self, key_id: int, **fields: Any) -> None:
+        updates = {key: value for key, value in fields.items() if key in self._API_KEY_FIELDS}
+        if not updates:
+            return
+        for flag in ("allow_premodels", "restrict_premodels", "restrict_providers"):
+            if flag in updates:
+                updates[flag] = int(bool(updates[flag]))
+        for ids in ("allowed_premodel_ids", "allowed_route_ids"):
+            if ids in updates:
+                updates[ids] = dump_id_list(updates[ids])
+        if "cors_allow_origin" in updates:
+            updates["cors_allow_origin"] = str(updates["cors_allow_origin"]).strip()
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with self.write() as conn:
+            conn.execute(f"UPDATE api_keys SET {assignments} WHERE id = ?", (*updates.values(), key_id))
 
     def get_api_key_by_token(self, token: str) -> sqlite3.Row | None:
         if not token:
@@ -980,3 +1052,40 @@ class Database:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def dump_id_list(ids: Any) -> str | None:
+    """Serialize a list of integer ids for a ``TEXT`` json column."""
+    if not ids:
+        return None
+    cleaned: set[int] = set()
+    for item in ids:
+        try:
+            cleaned.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    if not cleaned:
+        return None
+    return json.dumps(sorted(cleaned))
+
+
+def parse_id_list(raw: Any) -> set[int]:
+    """Read an id list back; unknown or corrupt values are ignored, never raised."""
+    if not raw:
+        return set()
+    if isinstance(raw, (list, tuple, set)):
+        data: Any = list(raw)
+    else:
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return set()
+    if not isinstance(data, list):
+        return set()
+    ids: set[int] = set()
+    for item in data:
+        try:
+            ids.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    return ids

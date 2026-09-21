@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings · MidWare{% endblock %}
+{% block title %}Settings - MidWare{% endblock %}
 
 {% block content %}
 <hgroup>
@@ -13,16 +13,6 @@
     Saved requests per API key
     <input type="number" name="request_log_limit" min="0" max="100000" value="{{ log_limit }}">
     <small>Each key keeps its newest N request/response bodies. MidWare trims older rows immediately. Set 0 to keep none.</small>
-  </label>
-  <button type="submit">Save</button>
-</form>
-
-<h2>Cross-origin access</h2>
-<form method="post">
-  <label>
-    Allowed CORS origin
-    <input type="text" name="cors_allow_origin" value="{{ cors_allow_origin }}" placeholder="*" autocomplete="off">
-    <small><code>*</code> allows any origin. Otherwise a comma-separated allowlist (e.g. <code>https://app.example.com</code>). Leave empty to disable CORS.</small>
   </label>
   <button type="submit">Save</button>
 </form>
@@ -44,6 +34,7 @@
     <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
     <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
     <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
+    <tr><th>working??????</th><td>yesssss!!!!</td></tr>
   </tbody>
 </table>
 {% endblock %}

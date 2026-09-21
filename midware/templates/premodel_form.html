@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ 'Edit' if premodel else 'New' }} premodel · MidWare{% endblock %}
+{% block title %}{{ 'Edit' if premodel else 'New' }} premodel - MidWare{% endblock %}
 
 {% block content %}
 <hgroup>
@@ -8,6 +8,7 @@
      <code>&lt;p&gt;-&lt;slug&gt;</code>.</p>
 </hgroup>
 
+<article>
 <form method="post" id="premodel-form">
   <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
     <label>
@@ -112,6 +113,7 @@
     <p id="preset-status"><small>No preset loaded.</small></p>
     <div id="preset-prompts" class="preset-prompts"></div>
   </section>
+</article>
 
   <button type="submit">Save premodel</button>
   <a role="button" class="secondary outline" href="{{ url_for('admin.premodels') }}">Cancel</a>

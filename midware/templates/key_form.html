@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if key else 'New' }} API key - MidWare{% endblock %}
+
+{% set advanced_open = (not form.get('allow_premodels', True))
+   or form.get('restrict_premodels', False)
+   or form.get('restrict_providers', False)
+   or form.get('cors_allow_origin', '*') != '*' %}
+
+{% block content %}
+<hgroup>
+  <h1>{{ 'Edit API key' if key else 'New API key' }}</h1>
+  <p>A client credential, optionally scoped to specific providers and premodels.</p>
+</hgroup>
+
+{% if key %}<p>Token: <span class="mono token">{{ key['token'] }}</span></p>{% endif %}
+
+<article>
+<form method="post" id="key-form">
+  <label>
+    Name
+    <input type="text" name="name" value="{{ form.get('name', '') }}" required>
+    <small>A short name for the application using this key.</small>
+  </label>
+
+  <label>
+    Description
+    <textarea name="description" rows="2" maxlength="250"
+              placeholder="Short description">{{ form.get('description', '') }}</textarea>
+    <small>Up to 250 characters.</small>
+  </label>
+
+  <button type="button" id="advanced-toggle" class="secondary outline"
+          {% if advanced_open %}hidden{% endif %}>Enable Advanced Settings</button>
+
+  <section id="advanced-panel" {% if not advanced_open %}hidden{% endif %}>
+    <h3>Cross-origin access</h3>
+    <label>
+      Allowed CORS origin
+      <input type="text" name="cors_allow_origin" value="{{ form.get('cors_allow_origin', '*') }}"
+             placeholder="*" autocomplete="off">
+      <small><code>*</code> allows any origin. Otherwise a comma-separated allowlist
+        (e.g. <code>https://app.example.com</code>). Leave empty to block all browser origins.</small>
+    </label>
+
+    <h3>Premodels</h3>
+    <label>
+      <input type="checkbox" name="allow_premodels" id="allow-premodels" value="1"
+             {% if form.get('allow_premodels', True) %}checked{% endif %}>
+      Let this key call Premodels
+    </label>
+    <label>
+      <input type="checkbox" name="restrict_premodels" id="restrict-premodels" value="1"
+             {% if form.get('restrict_premodels') %}checked{% endif %}>
+      Limit premodels this key can call
+    </label>
+    <div id="premodel-panel" hidden>
+      {% set allowed_pms = form.get('allowed_premodel_ids') %}
+      {% if premodels %}
+        {% for p in premodels %}
+        <label>
+          <input type="checkbox" name="allowed_premodel_ids" value="{{ p['id'] }}"
+                 {% if allowed_pms is none or p['id'] in allowed_pms %}checked{% endif %}>
+          <code>&lt;p&gt;-{{ p['slug'] }}</code> — {{ p['name'] }}
+        </label>
+        {% endfor %}
+      {% else %}
+        <p><small>No premodels defined yet.</small></p>
+      {% endif %}
+    </div>
+
+    <h3>Providers</h3>
+    <label>
+      <input type="checkbox" name="restrict_providers" id="restrict-providers" value="1"
+             {% if form.get('restrict_providers') %}checked{% endif %}>
+      Limit providers this key can call
+    </label>
+    <div id="provider-panel" hidden>
+      {% set allowed_routes = form.get('allowed_route_ids') %}
+      {% if routes %}
+        {% for r in routes %}
+        <label>
+          <input type="checkbox" name="allowed_route_ids" value="{{ r['id'] }}"
+                 {% if allowed_routes is none or r['id'] in allowed_routes %}checked{% endif %}>
+          {{ r['name'] }}{% if r['is_active'] %} <span class="pill ok">default</span>{% endif %}
+        </label>
+        {% endfor %}
+      {% else %}
+        <p><small>No providers configured yet.</small></p>
+      {% endif %}
+    </div>
+  </section>
+</article>
+  <button type="submit">Save key</button>
+  <a role="button" class="secondary outline" href="{{ url_for('admin.keys') }}">Cancel</a>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='keys.js') }}"></script>
+{% endblock %}

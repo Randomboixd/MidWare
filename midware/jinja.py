@@ -8,6 +8,7 @@ from flask import Flask
 
 from .db import parse_iso
 from .usage import truncate
+from . import __version__
 
 
 def register_template_helpers(app: Flask) -> None:
@@ -70,4 +71,4 @@ def register_template_helpers(app: Flask) -> None:
     def fmt_preview(value) -> str:
         return truncate(value, 220) or ""
 
-    app.jinja_env.globals["app_version"] = "0.1.0"
+    app.jinja_env.globals["app_version"] = __version__

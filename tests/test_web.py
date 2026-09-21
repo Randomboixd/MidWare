@@ -109,10 +109,11 @@ def test_request_messages_json_endpoint(configured_client):
 def test_create_and_delete_key(configured_client):
     client, _ = configured_client
     app = client.application
-    client.post("/admin/keys", data={"action": "create", "name": "second"})
+    client.post("/admin/keys/new", data={"name": "second", "description": "laptop"})
     db = app.extensions["midware_db"]
     assert db.count_api_keys() == 2
     key = [row for row in db.list_api_keys() if row["name"] == "second"][0]
+    assert key["description"] == "laptop"
     client.post("/admin/keys", data={"action": "delete", "key_id": key["id"]})
     assert db.count_api_keys() == 1
 
