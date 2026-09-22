@@ -42,6 +42,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/config.py` | Every setting, overridable by a same-named `MIDWARE_*` env var. |
 | `midware/db.py` | All persistence. Raw `sqlite3`, hand-written SQL, per-thread connections, schema + `_migrate()`. |
 | `midware/auth.py` | Client token extraction (`Authorization: Bearer` / `x-api-key`) + `authenticate()`; `get_db()` helper. |
+| `midware/adminauth.py` | HTTP Basic login for the human-facing pages: salted hashing, the admin guard/`admin_required`, `messages_locked()`, env-var override. |
 | `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); `truncate`, `strip_ansi`, `model_from_request_body`. |
 | `midware/conversation.py` | Normalize request/response bodies (JSON or streamed) into display blocks for the viewer. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
@@ -87,7 +88,9 @@ this development environment, so Docker changes are verified by reading only.
   api_key_id)`
 - `settings(key, value)` — live-editable values (e.g. `request_log_limit`).
 - `meta(key, value)` — bookkeeping (`configured_at`, `models_refreshed_at`,
-  `models_refresh_error`).
+  `models_refresh_error`) and the admin login (`admin_username`,
+  `admin_password_hash` — a salted scrypt hash — and the one-time `admin_setup_code`,
+  see `adminauth.py`).
 - `models(id, route_id FK CASCADE, model_id, fetched_at, UNIQUE(route_id, model_id))`
 
 `init_schema()` calls `_migrate()` **before** `executescript(SCHEMA)` because
@@ -141,7 +144,9 @@ Do not break these; several have regression tests.
 - **Connection test** (`probe_route` + `admin._connection_test`): on by default when
   adding a route or during setup. A failed probe means the route is **not saved**.
   A host that answers with non-JSON is treated as reachable (accepted + warning).
-  The edit drawer tests only when its checkbox is ticked.
+  The edit drawer tests only when its checkbox is ticked. Unchecking the
+  create/setup box skips the probe **and** the `/v1/models` refresh; those forms
+  carry a hidden `test_connection=0` because an unchecked checkbox submits nothing.
 - **Premodels** (`premodels.py`): a premodel bundles a route, a model and a prompt
   preset, addressed as `<p>-slug` in `model`. The prefix is parsed before
   `[Host]`, so `<p>-slug[Host]model` lets the host win while the preset still
@@ -161,14 +166,34 @@ Do not break these; several have regression tests.
 - **Conversation viewer**: table for request metadata excluding messages; messages are
   numbered, collapsible, and only the last user + last assistant start open. The
   client-side **Fetch** button re-requests `/requests/<id>/messages.json`.
-- **Admin UI is unauthenticated** (local control panel); the proxy surface is the
-  authenticated one. Do not add login flows without being asked.
+- **Admin login** (`adminauth.py`): HTTP Basic on every `/admin/*` route and on the
+  request-message surfaces (`/requests/<id>?messages=1`, `messages.json`). The
+  dashboard (`/`, `/activity`, `/requests`, and a detail page's metadata) stays
+  public; only message bodies and raw payloads are hidden (`messages_locked()`).
+  With no credentials configured, all admin pages redirect to `/admin/setup`, which
+  is the only open page and where the login is chosen (fresh install *and*
+  migration). Claiming the instance requires the 32-char `admin_setup_code`: a
+  startup banner prints it to the server console, and only someone who can read the
+  logs (i.e. controls the host) will pass. Setup can only ever *create* the login:
+  once credentials exist it never renders or accepts the account form, and with a
+  route present it redirects to `/admin/routes`. Changing the login is exclusively
+  `/admin/settings`, which demands the current password (this closes a cached-Basic
+  / CSRF account-takeover hole). Passwords are salted scrypt hashes in `meta`.
+  `MIDWARE_ADMIN_USERNAME` /
+  `MIDWARE_ADMIN_PASSWORD` override the database (headless provisioning + lockout
+  recovery) and skip the claim step. The setup and settings login forms also show a
+  client-side warning when the page is served over plain HTTP. The proxy surface is
+  unaffected and never emits a `WWW-Authenticate` header. The detail route returns a
+  `401` + `WWW-Authenticate` on `?messages=1` so the browser prompts, falling back to
+  the locked page with a note when the prompt is cancelled.
 
 ## Testing
 
 - Fixtures in `tests/conftest.py`: `app`, `client`, `db`, `configured`,
-  `configured_client`, `multi_host`. `app` installs a `_ProbeClient` so admin
-  connection tests never hit the network.
+  `configured_client`, `multi_host`, plus `secured_app`/`secured_client` for the
+  login. `app` installs a `_ProbeClient` so admin connection tests never hit the
+  network, and sets `ADMIN_AUTH_ENABLED=False` so unrelated tests skip the login;
+  `secured_app` is the same app with auth on (`tests/test_admin_auth.py`).
 - Proxy tests use the hand-rolled `StubClient`/`StubResponse` and `install_stub()`
   from `tests/test_proxy.py`; import them from there in other test modules.
 - Streaming tests must consume the response body, e.g.
@@ -177,7 +202,7 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `136 passed` — **update this number whenever the test count changes.**
+  `150 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

@@ -10,7 +10,7 @@ from flask import Flask
 from . import config
 from .db import Database
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["create_app", "__version__"]
 
@@ -28,6 +28,10 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     db = Database(database_path, timeout=app.config["SQLITE_TIMEOUT"])
     db.init_schema()
     app.extensions["midware_db"] = db
+
+    from .adminauth import ensure_setup_code
+
+    ensure_setup_code(app)
 
     app.extensions["midware_http"] = httpx.Client(
         timeout=httpx.Timeout(app.config["UPSTREAM_TIMEOUT"], connect=30.0),

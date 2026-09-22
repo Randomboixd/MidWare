@@ -15,6 +15,7 @@ from flask import (
     url_for,
 )
 
+from .. import adminauth
 from ..auth import get_db
 from ..models import probe_route, refresh_all
 from ..premodels import (
@@ -28,6 +29,11 @@ from ..premodels import (
 )
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+
+@bp.before_request
+def _require_login():
+    return adminauth.guard_admin()
 
 
 def _form_int(name: str, default: int, minimum: int = 0, maximum: int = 100_000) -> int:
@@ -79,31 +85,65 @@ def _connection_test(name: str, target_host: str, upstream_key: str) -> bool:
 def setup():
     db = get_db()
     routes = db.list_routes()
+    auth_enabled = adminauth.enabled()
+    credentials_ready = adminauth.credentials_configured()
+
+    # A configured instance has nothing to do here: routes are managed on their
+    # own page and the login is changed from Settings.
+    if credentials_ready and routes:
+        return redirect(url_for("admin.routes"))
+
+    def _render(form):
+        return render_template(
+            "setup.html",
+            routes=routes,
+            defaults=current_app.config,
+            form=form,
+            auth_enabled=auth_enabled,
+            credentials_ready=credentials_ready,
+            admin_username=adminauth.current_username(),
+        )
 
     if request.method == "POST":
-        target_host = (request.form.get("target_host") or "").strip()
-        upstream_key = (request.form.get("upstream_key") or "").strip()
-        name = (request.form.get("name") or "").strip() or "Default"
-        key_name = (request.form.get("key_name") or "").strip() or "Default key"
+        form = request.form
+        username = (form.get("admin_username") or "").strip()
+        password = form.get("admin_password") or ""
+        # Credentials may only be *created* here, never replaced: an existing login
+        # is changed from Settings (which demands the current password). Otherwise
+        # any request carrying a cached Basic session could silently take the
+        # account over.
+        creating_credentials = auth_enabled and not credentials_ready
+
+        # Bootstrap and migration only: no login exists yet, so one must be chosen
+        # here, and the claim code proves the caller can read the server's console.
+        if creating_credentials:
+            if not adminauth.verify_setup_code((form.get("setup_code") or "").strip()):
+                flash("Invalid setup code. Check the MidWare console/logs for the current code.", "error")
+                return _render(form)
+            if not username or not password:
+                flash("Choose an admin username and password.", "error")
+                return _render(form)
+
+        # Already has an upstream: this visit is only about re-adding a route.
+        if routes:
+            if creating_credentials:
+                adminauth.set_credentials(username, password)
+                flash("Admin credentials saved. Sign in to continue.", "success")
+            return redirect(url_for("dashboard.index"))
+
+        target_host = (form.get("target_host") or "").strip()
+        upstream_key = (form.get("upstream_key") or "").strip()
+        name = (form.get("name") or "").strip() or "Default"
+        key_name = (form.get("key_name") or "").strip() or "Default key"
         log_limit = _form_int("request_log_limit", current_app.config["DEFAULT_REQUEST_LOG_LIMIT"])
 
         if not target_host.startswith(("http://", "https://")):
             flash("Target host must start with http:// or https://", "error")
-            return render_template(
-                "setup.html",
-                routes=routes,
-                defaults=current_app.config,
-                form=request.form,
-            )
+            return _render(form)
 
         test = _form_bool("test_connection", True)
         if test and not _connection_test(name, target_host, upstream_key):
-            return render_template(
-                "setup.html",
-                routes=routes,
-                defaults=current_app.config,
-                form=request.form,
-            )
+            return _render(form)
 
         api_key_id = None
         new_token = None
@@ -120,8 +160,13 @@ def setup():
             is_active=True,
         )
         db.set_setting("request_log_limit", str(log_limit))
+        if creating_credentials:
+            adminauth.set_credentials(username, password)
         db.mark_configured()
-        refresh_all(current_app)
+        # Unchecking the test means "do not touch the network"; leave the catalogue
+        # for the background/stale refresh instead of calling /v1/models here.
+        if test:
+            refresh_all(current_app)
 
         if new_token:
             flash(
@@ -133,12 +178,7 @@ def setup():
             flash("MidWare is ready. Upstream route saved.", "success")
         return redirect(url_for("dashboard.index"))
 
-    return render_template(
-        "setup.html",
-        routes=routes,
-        defaults=current_app.config,
-        form={},
-    )
+    return _render({})
 
 
 @bp.route("/routes", methods=["GET", "POST"])
@@ -150,9 +190,10 @@ def routes():
             name = (request.form.get("name") or "").strip() or "Route"
             target_host = (request.form.get("target_host") or "").strip()
             upstream_key = (request.form.get("upstream_key") or "").strip()
+            test = _form_bool("test_connection", True)
             if not target_host.startswith(("http://", "https://")):
                 flash("Target host must start with http:// or https://", "error")
-            elif _form_bool("test_connection", True) and not _connection_test(name, target_host, upstream_key):
+            elif test and not _connection_test(name, target_host, upstream_key):
                 pass
             else:
                 existing = db.list_routes()
@@ -164,7 +205,8 @@ def routes():
                 )
                 db.mark_configured()
                 flash(f"Route '{name}' created.", "success")
-                _flash_refresh(refresh_all(current_app))
+                if test:
+                    _flash_refresh(refresh_all(current_app))
         elif action == "activate":
             route_id = request.form.get("route_id", type=int)
             for route in db.list_routes():
@@ -330,10 +372,13 @@ def key_edit(key_id: int):
 def settings():
     db = get_db()
     if request.method == "POST":
-        if request.form.get("action") == "purge":
+        action = request.form.get("action")
+        if action == "purge":
             removed = db.purge_requests()
             flash(f"Purged {removed} logged request(s).", "success")
             return redirect(url_for("admin.settings"))
+        if action == "credentials":
+            return _update_credentials()
 
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
@@ -352,7 +397,36 @@ def settings():
         max_capture=current_app.config["MAX_CAPTURE_BYTES"],
         upstream_timeout=current_app.config["UPSTREAM_TIMEOUT"],
         verify_tls=current_app.config["UPSTREAM_VERIFY_TLS"],
+        admin_username=adminauth.current_username(),
+        admin_auth_enabled=adminauth.enabled(),
+        admin_env_override=adminauth.env_override_active(),
+        admin_credentials_at=adminauth.credentials_set_at(),
     )
+
+
+def _update_credentials():
+    if not adminauth.enabled():
+        flash("Admin authentication is disabled.", "error")
+        return redirect(url_for("admin.settings"))
+    if adminauth.env_override_active():
+        flash("MIDWARE_ADMIN_PASSWORD is set; change the login there instead.", "error")
+        return redirect(url_for("admin.settings"))
+
+    current = request.form.get("current_password") or ""
+    username = (request.form.get("admin_username") or "").strip()
+    password = request.form.get("admin_password") or ""
+    confirm = request.form.get("admin_password_confirm") or ""
+
+    if not adminauth.verify(adminauth.current_username(), current):
+        flash("Current password is incorrect.", "error")
+    elif not username or not password:
+        flash("New username and password are required.", "error")
+    elif password != confirm:
+        flash("New passwords do not match.", "error")
+    else:
+        adminauth.set_credentials(username, password)
+        flash("Admin credentials updated.", "success")
+    return redirect(url_for("admin.settings"))
 
 
 # -- premodels ---------------------------------------------------------------

@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import json
 
-from flask import Blueprint, Response, abort, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 
+from .. import adminauth
 from ..auth import get_db
 from ..conversation import build_conversation
 
@@ -83,11 +93,43 @@ def request_detail(request_id: int):
     row = db.get_request(request_id)
     if row is None:
         abort(404)
-    conversation = build_conversation(row["request_body"], row["response_body"])
-    return render_template("request_detail.html", row=row, conversation=conversation)
+
+    locked = adminauth.messages_locked()
+    # The sign-in button reloads with ``?messages=1``; a 401 here is what makes the
+    # browser pop its login box. Cancelling leaves the caller on this page with a
+    # note, because the body below is the ordinary locked view.
+    if request.args.get("messages") == "1" and locked:
+        if adminauth.enabled() and not adminauth.credentials_configured():
+            return redirect(url_for("admin.setup"))
+        response = make_response(
+            render_template(
+                "request_detail.html",
+                row=row,
+                conversation={"messages": []},
+                messages_locked=True,
+                auth_message="You need to sign in to view that.",
+            ),
+            401,
+        )
+        response.headers["WWW-Authenticate"] = adminauth.CHALLENGE
+        return response
+
+    conversation = (
+        {"messages": []}
+        if locked
+        else build_conversation(row["request_body"], row["response_body"])
+    )
+    return render_template(
+        "request_detail.html",
+        row=row,
+        conversation=conversation,
+        messages_locked=locked,
+        auth_message=None,
+    )
 
 
 @bp.get("/requests/<int:request_id>/messages.json")
+@adminauth.admin_required
 def request_messages(request_id: int):
     """The normalized conversation, for the client-side ``Fetch`` button."""
     db = get_db()

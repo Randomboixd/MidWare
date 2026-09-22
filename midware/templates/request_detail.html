@@ -35,6 +35,14 @@
   </tbody>
 </table>
 
+{% if messages_locked %}
+<h2>Messages <small>(request + response)</small></h2>
+{% if auth_message %}<article class="flash flash-error">{{ auth_message }}</article>{% endif %}
+<section class="conversation conversation-locked">
+  <p>Message history is protected. Sign in to view the full request and response.</p>
+  <p><a role="button" href="{{ url_for('dashboard.request_detail', request_id=row['id'], messages=1) }}">Sign in to view messages</a></p>
+</section>
+{% else %}
 <h2>Messages <small>(request + response)</small></h2>
 <section id="conversation" class="conversation" data-source="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">
   <div class="conversation-toolbar">
@@ -58,9 +66,12 @@
   <h3>Response body</h3>
   <pre class="mono">{{ row['response_body'] or '(not captured)' }}</pre>
 </details>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
+{% if not messages_locked %}
 <script id="conversation-data" type="application/json">{{ conversation | tojson }}</script>
 <script src="{{ url_for('static', filename='request_detail.js') }}"></script>
+{% endif %}
 {% endblock %}

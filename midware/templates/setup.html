@@ -4,17 +4,45 @@
 {% block content %}
 <hgroup>
   <h1>Setup</h1>
-  <p>Tell MidWare where to route traffic and give it the upstream key. It will mint your first client key.</p>
+  <p>{% if routes %}Set the control-panel login.{% else %}Tell MidWare where to route traffic and give it the upstream key. It will mint your first client key.{% endif %}</p>
 </hgroup>
 
 {% if routes %}
 <article class="flash flash-success">
-  MidWare is already configured. Adding another route here creates an additional
-  upstream (only one is active at a time; manage that on the Routes page).
+  MidWare already has an upstream route. This page only manages the admin login —
+  add or edit upstreams on the <a href="{{ url_for('admin.routes') }}">Routes page</a>.
 </article>
 {% endif %}
 
 <form method="post">
+  {% if auth_enabled and not credentials_ready %}
+  <article>
+  <h2>Control-panel login</h2>
+  {% include "_http_warning.html" %}
+  <label>
+    Setup code
+    <input type="text" name="setup_code" required autocomplete="off"
+           placeholder="32-character code" value="{{ form.get('setup_code', '') }}">
+    <small>Printed in the MidWare console/logs when the instance started. It proves you control this host.</small>
+  </label>
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Username
+      <input type="text" name="admin_username" required autocomplete="username"
+             value="{{ form.get('admin_username', admin_username) }}">
+    </label>
+    <label>
+      Password
+      <input type="password" name="admin_password" required autocomplete="new-password">
+      <small>Stored salted and hashed. Your browser will use this to reach the admin pages.</small>
+    </label>
+  </div>
+  </article>
+  {% endif %}
+
+  {% if not routes %}
+  <article>
+  <h2>Upstream route</h2>
   <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
     <label>
       Route name
@@ -39,9 +67,10 @@
   <label>
     <input type="checkbox" name="test_connection" value="1"
            {% if form.get('test_connection', '1') %}checked{% endif %}>
+    <input type="hidden" name="test_connection" value="0">
     Test the connection and fetch models before saving
-    <small>MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</small>
   </label>
+  <small>MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</small>
 
   <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
     <label>
@@ -56,11 +85,15 @@
       <small>How many request/response bodies to keep. 0 disables logging.</small>
     </label>
   </div>
+  </article>
+  {% endif %}
 
-  <button type="submit">Save &amp; start proxying</button>
+  <button type="submit">{{ 'Save & start proxying' if not routes else 'Save login' }}</button>
 </form>
 
+{% if not routes %}
 <h2>After setup</h2>
 <pre class="mono">export OPENAI_BASE_URL="{{ request.url_root }}v1"
 export OPENAI_API_KEY="&lt;the MidWare key you just created&gt;"</pre>
+{% endif %}
 {% endblock %}

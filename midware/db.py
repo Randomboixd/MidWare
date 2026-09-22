@@ -305,6 +305,24 @@ class Database:
                 (key, value),
             )
 
+    def issue_setup_code(self) -> str:
+        """Return the persisted claim code, creating it once if absent.
+
+        Stored in ``meta`` rather than memory so multiple worker processes share
+        the same code and a restart does not invalidate what was logged.
+        """
+        code = secrets.token_hex(16)
+        with self.write() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                ("admin_setup_code", code),
+            )
+        return self.get_meta("admin_setup_code") or code
+
+    def clear_setup_code(self) -> None:
+        with self.write() as conn:
+            conn.execute("DELETE FROM meta WHERE key = ?", ("admin_setup_code",))
+
     def request_log_limit(self, default: int = 10) -> int:
         return max(0, self.get_int_setting("request_log_limit", default))
 

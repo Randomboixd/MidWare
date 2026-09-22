@@ -7,6 +7,42 @@
   <p>Runtime knobs and maintenance.</p>
 </hgroup>
 
+{% if admin_auth_enabled %}
+<h2>Control-panel login</h2>
+{% include "_http_warning.html" %}
+{% if admin_env_override %}
+<article class="flash flash-success">
+  Credentials come from <code>MIDWARE_ADMIN_USERNAME</code> / <code>MIDWARE_ADMIN_PASSWORD</code>,
+  so the form below is disabled. Unset those to manage the login here.
+</article>
+{% else %}
+<form method="post">
+  <input type="hidden" name="action" value="credentials">
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Username
+      <input type="text" name="admin_username" required autocomplete="username" value="{{ admin_username }}">
+    </label>
+    <label>
+      Current password
+      <input type="password" name="current_password" required autocomplete="current-password">
+    </label>
+  </div>
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      New password
+      <input type="password" name="admin_password" required autocomplete="new-password">
+    </label>
+    <label>
+      Confirm new password
+      <input type="password" name="admin_password_confirm" required autocomplete="new-password">
+    </label>
+  </div>
+  <button type="submit">Update login</button>
+</form>
+{% endif %}
+{% endif %}
+
 <h2>Request logging</h2>
 <form method="post">
   <label>
@@ -34,6 +70,7 @@
     <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
     <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
     <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
+    <tr><th>Admin login</th><td>{% if not admin_auth_enabled %}disabled{% else %}{{ admin_username }}{% if admin_credentials_at %} · changed {{ admin_credentials_at | datetime }}{% endif %}{% endif %}</td></tr>
     <tr><th>working??????</th><td>yesssss!!!!</td></tr>
   </tbody>
 </table>

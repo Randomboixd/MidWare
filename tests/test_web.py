@@ -248,6 +248,7 @@ def test_route_create_skips_test_when_unchecked(configured_client):
     )
 
     assert any(r["name"] == "Untested" for r in db.list_routes())
+    assert stub.gets == []
 
 
 def test_route_create_passes_and_reports_models(configured_client):
@@ -315,3 +316,10 @@ def test_setup_can_skip_connection_test(app):
 
     assert response.status_code == 200
     assert db.is_configured()
+    assert stub.gets == []
+
+
+def test_setup_form_submits_test_connection_when_unchecked(app):
+    client = app.test_client()
+    html = client.get("/admin/setup").get_data(as_text=True)
+    assert 'name="test_connection" value="0"' in html

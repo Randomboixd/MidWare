@@ -1,0 +1,12 @@
+<article id="http-warning" class="flash flash-error" hidden>
+  <strong>You're using an HTTP connection to access this site!</strong>
+  Logins use the basic-auth prompt provided by your browser, so your password is
+  sent over as plain text. If you are using Tailscale, you don't need to worry. If
+  you are not, please consider putting MidWare behind a self-signed certificate or
+  provisioning one from Let's Encrypt.
+</article>
+<script>
+  if (window.location.protocol === "http:") {
+    document.getElementById("http-warning").hidden = false;
+  }
+</script>

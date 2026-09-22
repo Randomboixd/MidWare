@@ -33,6 +33,15 @@ DATABASE = os.environ.get("MIDWARE_DB") or str(BASE_DIR / "midware.db")
 
 SECRET_KEY = os.environ.get("MIDWARE_SECRET_KEY", "midware-dev-secret-change-me")
 
+# Control-panel login. The password set here (if any) overrides the one stored in
+# the database, which makes it both a headless/Docker switch and a lockout
+# recovery path. Leave it unset to manage credentials from the setup page.
+ADMIN_USERNAME = os.environ.get("MIDWARE_ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.environ.get("MIDWARE_ADMIN_PASSWORD", "")
+
+# Enforced for every human-facing page. Only the test fixtures turn it off.
+ADMIN_AUTH_ENABLED = True
+
 # How long we wait on the upstream provider, in seconds.
 UPSTREAM_TIMEOUT = float(os.environ.get("MIDWARE_UPSTREAM_TIMEOUT", "300"))
 
