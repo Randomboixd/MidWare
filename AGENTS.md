@@ -48,9 +48,12 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
 | `midware/premodels.py` | Premodel overlays: slugging, SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
+| `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
+| `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
 | `midware/blueprints/proxy.py` | The proxy surface: `/v1/*`, `/proxy/*`; auth, routing, forwarding, teeing, persisting. |
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
+| `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
 | `midware/templates/`, `midware/static/` | Jinja2 templates (PicoCSS v2 from CDN) and `style.css` / `request_detail.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
@@ -76,7 +79,9 @@ this development environment, so Docker changes are verified by reading only.
 
 - `api_keys(id, name, description, token UNIQUE, cors_allow_origin,
   allow_premodels, restrict_premodels, allowed_premodel_ids, restrict_providers,
-  allowed_route_ids, restrict_models, allowed_model_ids, created_at, last_used_at)` —
+  allowed_route_ids, restrict_models, allowed_model_ids, is_system, created_at,
+  last_used_at)` — `is_system` rows (the auto-created `MSQ Measurements` owner) are
+  skipped by `list_api_keys`/`count_api_keys` but still name rows in the request log.
   `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
   (`db.dump_id_list` / `db.parse_id_list`); `allowed_model_ids` holds a JSON array of
   `"<route_id>:<model_id>"` strings (`db.dump_model_list` / `db.parse_model_list`),
@@ -92,6 +97,22 @@ this development environment, so Docker changes are verified by reading only.
   `admin_password_hash` — a salted scrypt hash — and the one-time `admin_setup_code`,
   see `adminauth.py`).
 - `models(id, route_id FK CASCADE, model_id, fetched_at, UNIQUE(route_id, model_id))`
+- `msq_recorders(id, name, route_id FK SET NULL, model, system_prompt, user_prompt,
+  interval_seconds, enabled, penalize_symbols, slop_list, max_ttft_ms, max_total_ms,
+  hardcore_json, collect_requests, ignore_thinking, created_at, updated_at, last_run_at,
+  next_run_at)` — one scheduled probe of a model. `max_ttft_ms`/`max_total_ms` are `-1`
+  to disable a budget; `hardcore_json` is `{"stream_integrity", "text_forensics",
+  "needle", "needle_context_chars", "collect_needle"}`, each check absent/off by
+  default; `collect_requests` files each probe as a normal request row under the hidden
+  `MSQ Measurements` system key, and `collect_needle` files the needle probe too (only
+  when request recording is on); `ignore_thinking` (default on) scores only the visible
+  answer, so reasoning models are not penalised for drafting themselves in their think
+  block.
+- `msq_checks(id, recorder_id FK CASCADE, created_at, status_code, ok, ttft_ms,
+  total_ms, generation_ms, completion_tokens, tokens_per_second, score, hard_fail,
+  penalties JSON, response_excerpt, error)` — one probe result; `penalties` is a JSON
+  list of `{"reason", "points", "kind", "passed"}` (the checked-to-be-clean cases are
+  stored with `passed: true`, `points: 0`) that the chart tooltip reads back verbatim.
 
 `init_schema()` calls `_migrate()` **before** `executescript(SCHEMA)` because
 `CREATE TABLE IF NOT EXISTS` will not reshape an old `requests` table. To add a
@@ -163,6 +184,31 @@ Do not break these; several have regression tests.
   `top_p` and `max_tokens` fill in any value the caller omitted. Premodels are
   merged into `GET /v1/models` as `<p>-slug`. Admin CRUD lives at
   `/admin/premodels`.
+- **MSQ** (`msq.py`): a recorder periodically streams a fixed prompt to its route's
+  model, measuring time-to-first-token (the incremental `StreamAudit` in
+  `msq_checks.py`), total time, tokens/s, then scores 0-100 (`score_check`): 100 minus
+  penalties for over-budget TTFT (max 40) and total time (max 30), non-Latin symbols
+  (max 25) and configured slop words (max 25). A failed/empty check is an automatic 0.
+  Scoring looks at the visible answer, rebuilt by `split_response_text`; with
+  `ignore_thinking` off the reasoning stream is appended, so drafting is only scored
+  when explicitly requested.
+  Opt-in **hardcore checks** (per-recorder, all off by default) add `stream_integrity`
+  (malformed chunks, a missing completion marker, provider error events, inter-token
+  stalls), `text_forensics` (repetition loops, glitch/mojibake, leaked chat-template
+  tokens) and `needle` (a code hidden in filler context). A hard failure sets
+  `hard_fail` and the recorder reports `failing` immediately, before the examination
+  window. `evaluate_recorder` otherwise reports `examining` until the recorder is
+  `MSQ_EXAMINE_HOURS` old and has `MSQ_MIN_CHECKS` samples, then `degraded` when the
+  window average is below `MSQ_DEGRADED_THRESHOLD`, else `working`. A single daemon
+  thread (`start_scheduler`, skipped under `TESTING`) wakes every
+  `MSQ_SCHEDULER_INTERVAL` and runs due recorders; `claim_msq_recorder` pushes
+  `next_run_at` forward atomically so a run is never duplicated. With
+  `collect_requests` the probe is also filed via `_maybe_log_probe` as a normal
+  request row under a lazily created, hidden `MSQ Measurements` system key
+  (`get_or_create_api_key`), so it shows in history and token totals; that logging is
+  best-effort and must never break a probe. The panel at
+  `/admin/msq` is admin-guarded and renders one card + hand-rolled SVG chart per
+  recorder (`static/msq.js`), with hover tooltips reading the stored findings.
 - **Conversation viewer**: table for request metadata excluding messages; messages are
   numbered, collapsible, and only the last user + last assistant start open. The
   client-side **Fetch** button re-requests `/requests/<id>/messages.json`.
@@ -200,9 +246,10 @@ Do not break these; several have regression tests.
   `b"".join(response.response)`, otherwise the generator never runs and no request
   row is written (a confusing `IndexError`).
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
-  model-refresh hooks.
+  model-refresh hooks and the MSQ scheduler. Drive probes directly with
+  `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `150 passed` — **update this number whenever the test count changes.**
+  `190 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

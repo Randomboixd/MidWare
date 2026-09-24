@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     allowed_route_ids   TEXT,
     restrict_models     INTEGER NOT NULL DEFAULT 0,
     allowed_model_ids   TEXT,
+    is_system           INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -110,6 +111,50 @@ CREATE TABLE IF NOT EXISTS premodels (
 );
 
 CREATE INDEX IF NOT EXISTS idx_premodels_route ON premodels(route_id);
+
+CREATE TABLE IF NOT EXISTS msq_recorders (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT    NOT NULL,
+    route_id         INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+    model            TEXT    NOT NULL DEFAULT '',
+    system_prompt    TEXT    NOT NULL DEFAULT '',
+    user_prompt      TEXT    NOT NULL DEFAULT '',
+    interval_seconds INTEGER NOT NULL DEFAULT 3600,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    penalize_symbols INTEGER NOT NULL DEFAULT 1,
+    slop_list        TEXT    NOT NULL DEFAULT '',
+    max_ttft_ms      INTEGER NOT NULL DEFAULT 30000,
+    max_total_ms     INTEGER NOT NULL DEFAULT 60000,
+    hardcore_json    TEXT,
+    collect_requests INTEGER NOT NULL DEFAULT 0,
+    ignore_thinking  INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT    NOT NULL,
+    updated_at       TEXT    NOT NULL,
+    last_run_at      TEXT,
+    next_run_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_msq_recorders_route ON msq_recorders(route_id);
+
+CREATE TABLE IF NOT EXISTS msq_checks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorder_id       INTEGER NOT NULL REFERENCES msq_recorders(id) ON DELETE CASCADE,
+    created_at        TEXT    NOT NULL,
+    status_code       INTEGER NOT NULL DEFAULT 0,
+    ok                INTEGER NOT NULL DEFAULT 0,
+    ttft_ms           INTEGER,
+    total_ms          INTEGER,
+    generation_ms     INTEGER,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    tokens_per_second REAL,
+    score             REAL    NOT NULL DEFAULT 0,
+    hard_fail         INTEGER NOT NULL DEFAULT 0,
+    penalties         TEXT,
+    response_excerpt  TEXT,
+    error             TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_msq_checks_recorder ON msq_checks(recorder_id, created_at DESC);
 """
 
 
@@ -241,8 +286,25 @@ class Database:
                     "allowed_route_ids": "TEXT",
                     "restrict_models": "INTEGER NOT NULL DEFAULT 0",
                     "allowed_model_ids": "TEXT",
+                    "is_system": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
+
+        existing_msq = {row["name"] for row in self._rows("PRAGMA table_info(msq_recorders)")}
+        if existing_msq:
+            self._add_columns(
+                "msq_recorders",
+                existing_msq,
+                {
+                    "hardcore_json": "TEXT",
+                    "collect_requests": "INTEGER NOT NULL DEFAULT 0",
+                    "ignore_thinking": "INTEGER NOT NULL DEFAULT 1",
+                },
+            )
+
+        existing_checks = {row["name"] for row in self._rows("PRAGMA table_info(msq_checks)")}
+        if existing_checks:
+            self._add_columns("msq_checks", existing_checks, {"hard_fail": "INTEGER NOT NULL DEFAULT 0"})
 
     def _add_columns(self, table: str, existing: set[str], added: dict[str, str]) -> None:
         with self.write() as conn:
@@ -560,6 +622,218 @@ class Database:
     def list_premodels(self) -> list[sqlite3.Row]:
         return self._rows("SELECT * FROM premodels ORDER BY name COLLATE NOCASE, id")
 
+    # -- MSQ (Model Service Quality) ----------------------------------------
+
+    _MSQ_RECORDER_FIELDS = (
+        "name",
+        "route_id",
+        "model",
+        "system_prompt",
+        "user_prompt",
+        "interval_seconds",
+        "enabled",
+        "penalize_symbols",
+        "slop_list",
+        "max_ttft_ms",
+        "max_total_ms",
+        "hardcore_json",
+        "collect_requests",
+        "ignore_thinking",
+    )
+
+    def create_msq_recorder(
+        self,
+        *,
+        name: str,
+        route_id: int | None,
+        model: str,
+        system_prompt: str = "",
+        user_prompt: str = "",
+        interval_seconds: int = 3600,
+        enabled: bool = True,
+        penalize_symbols: bool = True,
+        slop_list: str = "",
+        max_ttft_ms: int = 30_000,
+        max_total_ms: int = 60_000,
+        hardcore_json: str | None = None,
+        collect_requests: bool = False,
+        ignore_thinking: bool = True,
+    ) -> int:
+        stamp = to_iso(utcnow())
+        with self.write() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO msq_recorders (
+                    name, route_id, model, system_prompt, user_prompt,
+                    interval_seconds, enabled, penalize_symbols, slop_list,
+                    max_ttft_ms, max_total_ms, hardcore_json, collect_requests,
+                    ignore_thinking, created_at, updated_at, next_run_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name,
+                    route_id,
+                    model,
+                    system_prompt,
+                    user_prompt,
+                    max(1, int(interval_seconds)),
+                    int(bool(enabled)),
+                    int(bool(penalize_symbols)),
+                    slop_list,
+                    int(max_ttft_ms),
+                    int(max_total_ms),
+                    hardcore_json,
+                    int(bool(collect_requests)),
+                    int(bool(ignore_thinking)),
+                    stamp,
+                    stamp,
+                    stamp,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def update_msq_recorder(self, recorder_id: int, **fields: Any) -> None:
+        updates = {key: value for key, value in fields.items() if key in self._MSQ_RECORDER_FIELDS}
+        if not updates:
+            return
+        for flag in ("enabled", "penalize_symbols", "collect_requests", "ignore_thinking"):
+            if flag in updates:
+                updates[flag] = int(bool(updates[flag]))
+        if "interval_seconds" in updates:
+            updates["interval_seconds"] = max(1, int(updates["interval_seconds"]))
+        for budget in ("max_ttft_ms", "max_total_ms"):
+            if budget in updates:
+                updates[budget] = int(updates[budget])
+        updates["updated_at"] = to_iso(utcnow())
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with self.write() as conn:
+            conn.execute(
+                f"UPDATE msq_recorders SET {assignments} WHERE id = ?",
+                (*updates.values(), recorder_id),
+            )
+
+    def delete_msq_recorder(self, recorder_id: int) -> None:
+        with self.write() as conn:
+            conn.execute("DELETE FROM msq_recorders WHERE id = ?", (recorder_id,))
+
+    def get_msq_recorder(self, recorder_id: int) -> sqlite3.Row | None:
+        return self._row("SELECT * FROM msq_recorders WHERE id = ?", (recorder_id,))
+
+    def list_msq_recorders(self) -> list[sqlite3.Row]:
+        return self._rows("SELECT * FROM msq_recorders ORDER BY name COLLATE NOCASE, id")
+
+    def count_msq_recorders(self) -> int:
+        return int(self._scalar("SELECT COUNT(*) FROM msq_recorders"))
+
+    def due_msq_recorders(self, now: datetime | None = None) -> list[sqlite3.Row]:
+        stamp = to_iso(now or utcnow())
+        return self._rows(
+            "SELECT * FROM msq_recorders "
+            "WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?) "
+            "ORDER BY id",
+            (stamp,),
+        )
+
+    def claim_msq_recorder(self, recorder_id: int, now: datetime | None = None) -> bool:
+        """Reserve a due recorder by pushing ``next_run_at`` forward.
+
+        The conditional update makes the claim safe when two workers (or the
+        scheduler and a manual run) race for the same recorder.
+        """
+        now = now or utcnow()
+        recorder = self.get_msq_recorder(recorder_id)
+        if recorder is None:
+            return False
+        next_run = now + timedelta(seconds=max(1, int(recorder["interval_seconds"])))
+        with self.write() as conn:
+            cur = conn.execute(
+                "UPDATE msq_recorders SET next_run_at = ?, updated_at = ? "
+                "WHERE id = ? AND enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?)",
+                (to_iso(next_run), to_iso(now), recorder_id, to_iso(now)),
+            )
+            return int(cur.rowcount) > 0
+
+    def mark_msq_ran(self, recorder_id: int, now: datetime | None = None) -> None:
+        now = now or utcnow()
+        recorder = self.get_msq_recorder(recorder_id)
+        interval = max(1, int(recorder["interval_seconds"])) if recorder else 3600
+        with self.write() as conn:
+            conn.execute(
+                "UPDATE msq_recorders SET last_run_at = ?, next_run_at = ? WHERE id = ?",
+                (to_iso(now), to_iso(now + timedelta(seconds=interval)), recorder_id),
+            )
+
+    def record_msq_check(
+        self,
+        *,
+        recorder_id: int,
+        status_code: int = 0,
+        ok: bool = False,
+        ttft_ms: int | None = None,
+        total_ms: int | None = None,
+        generation_ms: int | None = None,
+        completion_tokens: int = 0,
+        tokens_per_second: float | None = None,
+        score: float = 0.0,
+        hard_fail: bool = False,
+        penalties: Any = None,
+        response_excerpt: str | None = None,
+        error: str | None = None,
+    ) -> int:
+        with self.write() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO msq_checks (
+                    recorder_id, created_at, status_code, ok, ttft_ms, total_ms,
+                    generation_ms, completion_tokens, tokens_per_second, score,
+                    hard_fail, penalties, response_excerpt, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    recorder_id,
+                    to_iso(utcnow()),
+                    int(status_code),
+                    int(bool(ok)),
+                    ttft_ms,
+                    total_ms,
+                    generation_ms,
+                    int(completion_tokens),
+                    tokens_per_second,
+                    float(score),
+                    int(bool(hard_fail)),
+                    json_dumps(penalties) if penalties else None,
+                    response_excerpt,
+                    error,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def list_msq_checks(self, recorder_id: int, limit: int = 168) -> list[sqlite3.Row]:
+        """The most recent ``limit`` checks, oldest first (chart order)."""
+        limit = max(1, int(limit))
+        return self._rows(
+            """
+            SELECT * FROM (
+                SELECT * FROM msq_checks WHERE recorder_id = ?
+                ORDER BY created_at DESC, id DESC LIMIT ?
+            ) ORDER BY created_at ASC, id ASC
+            """,
+            (recorder_id, limit),
+        )
+
+    def recent_msq_checks(self, recorder_id: int, since: datetime) -> list[sqlite3.Row]:
+        return self._rows(
+            "SELECT * FROM msq_checks WHERE recorder_id = ? AND created_at >= ? "
+            "ORDER BY created_at ASC, id ASC",
+            (recorder_id, to_iso(since)),
+        )
+
+    def latest_msq_check(self, recorder_id: int) -> sqlite3.Row | None:
+        return self._row(
+            "SELECT * FROM msq_checks WHERE recorder_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (recorder_id,),
+        )
+
     # -- api keys -----------------------------------------------------------
 
     _API_KEY_FIELDS = (
@@ -620,6 +894,26 @@ class Database:
             )
         return token
 
+    def get_or_create_api_key(self, name: str, description: str = "") -> int:
+        """Return the id of the hidden system key ``name``, creating it on first use.
+
+        Used for the automatic "MSQ Measurements" owner so collected probes show a
+        real name in history and token totals without a user-manageable key
+        appearing on the Keys page (``list_api_keys``/``count_api_keys`` skip
+        ``is_system`` rows).
+        """
+        row = self._row("SELECT id FROM api_keys WHERE name = ? ORDER BY id LIMIT 1", (name,))
+        if row is not None:
+            return int(row["id"])
+        token = self.generate_token()
+        with self.write() as conn:
+            cur = conn.execute(
+                "INSERT INTO api_keys (name, description, token, is_system, created_at) "
+                "VALUES (?, ?, ?, 1, ?)",
+                (name, description, token, to_iso(utcnow())),
+            )
+            return int(cur.lastrowid)
+
     def update_api_key(self, key_id: int, **fields: Any) -> None:
         updates = {key: value for key, value in fields.items() if key in self._API_KEY_FIELDS}
         if not updates:
@@ -653,6 +947,7 @@ class Database:
                    (SELECT COUNT(*) FROM requests r WHERE r.api_key_id = k.id) AS request_count,
                    (SELECT COALESCE(SUM(r.total_tokens), 0) FROM requests r WHERE r.api_key_id = k.id) AS token_count
             FROM api_keys k
+            WHERE k.is_system = 0
             ORDER BY k.id
             """
         )
@@ -1018,7 +1313,7 @@ class Database:
         }
 
     def count_api_keys(self) -> int:
-        return int(self._scalar("SELECT COUNT(*) FROM api_keys"))
+        return int(self._scalar("SELECT COUNT(*) FROM api_keys WHERE is_system = 0"))
 
     def heatmap(
         self,
@@ -1081,6 +1376,27 @@ class Database:
 
 
 def json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def parse_json_object(raw: Any) -> dict[str, Any]:
+    """Read a JSON object column; corrupt or non-object values become ``{}``."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def dump_json_object(value: Any) -> str | None:
+    if not value:
+        return None
     return json.dumps(value, ensure_ascii=False)
 
 

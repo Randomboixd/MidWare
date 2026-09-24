@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}MSQ - MidWare{% endblock %}
+
+{% block content %}
+{% include "_msq_warning.html" %}
+
+<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
+  <hgroup>
+    <h1>Model Service Quality</h1>
+    <p>Periodic probes that score how well a model is answering over time.</p>
+  </hgroup>
+  <p style="margin:0">
+    <a role="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ Recorder</a>
+  </p>
+</div>
+
+{% if not route_count %}
+<article class="flash flash-error">
+  No upstream route configured. <a href="{{ url_for('admin.routes') }}">Add a route</a>
+  before creating a recorder.
+</article>
+{% endif %}
+
+{% if cards %}
+<div class="msq-grid">
+  {% for card in cards %}
+  {% set r = card.recorder %}
+  {% set ev = card.evaluation %}
+  {% set latest = ev.latest %}
+  <article class="msq-card">
+    <header class="msq-card-head">
+      <div>
+        <a href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}"><strong>{{ r['name'] }}</strong></a>
+        <div class="msq-sub mono">
+          {{ card.route_name or 'no route' }} · {{ r['model'] or '—' }}
+          {% if not r['enabled'] %}<span class="pill warn">paused</span>{% endif %}
+        </div>
+      </div>
+      <span class="pill {{ 'ok' if ev.status == 'working' else ('bad' if ev.status in ('degraded', 'failing') else 'warn') }}"
+            title="{{ ev.sample_count }} check(s) in the last {{ ev.age_hours }}h">
+        {{ ev.label }}
+      </span>
+    </header>
+
+    {% if card.hardcore %}
+    <div class="msq-hardcore">
+      {% if card.hardcore.get('stream_integrity') %}<span class="pill">integrity</span>{% endif %}
+      {% if card.hardcore.get('text_forensics') %}<span class="pill">forensics</span>{% endif %}
+      {% if card.hardcore.get('needle') %}<span class="pill">needle</span>{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="msq-metrics">
+      <div><span class="msq-metric-label">Score</span>
+        <span class="msq-metric-value">{{ '%.0f' | format(latest['score']) if latest else '—' }}</span></div>
+      <div><span class="msq-metric-label">Avg</span>
+        <span class="msq-metric-value">{{ '%.0f' | format(ev.average_score) if ev.average_score is not none else '—' }}</span></div>
+      <div><span class="msq-metric-label">TTFT</span>
+        <span class="msq-metric-value">{{ latest['ttft_ms'] | ms if latest else '—' }}</span></div>
+      <div><span class="msq-metric-label">Total</span>
+        <span class="msq-metric-value">{{ latest['total_ms'] | ms if latest else '—' }}</span></div>
+      <div><span class="msq-metric-label">Tok/s</span>
+        <span class="msq-metric-value">{{ '%.1f' | format(latest['tokens_per_second']) if latest and latest['tokens_per_second'] else '—' }}</span></div>
+    </div>
+
+    <div class="msq-chart" data-recorder="{{ r['id'] }}" data-threshold="{{ threshold }}">
+      <svg class="msq-chart-svg" viewBox="0 0 300 90" preserveAspectRatio="none" role="img"
+           aria-label="Score history for {{ r['name'] }}"></svg>
+      <div class="msq-tip" hidden></div>
+      {% if not card.points %}
+      <p class="msq-empty"><small>No checks yet.</small></p>
+      {% endif %}
+    </div>
+
+    <footer class="msq-actions">
+      <small>Every {{ (r['interval_seconds'] / 60) | round(1) }} min ·
+        last run {{ r['last_run_at'] | relative if r['last_run_at'] else 'never' }}</small>
+      <div class="msq-buttons">
+        <a role="button" class="outline" href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}">Edit</a>
+        <form method="post" class="inline-form" action="{{ url_for('msq.recorder_run', recorder_id=r['id']) }}">
+          <button type="submit" class="outline">Run now</button>
+        </form>
+        <form method="post" class="inline-form" action="{{ url_for('msq.recorder_delete', recorder_id=r['id']) }}"
+              onsubmit="return confirm('Delete recorder &quot;{{ r['name'] }}&quot; and its history?')">
+          <button type="submit" class="outline secondary">Delete</button>
+        </form>
+      </div>
+    </footer>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p>No MSQ recorders yet. <a href="{{ url_for('msq.recorder_new') }}">Create one</a> to start
+   tracking a model's quality.</p>
+{% endif %}
+
+<h2>How scoring works</h2>
+<p>Each probe scores 0-100, starting from 100 and subtracting for slow first tokens,
+slow totals, stray non-Latin symbols and configured slop words. Hover any point on a
+chart to see exactly what was deducted. A recorder stays <em>under examination</em>
+until it has 24 hours of history, then turns <strong>Working</strong> or
+<strong>Degraded</strong> from its recent average.</p>
+<p>Recorders with <strong>hardcore checks</strong> enabled can also turn
+<strong>Failing</strong> immediately: a truncated stream, malformed chunk, leaked
+template token, repetition loop or missed long-context needle is not a statistical
+question. Enable them per recorder under the form's Advanced section.</p>
+{% endblock %}
+
+{% block scripts %}
+<script id="msq-data" type="application/json">{{ charts | tojson }}</script>
+<script src="{{ url_for('static', filename='msq.js') }}"></script>
+{% endblock %}

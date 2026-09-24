@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if recorder else 'New' }} MSQ recorder - MidWare{% endblock %}
+
+{% block content %}
+{% include "_msq_warning.html" %}
+
+<hgroup>
+  <h1>{{ 'Edit MSQ recorder' if recorder else 'New MSQ recorder' }}</h1>
+  <p>A scheduled probe of one model. MidWare asks it a fixed question and scores the
+     answer over time.</p>
+</hgroup>
+
+<article>
+<form method="post" id="msq-form">
+  <label>
+    Name
+    <input type="text" id="msq-name" name="name" value="{{ form.get('name', '') }}" required>
+    <small>Auto-filled from the provider and model until you type your own.</small>
+  </label>
+
+  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+    <label>
+      Model Provider
+      <select name="route_id" id="msq-route" required>
+        <option value="">— choose —</option>
+        {% for r in routes %}
+        <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Model Slug
+      <input type="text" id="msq-model" name="model" list="msq-models"
+             value="{{ form.get('model', '') }}" required>
+      <datalist id="msq-models">
+        {% for m in models %}<option value="{{ m.model_id }}" data-route="{{ m.route_id }}"></option>{% endfor %}
+      </datalist>
+      <small>A slug discovered on that provider.</small>
+    </label>
+  </div>
+
+  <details class="edit-drawer" open>
+    <summary>Advanced</summary>
+    <div style="padding:0.5rem 0.6rem 1rem">
+      <label>
+        System Prompt
+        <textarea name="system_prompt" rows="4">{{ form.get('system_prompt', '') }}</textarea>
+      </label>
+      <label>
+        User Prompt
+        <textarea name="user_prompt" rows="4">{{ form.get('user_prompt', '') }}</textarea>
+        <small>Sent on every check. Make it ask for enough output to be measurable.</small>
+      </label>
+      <label>
+        Check Frequency (minutes)
+        <input type="number" name="interval_minutes" min="1" step="1"
+               value="{{ form.get('interval_minutes', 60) }}">
+        <small>Default 60 (one hour). Anything from 1 minute upward.</small>
+      </label>
+
+      <details class="edit-drawer">
+        <summary>Quality Assurance</summary>
+        <div style="padding:0.5rem 0.6rem 1rem">
+          <label>
+            <input type="checkbox" role="switch" name="ignore_thinking" value="1"
+                   {% if form.get('ignore_thinking', True) %}checked{% endif %}>
+            <input type="hidden" name="ignore_thinking" value="0">
+            Ignore thinking blocks
+          </label>
+          <small>Score only the model's visible answer. Reasoning models draft and repeat
+                 themselves while thinking, which would otherwise trip the symbol, slop and
+                 repetition penalties.</small>
+
+          <label>
+            <input type="checkbox" name="penalize_symbols" value="1"
+                   {% if form.get('penalize_symbols') %}checked{% endif %}>
+            <input type="hidden" name="penalize_symbols" value="0">
+            Penalize non-Latin symbols
+          </label>
+          <small>Flags Chinese and other non-Latin scripts appearing in an English answer.</small>
+
+          <label>
+            Slop List
+            <input type="text" name="slop_list" value="{{ form.get('slop_list', '') }}"
+                   placeholder="delve, tapestry, testament">
+            <small>Comma-separated words; each one found in the answer lowers the score. Empty by default.</small>
+          </label>
+
+          <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+            <label>
+              Max non-penalized TTFT (seconds)
+              <input type="number" name="max_ttft_seconds" step="1"
+                     value="{{ form.get('max_ttft_seconds', 30) }}">
+              <small>Slower first token is penalized. -1 disables.</small>
+            </label>
+            <label>
+              Max non-penalized total time (seconds)
+              <input type="number" name="max_total_seconds" step="1"
+                     value="{{ form.get('max_total_seconds', 60) }}">
+              <small>Slower total response is penalized. -1 disables.</small>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="edit-drawer">
+        <summary>Hardcore checks (optional)</summary>
+        <div style="padding:0.5rem 0.6rem 1rem">
+          <small>Higher-signal probes, all off by default. Failures here can mark the
+                 model <strong>Failing</strong> immediately instead of waiting for the
+                 average.</small>
+
+          <label>
+            <input type="checkbox" name="hc_stream_integrity" value="1"
+                   {% if form.get('hc_stream_integrity') %}checked{% endif %}>
+            Stream integrity
+          </label>
+          <small>Detects truncated streams, malformed chunks, provider error events and
+                 mid-stream stalls; any of these marks the recorder Failing at once.</small>
+
+          <label>
+            <input type="checkbox" name="hc_text_forensics" value="1"
+                   {% if form.get('hc_text_forensics') %}checked{% endif %}>
+            Text forensics
+          </label>
+          <small>Flags repetition loops, glitch/mojibake characters and leaked
+                 chat-template tokens.</small>
+
+          <label>
+            <input type="checkbox" name="hc_needle" value="1"
+                   {% if form.get('hc_needle') %}checked{% endif %}>
+            Long-context needle
+          </label>
+          <small>Hides a code in filler text and asks for it; a miss marks Failing. Spends
+                 extra tokens each check.</small>
+
+          <label>
+            Needle context size (characters)
+            <input type="number" name="needle_context_chars" min="200" step="100"
+                   value="{{ form.get('needle_context_chars', 4000) }}">
+          </label>
+
+          <div id="msq-collect-needle" hidden>
+            <label>
+              <input type="checkbox" name="hc_collect_needle" value="1"
+                     {% if form.get('hc_collect_needle') %}checked{% endif %}>
+              Record needle probes
+            </label>
+            <small>Also save the long-context needle request and answer to your history.
+                   Only applies while request recording is on.</small>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <label>
+    <input type="checkbox" role="switch" name="collect_requests" value="1"
+           {% if form.get('collect_requests') %}checked{% endif %}>
+    <input type="hidden" name="collect_requests" value="0">
+    Collect MSQ Requests for this recorder
+  </label>
+  <small>Logs each probe under the auto-created <strong>MSQ Measurements</strong> key,
+         so it appears in your request history and counts toward token usage.</small>
+
+  <label>
+    <input type="checkbox" role="switch" name="enabled" value="1"
+           {% if form.get('enabled', True) %}checked{% endif %}>
+    <input type="hidden" name="enabled" value="0">
+    Enabled (probes run on schedule)
+  </label>
+
+  <button type="submit">{{ 'Save recorder' if recorder else 'Create' }}</button>
+  <a role="button" class="secondary outline" href="{{ url_for('msq.index') }}">Cancel</a>
+</form>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script id="msq-models-data" type="application/json">{{ models | tojson }}</script>
+<script src="{{ url_for('static', filename='msq.js') }}"></script>
+{% endblock %}

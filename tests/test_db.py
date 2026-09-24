@@ -87,6 +87,56 @@ def test_usage_totals_and_heatmap():
     assert 4 in levels
 
 
+def test_msq_migration_adds_hardcore_columns(tmp_path):
+    from midware.db import Database
+
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                target_host TEXT NOT NULL, upstream_key TEXT NOT NULL DEFAULT '',
+                api_key_id INTEGER, is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE msq_recorders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                route_id INTEGER, model TEXT NOT NULL DEFAULT '',
+                system_prompt TEXT NOT NULL DEFAULT '', user_prompt TEXT NOT NULL DEFAULT '',
+                interval_seconds INTEGER NOT NULL DEFAULT 3600,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                penalize_symbols INTEGER NOT NULL DEFAULT 1,
+                slop_list TEXT NOT NULL DEFAULT '',
+                max_ttft_ms INTEGER NOT NULL DEFAULT 30000,
+                max_total_ms INTEGER NOT NULL DEFAULT 60000,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                last_run_at TEXT, next_run_at TEXT
+            );
+            CREATE TABLE msq_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, recorder_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL, status_code INTEGER NOT NULL DEFAULT 0,
+                ok INTEGER NOT NULL DEFAULT 0, score REAL NOT NULL DEFAULT 0
+            );
+            CREATE TABLE api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    db.init_schema()
+
+    recorder_cols = {row["name"] for row in db._rows("PRAGMA table_info(msq_recorders)")}
+    check_cols = {row["name"] for row in db._rows("PRAGMA table_info(msq_checks)")}
+    key_cols = {row["name"] for row in db._rows("PRAGMA table_info(api_keys)")}
+    assert "hardcore_json" in recorder_cols
+    assert "collect_requests" in recorder_cols
+    assert "ignore_thinking" in recorder_cols
+    assert "hard_fail" in check_cols
+    assert "is_system" in key_cols
+
+
 def test_filters_scope_totals():
     db = make_db()
     first = db.get_api_key_by_token(db.create_api_key("a"))

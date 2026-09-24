@@ -60,3 +60,37 @@ SQLITE_TIMEOUT = float(os.environ.get("MIDWARE_SQLITE_TIMEOUT", "5"))
 
 # Hard cap on how much of an upstream response we buffer for parsing, in bytes.
 MAX_CAPTURE_BYTES = _env_int("MIDWARE_MAX_CAPTURE_BYTES", 8 * 1024 * 1024)
+
+# -- Model Service Quality (MSQ) --------------------------------------------
+# MSQ periodically asks a model a fixed question and scores how well it answers
+# (latency, stray symbols, slop words). The scheduler is an in-process daemon
+# thread, consistent with the model-refresh thread; there is no external worker.
+
+# Master switch. When off, no checks run and the scheduler is never started.
+MSQ_ENABLED = _env_bool("MIDWARE_MSQ_ENABLED", True)
+
+# How often the scheduler looks for recorders whose next check is due, in seconds.
+MSQ_SCHEDULER_INTERVAL = _env_int("MIDWARE_MSQ_SCHEDULER_INTERVAL", 60)
+
+# Default per-recorder check frequency, in seconds (one hour).
+MSQ_DEFAULT_INTERVAL = _env_int("MIDWARE_MSQ_DEFAULT_INTERVAL", 3600)
+
+# Default unpenalized budgets, in milliseconds (``-1`` disables either).
+MSQ_DEFAULT_MAX_TTFT_MS = _env_int("MIDWARE_MSQ_DEFAULT_MAX_TTFT_MS", 30_000)
+MSQ_DEFAULT_MAX_TOTAL_MS = _env_int("MIDWARE_MSQ_DEFAULT_MAX_TOTAL_MS", 60_000)
+
+# A recorder needs this much history before it is called Working/Degraded.
+MSQ_EXAMINE_HOURS = _env_int("MIDWARE_MSQ_EXAMINE_HOURS", 24)
+MSQ_MIN_CHECKS = _env_int("MIDWARE_MSQ_MIN_CHECKS", 3)
+
+# Average score below this, over the examination window, means "Degraded".
+MSQ_DEGRADED_THRESHOLD = float(os.environ.get("MIDWARE_MSQ_DEGRADED_THRESHOLD", "70"))
+
+# How many recent checks each recorder's chart keeps / renders.
+MSQ_HISTORY_LIMIT = _env_int("MIDWARE_MSQ_HISTORY_LIMIT", 168)
+
+# Hardcore checks (opt-in per recorder). A gap between streamed chunks longer
+# than this counts as a stall; the needle probe hides a code in this many
+# characters of filler to exercise long-context recall.
+MSQ_STALL_MS = _env_int("MIDWARE_MSQ_STALL_MS", 5_000)
+MSQ_NEEDLE_CONTEXT_CHARS = _env_int("MIDWARE_MSQ_NEEDLE_CONTEXT_CHARS", 4_000)

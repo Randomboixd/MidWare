@@ -31,6 +31,23 @@ footer.container {
   border-left: 4px solid var(--pico-del-color);
 }
 
+.flash-warning {
+  border-left: 4px solid #d9a400;
+}
+
+.msq-warning-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.msq-warning-row button {
+  width: auto;
+  margin: 0;
+  flex: none;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -348,5 +365,169 @@ label.preset-prompt.is-empty {
   margin-left: auto;
   color: var(--pico-muted-color);
   white-space: nowrap;
+}
+
+.msq-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.msq-card {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.msq-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.msq-sub {
+  color: var(--pico-muted-color);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+.msq-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.3rem;
+  text-align: center;
+}
+
+.msq-metric-label {
+  display: block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pico-muted-color);
+}
+
+.msq-metric-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.msq-chart {
+  position: relative;
+}
+
+.msq-chart-svg {
+  width: 100%;
+  height: 110px;
+  display: block;
+}
+
+.msq-area {
+  fill: color-mix(in srgb, var(--pico-primary) 18%, transparent);
+}
+
+.msq-line {
+  fill: none;
+  stroke: var(--pico-primary);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.msq-dot {
+  fill: var(--pico-primary);
+}
+
+.msq-dot.is-error {
+  fill: #ff6b6b;
+}
+
+.msq-threshold {
+  stroke: #d9a400;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.msq-tip {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+  max-width: 260px;
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  padding: 0.5rem 0.6rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+.msq-tip-head {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.msq-tip-rows {
+  color: var(--pico-muted-color);
+}
+
+.msq-tip-penalties {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+}
+
+.msq-tip-penalties li.is-pass {
+  color: #39d353;
+}
+
+.msq-hardcore {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.msq-tip-error {
+  color: #ff6b6b;
+  margin-top: 0.3rem;
+}
+
+.msq-tip-clean {
+  color: #39d353;
+  margin-top: 0.3rem;
+}
+
+.msq-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+
+.msq-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  padding-top: 0.6rem;
+  margin-top: auto;
+}
+
+.msq-buttons {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.msq-buttons button,
+.msq-buttons a[role="button"] {
+  width: auto;
+  margin: 0;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
 }
 

@@ -10,7 +10,7 @@ from flask import Flask
 from . import config
 from .db import Database
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = ["create_app", "__version__"]
 
@@ -41,10 +41,12 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     from .blueprints.admin import bp as admin_bp
     from .blueprints.dashboard import bp as dashboard_bp
+    from .blueprints.msq import bp as msq_bp
     from .blueprints.proxy import bp as proxy_bp
 
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(msq_bp)
     app.register_blueprint(proxy_bp)
 
     from .cors import register_cors
@@ -60,6 +62,10 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     app.extensions["midware_model_refresh"] = lambda: refresh_if_stale(app)
     app.before_request(_maybe_refresh_models)
+
+    from .msq import start_scheduler
+
+    start_scheduler(app)
 
     return app
 
