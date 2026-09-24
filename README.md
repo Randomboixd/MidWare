@@ -6,11 +6,11 @@ MidWare sits between your application and your LLM providers. It gives you one O
 
 It's intentionally boring. One container. SQLite. No Kubernetes-powered distributed microservice nightmare. Just middleware.
 
-> \*\*⚠️ This is a vibecoded project.\*\*
+> **⚠️ This is a vibecoded project.**
 >
-> A large portion of MidWare was built with \*\*DeepSeek Flash\*\* through OpenCode. I originally picked it because I wanted to test the model properly, and honestly, it looked like a fucking good deal.
+> A large portion of MidWare was built with **DeepSeek Flash** through OpenCode. I originally picked it because I wanted to test the model properly, and honestly, it looked like a fucking good deal.
 >
-> At the time of writing, the total DeepSeek API cost of building this thing was roughly \*\*$2.12 USD (\~700 HUF)\*\*.
+> At the time of writing, the total DeepSeek API cost of building this thing was roughly **$2.12 USD (~700 HUF)**.
 >
 > There are absolutely human touches in here, especially around the UI, architecture, security decisions, debugging, and the parts where I had to stop the AI from doing something stupid.
 >
@@ -132,7 +132,7 @@ MidWare is designed around the idea that upstream API credentials should stay on
 
 Clients receive `mw-...` keys instead.
 
-The admin interface is separately protected with HTTP Basic Authentication, while `/v1/\*` uses MidWare API keys.
+The admin interface is separately protected with HTTP Basic Authentication, while `/v1/*` uses MidWare API keys.
 
 For anything exposed beyond a trusted local network, use HTTPS. Running Basic Auth over plain HTTP means the credentials are not encrypted in transit.
 
@@ -164,7 +164,7 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "${PORT:-5000}"
-      MIDWARE\_SECRET\_KEY: "${MIDWARE\_SECRET\_KEY:?set MIDWARE\_SECRET\_KEY}"
+      MIDWARE_SECRET_KEY: "${MIDWARE_SECRET_KEY:?set MIDWARE_SECRET_KEY}"
     volumes:
       - ./appdata:/data
 ```
@@ -177,24 +177,24 @@ The `appdata` directory contains MidWare's persistent data, including its SQLite
 
 ### Setting the secret key
 
-`MIDWARE\_SECRET\_KEY` should be a long, random secret. Don't just use `password123`, your cat's name, or the output of `echo "lol"`.
+`MIDWARE_SECRET_KEY` should be a long, random secret. Don't just use `password123`, your cat's name, or the output of `echo "lol"`.
 
 Python's `secrets` module can generate one:
 
 ```bash
-python -c "import secrets; print(secrets.token\_hex(32))"
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 Then put the generated value into your environment:
 
 ```bash
-export MIDWARE\_SECRET\_KEY="your-generated-secret-here"
+export MIDWARE_SECRET_KEY="your-generated-secret-here"
 ```
 
 Or create a `.env` file next to your `compose.yml`:
 
 ```dotenv
-MIDWARE\_SECRET\_KEY=your-generated-secret-here
+MIDWARE_SECRET_KEY=your-generated-secret-here
 ```
 
 Keep this secret private. If you change it later, make sure you understand the effects on the existing MidWare instance before doing so.
