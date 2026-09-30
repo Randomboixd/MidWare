@@ -150,3 +150,73 @@ def test_filters_scope_totals():
 
     assert db.usage_totals("day")["total_tokens"] == 100
     assert db.usage_totals("day", api_key_id=first["id"])["total_tokens"] == 10
+
+
+def _record(db, key_id, *, total, latency=10):
+    db.record_request(
+        api_key_id=key_id, route_id=None, method="POST", request_path="p",
+        model="m", status_code=200, latency_ms=latency, streamed=False,
+        prompt_tokens=total, completion_tokens=0, total_tokens=total,
+    )
+
+
+def test_totals_survive_pruning():
+    db = make_db()
+    db.set_setting("request_log_limit", "2")
+    key = db.get_api_key_by_token(db.create_api_key("k"))
+
+    for index in range(1, 6):
+        _record(db, key["id"], total=index * 10)
+
+    db.prune_requests(key["id"])
+    assert db.count_requests() == 2
+
+    listed = [row for row in db.list_api_keys() if row["id"] == key["id"]][0]
+    assert listed["request_count"] == 5
+    assert listed["token_count"] == 150
+
+    assert db.usage_totals("day")["requests"] == 5
+    assert db.usage_totals("day")["total_tokens"] == 150
+    assert db.usage_totals("day")["avg_latency_ms"] == 10
+
+    overview = db.overview()
+    assert overview["all_time"]["requests"] == 5
+    assert overview["all_time"]["total_tokens"] == 150
+    assert overview["all_time"]["avg_latency_ms"] == 10
+    assert db.heatmap(weeks=2)["total_tokens"] == 150
+
+
+def test_purge_keeps_ledger_totals():
+    db = make_db()
+    key = db.get_api_key_by_token(db.create_api_key("k"))
+    _record(db, key["id"], total=42)
+
+    assert db.purge_requests() == 1
+    assert db.count_requests() == 0
+
+    listed = [row for row in db.list_api_keys() if row["id"] == key["id"]][0]
+    assert listed["request_count"] == 1
+    assert listed["token_count"] == 42
+    assert db.usage_totals("day")["total_tokens"] == 42
+
+
+def test_backfill_seeds_ledger_once(tmp_path):
+    from midware.db import Database
+
+    path = tmp_path / "ledger.db"
+    db = Database(str(path))
+    db.init_schema()
+    key = db.get_api_key_by_token(db.create_api_key("k"))
+    _record(db, key["id"], total=30)
+    db.prune_requests(key["id"])
+    conn = db.conn
+    conn.execute("DELETE FROM usage_daily")
+    conn.commit()
+
+    reopened = Database(str(path))
+    reopened.init_schema()
+    assert reopened.usage_totals("day")["total_tokens"] == 30
+
+    reopened.init_schema()
+    assert reopened.usage_totals("day")["total_tokens"] == 30
+    assert reopened.count_requests() == 1

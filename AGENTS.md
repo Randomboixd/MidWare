@@ -113,11 +113,18 @@ this development environment, so Docker changes are verified by reading only.
   penalties JSON, response_excerpt, error)` — one probe result; `penalties` is a JSON
   list of `{"reason", "points", "kind", "passed"}` (the checked-to-be-clean cases are
   stored with `passed: true`, `points: 0`) that the chart tooltip reads back verbatim.
+- `usage_daily(day, api_key_id, route_id, requests, prompt_tokens, completion_tokens,
+  total_tokens, latency_ms_total, PK(day, api_key_id, route_id))` — the permanent
+  usage ledger, upserted inside `record_request`. `api_key_id`/`route_id` use `-1`
+  for "none" because SQLite treats `NULL`s as distinct in a PRIMARY KEY. Pruning the
+  `requests` log never touches it, so totals only ever grow.
 
 `init_schema()` calls `_migrate()` **before** `executescript(SCHEMA)` because
 `CREATE TABLE IF NOT EXISTS` will not reshape an old `requests` table. To add a
 column, append it to the `added` dict in `_migrate()` (with a `DEFAULT` if the column
-is `NOT NULL`) and to the `SCHEMA` string, then update `record_request`.
+is `NOT NULL`) and to the `SCHEMA` string, then update `record_request`. Afterwards
+`_backfill_usage_daily()` seeds the ledger from whatever rows survived pruning — but
+only while the ledger is empty, so restarts never double-count.
 
 ## Key behaviours and invariants
 
@@ -146,6 +153,11 @@ Do not break these; several have regression tests.
   all-zero on a non-error response, fall back to `tokens.estimate_usage` and record
   `token_source` (`upstream` / `tiktoken` / `chars` / `none`). Error responses are
   **never** given estimated tokens. `token_source` is surfaced in the request UI.
+  Headline totals (keys page `request_count`/`token_count`, `usage_totals`, `_all_time`,
+  `daily_usage`/heatmap) are summed from the permanent `usage_daily` ledger, never from
+  `requests`, so hitting `request_log_limit` cannot freeze a counter. `model_usage`
+  and `host_usage` still read `requests` and therefore describe only the retained
+  window. `purge_requests` clears the log and leaves the ledger alone.
 - **SSE parsing** (`parse_sse_events`): events end at blank lines. Captured bodies
   sometimes lose separators, so a `data:` line inside an event only starts a new
   event when the previous payload is complete JSON, or the previous payload was not a
@@ -249,7 +261,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `190 passed` — **update this number whenever the test count changes.**
+  `193 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

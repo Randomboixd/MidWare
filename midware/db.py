@@ -155,6 +155,21 @@ CREATE TABLE IF NOT EXISTS msq_checks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_msq_checks_recorder ON msq_checks(recorder_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day               TEXT    NOT NULL,
+    api_key_id        INTEGER NOT NULL DEFAULT -1,
+    route_id          INTEGER NOT NULL DEFAULT -1,
+    requests          INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens      INTEGER NOT NULL DEFAULT 0,
+    latency_ms_total  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, api_key_id, route_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_daily_key   ON usage_daily(api_key_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_daily_route ON usage_daily(route_id, day);
 """
 
 
@@ -234,6 +249,35 @@ class Database:
         self._migrate()
         with self.write() as conn:
             conn.executescript(SCHEMA)
+        self._backfill_usage_daily()
+
+    def _backfill_usage_daily(self) -> None:
+        """Seed the ledger from whatever rows survived pruning, once.
+
+        Runs only while the ledger is empty, so a restart never double-counts;
+        tokens already pruned away cannot be recovered.
+        """
+        with self.write() as conn:
+            if conn.execute("SELECT COUNT(*) FROM usage_daily").fetchone()[0]:
+                return
+            conn.execute(
+                """
+                INSERT INTO usage_daily (
+                    day, api_key_id, route_id, requests, prompt_tokens,
+                    completion_tokens, total_tokens, latency_ms_total
+                )
+                SELECT substr(created_at, 1, 10),
+                       COALESCE(api_key_id, -1),
+                       COALESCE(route_id, -1),
+                       COUNT(*),
+                       COALESCE(SUM(prompt_tokens), 0),
+                       COALESCE(SUM(completion_tokens), 0),
+                       COALESCE(SUM(total_tokens), 0),
+                       COALESCE(SUM(latency_ms), 0)
+                FROM requests
+                GROUP BY 1, 2, 3
+                """
+            )
 
     def _migrate(self) -> None:
         """Bring pre-existing databases up to the current schema.
@@ -257,6 +301,11 @@ class Database:
                     "route_id": "INTEGER",
                     "api_key_id": "INTEGER",
                     "token_source": "TEXT NOT NULL DEFAULT 'upstream'",
+                    "latency_ms": "INTEGER NOT NULL DEFAULT 0",
+                    "streamed": "INTEGER NOT NULL DEFAULT 0",
+                    "prompt_tokens": "INTEGER NOT NULL DEFAULT 0",
+                    "completion_tokens": "INTEGER NOT NULL DEFAULT 0",
+                    "total_tokens": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
 
@@ -944,8 +993,10 @@ class Database:
         return self._rows(
             """
             SELECT k.*,
-                   (SELECT COUNT(*) FROM requests r WHERE r.api_key_id = k.id) AS request_count,
-                   (SELECT COALESCE(SUM(r.total_tokens), 0) FROM requests r WHERE r.api_key_id = k.id) AS token_count
+                   (SELECT COALESCE(SUM(u.requests), 0) FROM usage_daily u
+                    WHERE u.api_key_id = k.id) AS request_count,
+                   (SELECT COALESCE(SUM(u.total_tokens), 0) FROM usage_daily u
+                    WHERE u.api_key_id = k.id) AS token_count
             FROM api_keys k
             WHERE k.is_system = 0
             ORDER BY k.id
@@ -987,6 +1038,7 @@ class Database:
         model_raw: str | None = None,
         host_prefix: str | None = None,
     ) -> int:
+        now = utcnow()
         with self.write() as conn:
             cur = conn.execute(
                 """
@@ -998,7 +1050,7 @@ class Database:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    to_iso(utcnow()),
+                    to_iso(now),
                     request_path,
                     method,
                     model,
@@ -1019,7 +1071,59 @@ class Database:
                     api_key_id,
                 ),
             )
+            self._bump_usage(
+                conn,
+                day=to_iso(now)[:10],
+                api_key_id=api_key_id,
+                route_id=route_id,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=latency_ms,
+            )
             return int(cur.lastrowid)
+
+    @staticmethod
+    def _bump_usage(
+        conn: sqlite3.Connection,
+        *,
+        day: str,
+        api_key_id: int | None,
+        route_id: int | None,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        latency_ms: int,
+    ) -> None:
+        """Fold one request into the permanent per-day ledger.
+
+        Totals read ``usage_daily`` rather than ``requests`` so pruning the log
+        can never shrink a headline number. ``-1`` stands in for "no key"/"no
+        route" because SQLite treats NULLs as distinct in a PRIMARY KEY.
+        """
+        conn.execute(
+            """
+            INSERT INTO usage_daily (
+                day, api_key_id, route_id, requests, prompt_tokens,
+                completion_tokens, total_tokens, latency_ms_total
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+            ON CONFLICT(day, api_key_id, route_id) DO UPDATE SET
+                requests          = requests + 1,
+                prompt_tokens     = prompt_tokens + excluded.prompt_tokens,
+                completion_tokens = completion_tokens + excluded.completion_tokens,
+                total_tokens      = total_tokens + excluded.total_tokens,
+                latency_ms_total  = latency_ms_total + excluded.latency_ms_total
+            """,
+            (
+                day,
+                api_key_id if api_key_id is not None else -1,
+                route_id if route_id is not None else -1,
+                int(prompt_tokens),
+                int(completion_tokens),
+                int(total_tokens),
+                int(latency_ms),
+            ),
+        )
 
     def list_requests(
         self,
@@ -1122,8 +1226,8 @@ class Database:
         now: datetime | None = None,
     ) -> dict[str, Any]:
         start = to_iso(window_start(period, now))
-        clauses = ["created_at >= ?"]
-        params: list[Any] = [start]
+        clauses = ["day >= ?"]
+        params: list[Any] = [start[:10]]
         if api_key_id is not None:
             clauses.append("api_key_id = ?")
             params.append(api_key_id)
@@ -1132,12 +1236,15 @@ class Database:
             params.append(route_id)
         row = self._row(
             f"""
-            SELECT COUNT(*)                            AS requests,
+            SELECT COALESCE(SUM(requests), 0)          AS requests,
                    COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                    COALESCE(SUM(total_tokens), 0)      AS total_tokens,
-                   COALESCE(AVG(latency_ms), 0)        AS avg_latency_ms
-            FROM requests
+                   CASE WHEN COALESCE(SUM(requests), 0) > 0
+                        THEN COALESCE(SUM(latency_ms_total), 0) * 1.0
+                             / SUM(requests)
+                        ELSE 0 END                     AS avg_latency_ms
+            FROM usage_daily
             WHERE {' AND '.join(clauses)}
             """,
             tuple(params),
@@ -1162,8 +1269,8 @@ class Database:
         """Token totals per UTC calendar day, keyed by ISO date string."""
         now = now or utcnow()
         start = window_start("day", now) - timedelta(days=max(days - 1, 0))
-        clauses = ["created_at >= ?"]
-        params: list[Any] = [to_iso(start)]
+        clauses = ["day >= ?"]
+        params: list[Any] = [to_iso(start)[:10]]
         if api_key_id is not None:
             clauses.append("api_key_id = ?")
             params.append(api_key_id)
@@ -1172,12 +1279,12 @@ class Database:
             params.append(route_id)
         rows = self._rows(
             f"""
-            SELECT substr(created_at, 1, 10) AS day,
-                   COUNT(*)                  AS requests,
+            SELECT day,
+                   SUM(requests)                  AS requests,
                    COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                    COALESCE(SUM(total_tokens), 0)      AS total_tokens
-            FROM requests
+            FROM usage_daily
             WHERE {' AND '.join(clauses)}
             GROUP BY day
             """,
@@ -1293,12 +1400,15 @@ class Database:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         row = self._row(
             f"""
-            SELECT COUNT(*)                            AS requests,
+            SELECT COALESCE(SUM(requests), 0)          AS requests,
                    COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                    COALESCE(SUM(total_tokens), 0)      AS total_tokens,
-                   COALESCE(AVG(latency_ms), 0)        AS avg_latency_ms
-            FROM requests {where}
+                   CASE WHEN COALESCE(SUM(requests), 0) > 0
+                        THEN COALESCE(SUM(latency_ms_total), 0) * 1.0
+                             / SUM(requests)
+                        ELSE 0 END                     AS avg_latency_ms
+            FROM usage_daily {where}
             """,
             tuple(params),
         )
