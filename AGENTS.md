@@ -107,7 +107,8 @@ this development environment, so Docker changes are verified by reading only.
   `MSQ Measurements` system key, and `collect_needle` files the needle probe too (only
   when request recording is on); `ignore_thinking` (default on) scores only the visible
   answer, so reasoning models are not penalised for drafting themselves in their think
-  block.
+  block. The panel chart draws only the newest `MSQ_CHART_LIMIT` (10) checks, while
+  evaluation still reads the full `MSQ_HISTORY_LIMIT` window.
 - `msq_checks(id, recorder_id FK CASCADE, created_at, status_code, ok, ttft_ms,
   total_ms, generation_ms, completion_tokens, tokens_per_second, score, hard_fail,
   penalties JSON, response_excerpt, error)` — one probe result; `penalties` is a JSON
@@ -261,7 +262,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `193 passed` — **update this number whenever the test count changes.**
+  `194 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

@@ -233,6 +233,23 @@ def test_msq_pages_render(configured_client):
     assert client.get("/admin/msq/new").status_code == 200
 
 
+def test_msq_chart_draws_only_recent_checks(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    recorder_id = make_recorder(db, db.active_route()["id"])
+    for index in range(50):
+        db.record_msq_check(recorder_id=recorder_id, ok=True, score=100.0 - index)
+
+    html = client.get("/admin/msq/").get_data(as_text=True)
+    payload = json.loads(re.search(r'id="msq-data" type="application/json">(.*?)</script>', html, re.S).group(1))
+    points = payload[str(recorder_id)]
+
+    limit = client.application.config["MSQ_CHART_LIMIT"]
+    assert len(points) == limit == 10
+    assert [point["score"] for point in points] == [100.0 - index for index in range(40, 50)]
+    assert [point["i"] for point in points] == list(range(10))
+
+
 def test_msq_create_and_delete(configured_client):
     client, _ = configured_client
     db = client.application.extensions["midware_db"]

@@ -203,6 +203,8 @@ def _dashboard(db) -> list[dict]:
     cards: list[dict] = []
     for recorder in db.list_msq_recorders():
         checks = db.list_msq_checks(recorder["id"], limit=config["MSQ_HISTORY_LIMIT"])
+        chart_limit = max(1, int(config.get("MSQ_CHART_LIMIT", 10)))
+        chart_checks = checks[-chart_limit:]
         route = db.get_route(recorder["route_id"]) if recorder["route_id"] else None
         cards.append(
             {
@@ -216,7 +218,10 @@ def _dashboard(db) -> list[dict]:
                     min_checks=config["MSQ_MIN_CHECKS"],
                     degraded_threshold=config["MSQ_DEGRADED_THRESHOLD"],
                 ),
-                "points": [chart_point(check, index) for index, check in enumerate(checks)],
+                "points": [
+                    chart_point(check, index)
+                    for index, check in enumerate(chart_checks)
+                ],
             }
         )
     return cards
