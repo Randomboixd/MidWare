@@ -79,13 +79,19 @@ this development environment, so Docker changes are verified by reading only.
 
 - `api_keys(id, name, description, token UNIQUE, cors_allow_origin,
   allow_premodels, restrict_premodels, allowed_premodel_ids, restrict_providers,
-  allowed_route_ids, restrict_models, allowed_model_ids, is_system, created_at,
-  last_used_at)` — `is_system` rows (the auto-created `MSQ Measurements` owner) are
-  skipped by `list_api_keys`/`count_api_keys` but still name rows in the request log.
+  allowed_route_ids, restrict_models, allowed_model_ids, is_system,
+  limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
+  limit_requests_enabled, limit_requests_{minute,hour,day,week},
+  max_requests_{minute,hour,day,week}, created_at, last_used_at)` — `is_system`
+  rows (the auto-created `MSQ Measurements` owner) are skipped by
+  `list_api_keys`/`count_api_keys` but still name rows in the request log.
   `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
   (`db.dump_id_list` / `db.parse_id_list`); `allowed_model_ids` holds a JSON array of
   `"<route_id>:<model_id>"` strings (`db.dump_model_list` / `db.parse_model_list`),
-  because a model id alone is not unique across providers.
+  because a model id alone is not unique across providers. The rate-limit columns
+  are all `INTEGER NOT NULL DEFAULT 0`: `limit_*_enabled` is the master switch,
+  `limit_*_<window>` ticks a child window, and `max_*_<window>` is its cap (`0` =
+  unlimited for that window).
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, created_at)`
 - `requests(id, created_at, request_path, method, model, model_raw, host_prefix,
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
@@ -119,6 +125,11 @@ this development environment, so Docker changes are verified by reading only.
   usage ledger, upserted inside `record_request`. `api_key_id`/`route_id` use `-1`
   for "none" because SQLite treats `NULL`s as distinct in a PRIMARY KEY. Pruning the
   `requests` log never touches it, so totals only ever grow.
+- `rate_usage(api_key_id FK CASCADE, kind, window, window_start, amount,
+  PK(api_key_id, kind, window, window_start))` — fixed-window rate-limit counters.
+  `kind` is `requests` or `tokens`; `window` is `minute`/`hour`/`day`/`week` floored
+  to UTC (`rate_window_start`, week = Monday); `amount` is the consumption in the
+  current window only. Rows older than 14 days are pruned on write.
 
 `init_schema()` calls `_migrate()` **before** `executescript(SCHEMA)` because
 `CREATE TABLE IF NOT EXISTS` will not reshape an old `requests` table. To add a
@@ -159,6 +170,21 @@ Do not break these; several have regression tests.
   `requests`, so hitting `request_log_limit` cannot freeze a counter. `model_usage`
   and `host_usage` still read `requests` and therefore describe only the retained
   window. `purge_requests` clears the log and leaves the ledger alone.
+- **Per-key rate limits** (`proxy._rate_limit_check`): opt-in per key — the
+  `limit_*_enabled` master switch must be on *and* a child window ticked *and* its
+  `max_*` above `0`. The check runs in `_forward` after the route/model permission
+  checks and **before** any upstream I/O, for both `/v1/*` and `/proxy/*`;
+  `GET /v1/models` is exempt. Request quotas are claimed with
+  `db.rate_usage_claim` — one transaction bumps every enabled window, and any
+  window landing over its cap rolls the whole claim back, so a rejected attempt
+  never eats quota. Token quotas are read at request time and settled afterwards
+  in `_persist` from the final `total_tokens` (0 on error responses), so a single
+  response may slightly overshoot a token cap before the 429s start. Over-quota
+  gets `429` + `Retry-After` (seconds to the window end) with codes
+  `request_limit_exceeded` / `token_limit_exceeded`
+  (`type: midware_rate_limit_error`), and the rejection is still logged as a
+  `429` request row (`error = "rate_limited: <code>"`). Keys with no limits in
+  force do zero counter writes.
 - **SSE parsing** (`parse_sse_events`): events end at blank lines. Captured bodies
   sometimes lose separators, so a `data:` line inside an event only starts a new
   event when the previous payload is complete JSON, or the previous payload was not a
@@ -262,7 +288,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `194 passed` — **update this number whenever the test count changes.**
+  `206 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

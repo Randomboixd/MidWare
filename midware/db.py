@@ -31,6 +31,22 @@ CREATE TABLE IF NOT EXISTS api_keys (
     restrict_models     INTEGER NOT NULL DEFAULT 0,
     allowed_model_ids   TEXT,
     is_system           INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_enabled INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_hour    INTEGER NOT NULL DEFAULT 0,
+    max_tokens_hour      INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_day     INTEGER NOT NULL DEFAULT 0,
+    max_tokens_day       INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_week    INTEGER NOT NULL DEFAULT 0,
+    max_tokens_week      INTEGER NOT NULL DEFAULT 0,
+    limit_requests_enabled INTEGER NOT NULL DEFAULT 0,
+    limit_requests_minute  INTEGER NOT NULL DEFAULT 0,
+    max_requests_minute    INTEGER NOT NULL DEFAULT 0,
+    limit_requests_hour    INTEGER NOT NULL DEFAULT 0,
+    max_requests_hour      INTEGER NOT NULL DEFAULT 0,
+    limit_requests_day     INTEGER NOT NULL DEFAULT 0,
+    max_requests_day       INTEGER NOT NULL DEFAULT 0,
+    limit_requests_week    INTEGER NOT NULL DEFAULT 0,
+    max_requests_week      INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -170,6 +186,17 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 
 CREATE INDEX IF NOT EXISTS idx_usage_daily_key   ON usage_daily(api_key_id, day);
 CREATE INDEX IF NOT EXISTS idx_usage_daily_route ON usage_daily(route_id, day);
+
+CREATE TABLE IF NOT EXISTS rate_usage (
+    api_key_id   INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    kind         TEXT    NOT NULL,
+    window       TEXT    NOT NULL,
+    window_start TEXT    NOT NULL,
+    amount       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (api_key_id, kind, window, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_usage_start ON rate_usage(window_start);
 """
 
 
@@ -205,6 +232,60 @@ def window_start(period: str, now: datetime | None = None) -> datetime:
     if period == "year":
         return datetime(now.year, 1, 1, tzinfo=timezone.utc)
     raise ValueError(f"unknown period: {period!r}")
+
+
+RATE_WINDOWS = ("minute", "hour", "day", "week")
+
+_WINDOW_SECONDS = {"minute": 60, "hour": 3600, "day": 86400, "week": 604800}
+
+TOKEN_LIMIT_WINDOWS = ("hour", "day", "week")
+REQUEST_LIMIT_WINDOWS = ("minute", "hour", "day", "week")
+
+LIMIT_FLAG_FIELDS = tuple(
+    ["limit_tokens_enabled", "limit_requests_enabled"]
+    + [f"limit_tokens_{window}" for window in TOKEN_LIMIT_WINDOWS]
+    + [f"limit_requests_{window}" for window in REQUEST_LIMIT_WINDOWS]
+)
+LIMIT_VALUE_FIELDS = tuple(
+    [f"max_tokens_{window}" for window in TOKEN_LIMIT_WINDOWS]
+    + [f"max_requests_{window}" for window in REQUEST_LIMIT_WINDOWS]
+)
+
+
+class _RateLimitHit(Exception):
+    """Internal: unwinds a rate_usage_claim transaction while keeping the counts."""
+
+    def __init__(self, counts: dict[str, int]):
+        super().__init__("rate limit hit")
+        self.counts = counts
+
+
+def rate_window_start(window: str, now: datetime | None = None) -> datetime:
+    """Inclusive UTC start of a fixed rate-limit window in RATE_WINDOWS.
+
+    Week windows start Monday. Fixed (not sliding) windows keep counting to a
+    single row lookup and reset on their own when the boundary passes.
+    """
+    now = now or utcnow()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    if window == "minute":
+        return now.replace(second=0, microsecond=0)
+    if window == "hour":
+        return now.replace(minute=0, second=0, microsecond=0)
+    if window == "day":
+        return datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    if window == "week":
+        day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        return day - timedelta(days=now.weekday())
+    raise ValueError(f"unknown rate window: {window!r}")
+
+
+def rate_window_end(window: str, now: datetime | None = None) -> datetime:
+    """Exclusive end of the window ``now`` falls in (used for Retry-After)."""
+    start = rate_window_start(window, now)
+    return start + timedelta(seconds=_WINDOW_SECONDS[window])
 
 
 class Database:
@@ -336,6 +417,22 @@ class Database:
                     "restrict_models": "INTEGER NOT NULL DEFAULT 0",
                     "allowed_model_ids": "TEXT",
                     "is_system": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_tokens_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_tokens_hour": "INTEGER NOT NULL DEFAULT 0",
+                    "max_tokens_hour": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_tokens_day": "INTEGER NOT NULL DEFAULT 0",
+                    "max_tokens_day": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_tokens_week": "INTEGER NOT NULL DEFAULT 0",
+                    "max_tokens_week": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_requests_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_requests_minute": "INTEGER NOT NULL DEFAULT 0",
+                    "max_requests_minute": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_requests_hour": "INTEGER NOT NULL DEFAULT 0",
+                    "max_requests_hour": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_requests_day": "INTEGER NOT NULL DEFAULT 0",
+                    "max_requests_day": "INTEGER NOT NULL DEFAULT 0",
+                    "limit_requests_week": "INTEGER NOT NULL DEFAULT 0",
+                    "max_requests_week": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
 
@@ -896,6 +993,8 @@ class Database:
         "allowed_route_ids",
         "restrict_models",
         "allowed_model_ids",
+        *LIMIT_FLAG_FIELDS,
+        *LIMIT_VALUE_FIELDS,
     )
 
     @staticmethod
@@ -915,6 +1014,22 @@ class Database:
         allowed_route_ids: list[int] | None = None,
         restrict_models: bool = False,
         allowed_model_ids: list[str] | None = None,
+        limit_tokens_enabled: bool = False,
+        limit_tokens_hour: bool = False,
+        max_tokens_hour: int = 0,
+        limit_tokens_day: bool = False,
+        max_tokens_day: int = 0,
+        limit_tokens_week: bool = False,
+        max_tokens_week: int = 0,
+        limit_requests_enabled: bool = False,
+        limit_requests_minute: bool = False,
+        max_requests_minute: int = 0,
+        limit_requests_hour: bool = False,
+        max_requests_hour: int = 0,
+        limit_requests_day: bool = False,
+        max_requests_day: int = 0,
+        limit_requests_week: bool = False,
+        max_requests_week: int = 0,
     ) -> str:
         token = self.generate_token()
         with self.write() as conn:
@@ -923,8 +1038,14 @@ class Database:
                 INSERT INTO api_keys (
                     name, description, token, cors_allow_origin, allow_premodels,
                     restrict_premodels, allowed_premodel_ids, restrict_providers,
-                    allowed_route_ids, restrict_models, allowed_model_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    allowed_route_ids, restrict_models, allowed_model_ids, created_at,
+                    limit_tokens_enabled, limit_tokens_hour, max_tokens_hour,
+                    limit_tokens_day, max_tokens_day, limit_tokens_week, max_tokens_week,
+                    limit_requests_enabled, limit_requests_minute, max_requests_minute,
+                    limit_requests_hour, max_requests_hour, limit_requests_day,
+                    max_requests_day, limit_requests_week, max_requests_week
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -939,6 +1060,22 @@ class Database:
                     int(bool(restrict_models)),
                     dump_model_list(allowed_model_ids),
                     to_iso(utcnow()),
+                    int(bool(limit_tokens_enabled)),
+                    int(bool(limit_tokens_hour)),
+                    max(0, int(max_tokens_hour)),
+                    int(bool(limit_tokens_day)),
+                    max(0, int(max_tokens_day)),
+                    int(bool(limit_tokens_week)),
+                    max(0, int(max_tokens_week)),
+                    int(bool(limit_requests_enabled)),
+                    int(bool(limit_requests_minute)),
+                    max(0, int(max_requests_minute)),
+                    int(bool(limit_requests_hour)),
+                    max(0, int(max_requests_hour)),
+                    int(bool(limit_requests_day)),
+                    max(0, int(max_requests_day)),
+                    int(bool(limit_requests_week)),
+                    max(0, int(max_requests_week)),
                 ),
             )
         return token
@@ -970,6 +1107,15 @@ class Database:
         for flag in ("allow_premodels", "restrict_premodels", "restrict_providers", "restrict_models"):
             if flag in updates:
                 updates[flag] = int(bool(updates[flag]))
+        for flag in LIMIT_FLAG_FIELDS:
+            if flag in updates:
+                updates[flag] = int(bool(updates[flag]))
+        for value in LIMIT_VALUE_FIELDS:
+            if value in updates:
+                try:
+                    updates[value] = max(0, int(updates[value]))
+                except (TypeError, ValueError):
+                    updates[value] = 0
         for ids in ("allowed_premodel_ids", "allowed_route_ids"):
             if ids in updates:
                 updates[ids] = dump_id_list(updates[ids])
@@ -1013,6 +1159,94 @@ class Database:
 
     def resolve_api_key(self, token: str | None) -> sqlite3.Row | None:
         return self.get_api_key_by_token(token or "")
+
+    # -- rate limits ---------------------------------------------------------
+
+    def _prune_rate_usage(self, conn: sqlite3.Connection, now: datetime | None = None) -> None:
+        """Drop counters older than any window we could ever read back."""
+        cutoff = to_iso((now or utcnow()) - timedelta(days=14))
+        conn.execute("DELETE FROM rate_usage WHERE window_start < ?", (cutoff,))
+
+    def rate_usage_amounts(
+        self, api_key_id: int, kind: str, windows: tuple[str, ...], now: datetime | None = None
+    ) -> dict[str, int]:
+        """Current consumption of ``kind`` for a key in each fixed window."""
+        counts: dict[str, int] = {}
+        for window in windows:
+            start = to_iso(rate_window_start(window, now))
+            counts[window] = int(
+                self._scalar(
+                    "SELECT amount FROM rate_usage "
+                    "WHERE api_key_id = ? AND kind = ? AND window = ? AND window_start = ?",
+                    (api_key_id, kind, window, start),
+                )
+                or 0
+            )
+        return counts
+
+    def rate_usage_add(
+        self, api_key_id: int, kind: str, amounts: dict[str, int], now: datetime | None = None
+    ) -> None:
+        """Add ``amounts`` ({window: delta}) to the key's current windows."""
+        items = {window: int(delta) for window, delta in amounts.items() if int(delta) > 0}
+        if not items:
+            return
+        with self.write() as conn:
+            for window, delta in items.items():
+                start = to_iso(rate_window_start(window, now))
+                conn.execute(
+                    """
+                    INSERT INTO rate_usage (api_key_id, kind, window, window_start, amount)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(api_key_id, kind, window, window_start)
+                    DO UPDATE SET amount = amount + excluded.amount
+                    """,
+                    (api_key_id, kind, window, start, delta),
+                )
+            self._prune_rate_usage(conn, now)
+
+    def rate_usage_claim(
+        self, api_key_id: int, limits: dict[str, int], now: datetime | None = None
+    ) -> tuple[dict[str, int], bool]:
+        """Count one request against every window in ``limits`` ({window: max}).
+
+        All-or-nothing: if any bump lands over its limit the transaction is
+        rolled back, so a rejected attempt never consumes quota. The counts
+        returned are what is actually stored — a rejection means at least one
+        window came back exactly at its limit.
+        """
+        if not limits:
+            return {}, True
+        try:
+            with self.write() as conn:
+                for window in limits:
+                    start = to_iso(rate_window_start(window, now))
+                    conn.execute(
+                        """
+                        INSERT INTO rate_usage (api_key_id, kind, window, window_start, amount)
+                        VALUES (?, 'requests', ?, ?, 1)
+                        ON CONFLICT(api_key_id, kind, window, window_start)
+                        DO UPDATE SET amount = amount + 1
+                        """,
+                        (api_key_id, window, start),
+                    )
+                counts = {
+                    window: int(
+                        conn.execute(
+                            "SELECT amount FROM rate_usage "
+                            "WHERE api_key_id = ? AND kind = 'requests' AND window = ? AND window_start = ?",
+                            (api_key_id, window, to_iso(rate_window_start(window, now))),
+                        ).fetchone()[0]
+                    )
+                    for window in limits
+                }
+                if any(counts[window] > limits[window] for window in limits):
+                    raise _RateLimitHit(counts)
+                self._prune_rate_usage(conn, now)
+        except _RateLimitHit as hit:
+            # the bumps were rolled back, so report what is actually stored
+            return {window: amount - 1 for window, amount in hit.counts.items()}, False
+        return counts, True
 
     # -- requests -----------------------------------------------------------
 

@@ -137,6 +137,39 @@ def test_msq_migration_adds_hardcore_columns(tmp_path):
     assert "is_system" in key_cols
 
 
+def test_rate_limit_migration_adds_columns(tmp_path):
+    from midware.db import Database
+
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    db.init_schema()
+
+    key_cols = {row["name"] for row in db._rows("PRAGMA table_info(api_keys)")}
+    tables = {
+        row["name"] for row in db._rows("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert "limit_tokens_enabled" in key_cols
+    assert "max_tokens_day" in key_cols
+    assert "limit_requests_minute" in key_cols
+    assert "max_requests_week" in key_cols
+    assert "rate_usage" in tables
+
+    token = db.create_api_key("migrated")
+    key = db.get_api_key_by_token(token)
+    assert key["limit_tokens_enabled"] == 0
+    assert key["max_requests_minute"] == 0
+
+
 def test_filters_scope_totals():
     db = make_db()
     first = db.get_api_key_by_token(db.create_api_key("a"))

@@ -4,6 +4,8 @@
 {% set advanced_open = (not form.get('allow_premodels', True))
    or form.get('restrict_premodels', False)
    or form.get('restrict_providers', False)
+   or form.get('limit_tokens_enabled', False)
+   or form.get('limit_requests_enabled', False)
    or form.get('cors_allow_origin', '*') != '*' %}
 
 {% block content %}
@@ -116,6 +118,55 @@
       {% else %}
         <p><small>No models discovered yet. Refresh the catalogue from the Routes page.</small></p>
       {% endif %}
+    </div>
+
+    <h3>Token limits</h3>
+    <label>
+      <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1"
+             {% if form.get('limit_tokens_enabled') %}checked{% endif %}>
+      Set maximum tokens
+    </label>
+    <div id="limit-tokens-panel" hidden>
+      <small>Once this key has spent the configured tokens inside a window, further
+        requests are rejected with a 429 until the window resets. Untick a window
+        (or leave its box empty) to leave it unlimited.</small>
+      <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+        {% for window, label in (('hour', 'Per hour'), ('day', 'Per day'), ('week', 'Per week')) %}
+        <label>
+          <input type="checkbox" name="limit_tokens_{{ window }}" value="1"
+                 {% if form.get('limit_tokens_' ~ window) %}checked{% endif %}>
+          {{ label }}
+          <input type="number" name="max_tokens_{{ window }}" min="0" step="1"
+                 placeholder="Max tokens"
+                 value="{{ form.get('max_tokens_' ~ window) or '' }}">
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <h3>Request limits</h3>
+    <label>
+      <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1"
+             {% if form.get('limit_requests_enabled') %}checked{% endif %}>
+      Set request limit
+    </label>
+    <div id="limit-requests-panel" hidden>
+      <small>Caps how many requests this key may send inside a window; the next
+        request past the cap gets a 429. Untick a window (or leave its box
+        empty) to leave it unlimited.</small>
+      <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+        {% for window, label in (('minute', 'Per minute'), ('hour', 'Per hour'),
+                                 ('day', 'Per day'), ('week', 'Per week')) %}
+        <label>
+          <input type="checkbox" name="limit_requests_{{ window }}" value="1"
+                 {% if form.get('limit_requests_' ~ window) %}checked{% endif %}>
+          {{ label }}
+          <input type="number" name="max_requests_{{ window }}" min="0" step="1"
+                 placeholder="Max requests"
+                 value="{{ form.get('max_requests_' ~ window) or '' }}">
+        </label>
+        {% endfor %}
+      </div>
     </div>
   </section>
 </article>

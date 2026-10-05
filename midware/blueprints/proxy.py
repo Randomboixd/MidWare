@@ -16,7 +16,15 @@ from flask import Blueprint, Response, current_app, g, request, stream_with_cont
 
 from ..auth import authenticate, get_db
 from ..cors import check_origin
-from ..db import model_key, parse_id_list, parse_model_list
+from ..db import (
+    REQUEST_LIMIT_WINDOWS,
+    TOKEN_LIMIT_WINDOWS,
+    model_key,
+    parse_id_list,
+    parse_model_list,
+    rate_window_end,
+    utcnow,
+)
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage
 from ..usage import (
@@ -102,6 +110,70 @@ def _premodel_allowed(limits: dict, premodel) -> bool:
 
 def _permission_error(message: str, code: str) -> Response:
     return _json_error(message, 403, code, "midware_permission_error")
+
+
+def _enabled_token_windows(api_key) -> tuple[str, ...]:
+    """Token windows with the master switch on, a child ticked, and a real cap."""
+    if not api_key["limit_tokens_enabled"]:
+        return ()
+    return tuple(
+        window
+        for window in TOKEN_LIMIT_WINDOWS
+        if api_key[f"limit_tokens_{window}"] and int(api_key[f"max_tokens_{window}"] or 0) > 0
+    )
+
+
+def _enabled_request_limits(api_key) -> dict[str, int]:
+    """Request windows in force as {window: max}; {} when nothing is limited."""
+    if not api_key["limit_requests_enabled"]:
+        return {}
+    return {
+        window: int(api_key[f"max_requests_{window}"] or 0)
+        for window in REQUEST_LIMIT_WINDOWS
+        if api_key[f"limit_requests_{window}"] and int(api_key[f"max_requests_{window}"] or 0) > 0
+    }
+
+
+def _rate_limit_error(window: str, message: str, code: str) -> Response:
+    response = _json_error(message, 429, code, "midware_rate_limit_error")
+    seconds = max(1, int((rate_window_end(window) - utcnow()).total_seconds()))
+    response.headers["Retry-After"] = str(seconds)
+    return response
+
+
+def _rate_limit_check(db, api_key) -> tuple[Response, str] | None:
+    """Reject a call that would push the key past a configured quota.
+
+    Request counters are claimed atomically (all windows or none) so a rejected
+    attempt never eats quota; token counters are settled after the response in
+    ``_persist`` because only the upstream knows the final usage.
+    """
+    token_windows = _enabled_token_windows(api_key)
+    if token_windows:
+        counts = db.rate_usage_amounts(api_key["id"], "tokens", token_windows)
+        for window in token_windows:
+            limit = int(api_key[f"max_tokens_{window}"] or 0)
+            if counts[window] >= limit:
+                message = (
+                    f"Token limit reached for this API key: {counts[window]}/{limit} "
+                    f"tokens used this {window}."
+                )
+                return _rate_limit_error(window, message, "token_limit_exceeded"), "token_limit_exceeded"
+
+    request_limits = _enabled_request_limits(api_key)
+    if request_limits:
+        counts, ok = db.rate_usage_claim(api_key["id"], request_limits)
+        if not ok:
+            window = next(w for w in request_limits if counts[w] >= request_limits[w])
+            message = (
+                f"Request limit reached for this API key: {counts[window]}/"
+                f"{request_limits[window]} requests sent this {window}."
+            )
+            return (
+                _rate_limit_error(window, message, "request_limit_exceeded"),
+                "request_limit_exceeded",
+            )
+    return None
 
 
 def _authorize(ctx: dict) -> tuple[dict, int] | None:
@@ -391,6 +463,14 @@ def _persist(
         except (ValueError, TypeError):
             upstream_request_id = None
 
+    token_windows = _enabled_token_windows(api_key)
+    if token_windows:
+        db.rate_usage_add(
+            api_key["id"],
+            "tokens",
+            {window: total for window in token_windows},
+        )
+
     db.record_request(
         api_key_id=api_key["id"],
         route_id=route["id"],
@@ -515,6 +595,19 @@ def _forward(ctx: dict, path: str) -> Response:
             host_prefix=host_prefix,
             **kwargs,
         )
+
+    rate_error = _rate_limit_check(db, ctx["api_key"])
+    if rate_error:
+        response, code = rate_error
+        persist(
+            model=model,
+            status_code=429,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            streamed=False,
+            response_body=None,
+            error=f"rate_limited: {code}",
+        )
+        return response
 
     try:
         upstream = client.send(

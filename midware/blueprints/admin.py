@@ -17,6 +17,7 @@ from flask import (
 
 from .. import adminauth
 from ..auth import get_db
+from ..db import LIMIT_FLAG_FIELDS, LIMIT_VALUE_FIELDS
 from ..models import probe_route, refresh_all
 from ..premodels import (
     DESCRIPTION_MAX,
@@ -29,6 +30,8 @@ from ..premodels import (
 )
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+_LIMIT_MAX = 1_000_000_000_000
 
 
 @bp.before_request
@@ -288,7 +291,7 @@ def _form_model_ids(name: str) -> list[str]:
 def _key_form_from_row(row) -> dict:
     from ..db import parse_id_list, parse_model_list
 
-    return {
+    form = {
         "name": row["name"],
         "description": row["description"] or "",
         "cors_allow_origin": row["cors_allow_origin"],
@@ -300,6 +303,11 @@ def _key_form_from_row(row) -> dict:
         "restrict_models": bool(row["restrict_models"]),
         "allowed_model_ids": sorted(parse_model_list(row["allowed_model_ids"])),
     }
+    for flag in LIMIT_FLAG_FIELDS:
+        form[flag] = bool(row[flag])
+    for value in LIMIT_VALUE_FIELDS:
+        form[value] = int(row[value] or 0)
+    return form
 
 
 def _read_key_form() -> tuple[dict, list[str]]:
@@ -315,6 +323,12 @@ def _read_key_form() -> tuple[dict, list[str]]:
         "restrict_models": _form_bool("restrict_models"),
         "allowed_model_ids": _form_model_ids("allowed_model_ids"),
     }
+    # Children survive a master toggle in the form; enforcement is gated on the
+    # master flag alone, so re-enabling restores the previous configuration.
+    for flag in LIMIT_FLAG_FIELDS:
+        fields[flag] = _form_bool(flag)
+    for value in LIMIT_VALUE_FIELDS:
+        fields[value] = _form_int(value, 0, maximum=_LIMIT_MAX)
     if not fields["restrict_models"]:
         fields["allowed_model_ids"] = []
     errors: list[str] = []

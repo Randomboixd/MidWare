@@ -17,6 +17,10 @@
   var modelPanel = document.getElementById("model-panel");
   var enableAllModels = document.getElementById("models-enable-all");
   var disableAllModels = document.getElementById("models-disable-all");
+  var limitTokens = document.getElementById("limit-tokens");
+  var limitTokensPanel = document.getElementById("limit-tokens-panel");
+  var limitRequests = document.getElementById("limit-requests");
+  var limitRequestsPanel = document.getElementById("limit-requests-panel");
 
   var routeBoxes = Array.prototype.slice.call(
     form.querySelectorAll('input[name="allowed_route_ids"]')
@@ -65,6 +69,15 @@
     });
   }
 
+  function syncLimitPanels() {
+    if (limitTokensPanel && limitTokens) {
+      limitTokensPanel.hidden = !limitTokens.checked;
+    }
+    if (limitRequestsPanel && limitRequests) {
+      limitRequestsPanel.hidden = !limitRequests.checked;
+    }
+  }
+
   if (toggle && panel) {
     toggle.addEventListener("click", function () {
       panel.hidden = false;
@@ -101,10 +114,17 @@
       setVisibleModels(false);
     });
   }
+  if (limitTokens) {
+    limitTokens.addEventListener("change", syncLimitPanels);
+  }
+  if (limitRequests) {
+    limitRequests.addEventListener("change", syncLimitPanels);
+  }
 
   syncPremodels();
   if (providerPanel && restrictProviders) {
     providerPanel.hidden = !restrictProviders.checked;
   }
   syncModels();
+  syncLimitPanels();
 })();
