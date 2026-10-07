@@ -63,6 +63,9 @@
            placeholder="sk-..." value="{{ form.get('upstream_key', '') }}">
     <small>Stored locally in SQLite and injected into upstream requests. Clients never see it.</small>
   </label>
+  <input type="hidden" name="provider" value="">
+
+  {% include "_signin.html" %}
 
   <label>
     <input type="checkbox" name="test_connection" value="1"
@@ -96,4 +99,14 @@
 <pre class="mono">export OPENAI_BASE_URL="{{ request.url_root }}v1"
 export OPENAI_API_KEY="&lt;the MidWare key you just created&gt;"</pre>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.MidWareSignin = {
+    start: {{ url_for('admin.signin_start') | tojson }},
+    poll: {{ url_for('admin.signin_poll') | tojson }}
+  };
+</script>
+<script src="{{ url_for('static', filename='signin.js') }}"></script>
 {% endblock %}

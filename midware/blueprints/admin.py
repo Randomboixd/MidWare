@@ -9,14 +9,16 @@ from flask import (
     abort,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
     url_for,
 )
 
-from .. import adminauth
+from .. import adminauth, signin
 from ..auth import get_db
+from ..balance import fetch_balance
 from ..db import LIMIT_FLAG_FIELDS, LIMIT_VALUE_FIELDS
 from ..models import probe_route, refresh_all
 from ..premodels import (
@@ -33,9 +35,21 @@ bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 _LIMIT_MAX = 1_000_000_000_000
 
+# The sign-in helpers must answer before an account exists: the bootstrap setup
+# page offers them too, and the OpenRouter callback arrives on a redirect from
+# another tab. Their tokens are unguessable capabilities, so possession of one
+# is the check until the instance is claimed.
+_SIGNIN_ENDPOINTS = {
+    "admin.signin_start",
+    "admin.signin_poll",
+    "admin.signin_openrouter_callback",
+}
+
 
 @bp.before_request
 def _require_login():
+    if request.endpoint in _SIGNIN_ENDPOINTS and not adminauth.credentials_configured():
+        return None
     return adminauth.guard_admin()
 
 
@@ -53,6 +67,17 @@ def _form_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _form_provider() -> str:
+    """The sign-in provider tag, or '' when the form was filled by hand.
+
+    The value only ever arrives from a hidden field that signin.js fills after
+    a successful sign-in, but it is still validated against the provider table
+    so a forged submit cannot claim a service MidWare does not know.
+    """
+    raw = (request.form.get("provider") or "").strip().lower()
+    return raw if raw in signin.PROVIDERS else ""
 
 
 def _flash_refresh(result: dict) -> None:
@@ -161,6 +186,7 @@ def setup():
             upstream_key=upstream_key,
             api_key_id=api_key_id,
             is_active=True,
+            provider=_form_provider(),
         )
         db.set_setting("request_log_limit", str(log_limit))
         if creating_credentials:
@@ -205,6 +231,7 @@ def routes():
                     target_host=target_host,
                     upstream_key=upstream_key,
                     is_active=not existing,
+                    provider=_form_provider(),
                 )
                 db.mark_configured()
                 flash(f"Route '{name}' created.", "success")
@@ -235,6 +262,11 @@ def routes():
                     updates = {"name": name, "target_host": target_host}
                     if upstream_key:
                         updates["upstream_key"] = upstream_key
+                    provider = _form_provider()
+                    if provider:
+                        # A fresh sign-in retags the route; a plain edit leaves
+                        # the existing tag (and the stored key) alone.
+                        updates["provider"] = provider
                     db.update_route(route_id, **updates)
                     flash(f"Route '{name}' updated.", "success")
                     _flash_refresh(refresh_all(current_app))
@@ -249,11 +281,149 @@ def routes():
         routes=db.list_routes(),
         active_route_id=db.active_route()["id"] if db.active_route() else None,
         api_keys=db.list_api_keys(),
+        signin_providers=signin.PROVIDERS,
         model_summary={entry["route_id"]: entry for entry in db.model_summary()},
         model_slugs=db.list_models(),
         models_refreshed_at=db.get_meta("models_refreshed_at"),
         models_refresh_error=db.get_meta("models_refresh_error"),
     )
+
+
+# -- sign in with a service ---------------------------------------------------
+
+
+def _form_route_id(payload: dict) -> int | None:
+    try:
+        return int(payload.get("route_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _suggest_route_name(db, base: str, exclude_route_id: int | None = None) -> str:
+    """Pick a route name that collides with nothing.
+
+    The route being edited is excluded from the collision set, so re-signing-in
+    on the same route keeps its name instead of walking it up to " (2)".
+    """
+    taken = {
+        str(row["name"]).strip().lower()
+        for row in db.list_routes()
+        if row["id"] != exclude_route_id
+    }
+    if base.lower() not in taken:
+        return base
+    number = 2
+    while f"{base} ({number})".lower() in taken:
+        number += 1
+    return f"{base} ({number})"
+
+
+@bp.route("/signin/start", methods=["POST"])
+def signin_start():
+    payload = request.get_json(silent=True) or {}
+    provider = (payload.get("provider") or "").strip().lower()
+    route_id = _form_route_id(payload)
+    client = current_app.extensions["midware_http"]
+    try:
+        kind = signin.PROVIDERS.get(provider, {}).get("kind")
+        if kind == "nanogpt":
+            result = signin.start_nanogpt(
+                client, current_app.config["NANOGPT_CLIENT_NAME"], route_id, provider
+            )
+        elif kind == "openrouter":
+            callback = url_for("admin.signin_openrouter_callback", _external=True)
+            result = signin.begin_openrouter(callback, route_id)
+        else:
+            return jsonify(ok=False, error="Unknown provider."), 400
+    except signin.SignInError as exc:
+        return jsonify(ok=False, error=str(exc)), 502
+    return jsonify(ok=True, **result)
+
+
+@bp.route("/signin/poll", methods=["POST"])
+def signin_poll():
+    payload = request.get_json(silent=True) or {}
+    client = current_app.extensions["midware_http"]
+    try:
+        result = signin.poll_nanogpt(client, (payload.get("token") or "").strip())
+    except signin.SignInError as exc:
+        return jsonify(ok=False, error=str(exc)), 502
+    if result.get("status") == "approved":
+        route_id = result.pop("route_id", None)
+        result["name"] = _suggest_route_name(get_db(), result["name"], route_id)
+    return jsonify(ok=True, **result)
+
+
+@bp.route("/signin/openrouter/callback")
+def signin_openrouter_callback():
+    meta = signin.PROVIDERS["openrouter"]
+    error = request.args.get("error")
+    code = request.args.get("code") or ""
+    state = request.args.get("state") or ""
+    if error or not code or not state:
+        message = (
+            "OpenRouter denied the authorization."
+            if error
+            else "The callback is missing the authorization code."
+        )
+        return _render_signin_result(meta, error=message, flow=state), 400
+    client = current_app.extensions["midware_http"]
+    try:
+        result = signin.finish_openrouter(client, code, state)
+    except signin.SignInError as exc:
+        return _render_signin_result(meta, error=str(exc), flow=state), 400
+    name = _suggest_route_name(get_db(), result["name"], result.get("route_id"))
+    return _render_signin_result(
+        meta, key=result["key"], name=name, flow=state, provider=result.get("provider")
+    )
+
+
+def _render_signin_result(
+    meta: dict,
+    key: str | None = None,
+    error: str | None = None,
+    flow: str = "",
+    name: str | None = None,
+    provider: str | None = None,
+):
+    """The popup page that confirms the sign-in; the key itself is never shown.
+
+    Two channels, in order of reliability: a localStorage entry keyed by the
+    flow's state (survives a severed ``window.opener``, which OpenRouter's
+    isolation does) and a postMessage to the opener when one still exists. The
+    key rides only inside that payload — the rendered page is a close-me note,
+    since the form auto-submits as soon as it lands.
+    """
+    if key:
+        payload = {
+            "type": "midware-signin",
+            "key": key,
+            "provider": provider or "",
+            "label": meta["label"],
+            "name": name or meta["name"],
+            "host": meta["host"],
+        }
+    else:
+        payload = {"type": "midware-signin", "error": error or "Sign-in failed."}
+    if flow:
+        payload["flow"] = flow
+    return render_template("signin_result.html", meta=meta, key=key, error=error, payload=payload)
+
+
+@bp.route("/routes/<int:route_id>/balance")
+def route_balance(route_id: int):
+    """One route's provider-side balance; the routes page fetches these async."""
+    route = get_db().get_route(route_id)
+    if route is None:
+        return jsonify(ok=False), 404
+    text = fetch_balance(
+        current_app.extensions["midware_http"],
+        route["provider"] or "",
+        route["upstream_key"] or "",
+    )
+    if not text:
+        return jsonify(ok=False)
+    return jsonify(ok=True, text=text)
 
 
 @bp.route("/keys", methods=["GET", "POST"])

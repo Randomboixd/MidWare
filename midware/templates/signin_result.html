@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ meta.label }} sign-in - MidWare{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>{% if key %}Signed in with {{ meta.label }}{% else %}Sign-in failed{% endif %}</h1>
+  <p>{% if key %}You can close this tab now.{% else %}{{ error }}{% endif %}</p>
+</hgroup>
+
+{% if key %}
+<article class="flash flash-success">
+  We have already created the API key in the dashboard!
+</article>
+{% else %}
+<article class="flash flash-error">{{ error }}</article>
+<p><small>Return to the MidWare tab and start the sign-in again.</small></p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var payload = {{ payload | tojson }};
+    // The key is never rendered: it travels only inside this payload, which the
+    // route-form tab picks up. The storage entry is the reliable channel —
+    // OpenRouter's auth page severs window.opener (COOP), and the manual
+    // approval link uses rel=noopener, so postMessage alone is not enough.
+    if (payload.flow) {
+      payload.ts = Date.now();
+      try { localStorage.setItem("midware-signin:" + payload.flow, JSON.stringify(payload)); } catch (error) {}
+    }
+    if (window.opener && !window.opener.closed) {
+      try { window.opener.postMessage(payload, window.location.origin); } catch (error) {}
+    }
+  })();
+</script>
+{% endblock %}

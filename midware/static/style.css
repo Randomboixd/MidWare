@@ -171,6 +171,7 @@ table.compact td {
 .pill.ok { color: #39d353; border-color: #26a641; }
 .pill.warn { color: #ffd166; border-color: #d9a400; }
 .pill.bad { color: #ff6b6b; border-color: #c0392b; }
+.pill.blue { color: #58a6ff; border-color: #388bfd; }
 
 .inline-form {
   display: inline;
@@ -529,5 +530,63 @@ label.preset-prompt.is-empty {
   margin: 0;
   padding: 0.25rem 0.6rem;
   font-size: 0.8rem;
+}
+
+details.signin {
+  border: 1px dashed var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: color-mix(in srgb, var(--pico-card-background-color) 60%, transparent);
+  margin: 0.5rem 0;
+}
+
+details.signin > summary {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.signin-menu {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0 0.6rem;
+}
+
+.signin-menu button {
+  width: auto;
+  margin: 0.4rem 0 0;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.signin-status {
+  padding: 0 0.6rem;
+  margin: 0.5rem 0 0.6rem;
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+  overflow-wrap: anywhere;
+}
+
+.signin-status[hidden] {
+  display: none;
+}
+
+.signin-status a {
+  margin-left: 0.35rem;
+}
+
+.signin-status.signin-error {
+  color: var(--pico-del-color);
+}
+
+.route-balance {
+  display: none;
+}
+
+.route-balance.has-balance {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--pico-muted-color);
 }
 

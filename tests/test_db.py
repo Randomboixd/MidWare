@@ -137,6 +137,28 @@ def test_msq_migration_adds_hardcore_columns(tmp_path):
     assert "is_system" in key_cols
 
 
+def test_route_provider_migration_adds_column(tmp_path):
+    from midware.db import Database
+
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                target_host TEXT NOT NULL, upstream_key TEXT NOT NULL DEFAULT '',
+                api_key_id INTEGER, is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    db.init_schema()
+
+    columns = {row["name"] for row in db._rows("PRAGMA table_info(routes)")}
+    assert "provider" in columns
+
+
 def test_rate_limit_migration_adds_columns(tmp_path):
     from midware.db import Database
 

@@ -50,6 +50,8 @@
     <label>Target host <input type="url" name="target_host" placeholder="https://nano-gpt.com/subscription/v1" required></label>
   </div>
   <label>Upstream API key <input type="password" name="upstream_key" autocomplete="off" placeholder="sk-..."></label>
+  <input type="hidden" name="provider" value="">
+  {% include "_signin.html" %}
   <label>
     <input type="checkbox" name="test_connection" value="1" checked>
     <input type="hidden" name="test_connection" value="0">
@@ -62,7 +64,7 @@
 <h2>Configured routes</h2>
 {% if routes %}
 <table class="compact">
-  <thead><tr><th>Name</th><th>Target</th><th>Key</th><th>Models</th><th>Role</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Target</th><th>Auth Type</th><th>Models</th><th>Role</th><th></th></tr></thead>
   <tbody>
     {% for r in routes %}
     {% set is_default = r['id'] == active_route_id %}
@@ -70,9 +72,21 @@
       <td>
         {{ r['name'] }}
         <br><small class="mono">[{{ r['name'] }}]</small>
+        {% if r['provider'] %}
+        <small class="route-balance" data-balance-url="{{ url_for('admin.route_balance', route_id=r['id']) }}"></small>
+        {% endif %}
       </td>
       <td class="mono">{{ r['target_host'] }}</td>
-      <td>{% if r['upstream_key'] %}<span class="pill ok">stored</span>{% else %}<span class="pill warn">none</span>{% endif %}</td>
+      <td>
+        {% set provider = signin_providers.get(r['provider']) if r['provider'] else none %}
+        {% if provider %}
+          <span class="pill blue">OAuth · {{ provider['label'] }}</span>
+        {% elif r['upstream_key'] %}
+          <span class="pill ok">API key</span>
+        {% else %}
+          <span class="pill warn">none</span>
+        {% endif %}
+      </td>
       <td>
         {% set summary = model_summary.get(r['id']) %}
         {% if summary and summary.count %}
@@ -117,6 +131,8 @@
                      placeholder="{{ 'leave blank to keep current key' if r['upstream_key'] else 'sk-...' }}">
               <small>Leave blank to keep the stored key.</small>
             </label>
+            <input type="hidden" name="provider" value="">
+            {% include "_signin.html" %}
             <label>
               <input type="checkbox" name="test_connection" value="1">
               Test the connection before saving
@@ -164,4 +180,15 @@ every other route's are prefixed with <code>[Name]</code>:</p>
 <p>The catalogue is refreshed automatically when a route is added or edited, when the
 default route changes, and roughly once a day. Use <strong>Refresh models</strong>
 above to update it on demand.</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.MidWareSignin = {
+    start: {{ url_for('admin.signin_start') | tojson }},
+    poll: {{ url_for('admin.signin_poll') | tojson }}
+  };
+</script>
+<script src="{{ url_for('static', filename='signin.js') }}"></script>
+<script src="{{ url_for('static', filename='routes.js') }}"></script>
 {% endblock %}

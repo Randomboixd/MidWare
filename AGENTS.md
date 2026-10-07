@@ -46,6 +46,8 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); `truncate`, `strip_ansi`, `model_from_request_body`. |
 | `midware/conversation.py` | Normalize request/response bodies (JSON or streamed) into display blocks for the viewer. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
+| `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
+| `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
 | `midware/premodels.py` | Premodel overlays: slugging, SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
@@ -92,7 +94,10 @@ this development environment, so Docker changes are verified by reading only.
   are all `INTEGER NOT NULL DEFAULT 0`: `limit_*_enabled` is the master switch,
   `limit_*_<window>` ticks a child window, and `max_*_<window>` is its cap (`0` =
   unlimited for that window).
-- `routes(id, name, target_host, upstream_key, api_key_id, is_active, created_at)`
+- `routes(id, name, target_host, upstream_key, api_key_id, is_active, provider, created_at)`
+  — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter`,
+  `''` when hand-configured); it is what later proves which service's balance
+  API a route may be queried against.
 - `requests(id, created_at, request_path, method, model, model_raw, host_prefix,
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
   token_source, upstream_request_id, error, request_body, response_body, route_id,
@@ -207,6 +212,48 @@ Do not break these; several have regression tests.
   The edit drawer tests only when its checkbox is ticked. Unchecking the
   create/setup box skips the probe **and** the `/v1/models` refresh; those forms
   carry a hidden `test_connection=0` because an unchecked checkbox submits nothing.
+- **Sign in with service** (`signin.py`): the route forms (create, edit drawer and
+  first-run setup) offer a "Sign in with service" dropdown — a Nano-GPT device
+  login (`client_name` = `NANOGPT_CLIENT_NAME`, default "Midware Request
+  Middleware") under two route presets (pay-as-you-go `nanogpt`, host
+  `https://api.nano-gpt.com/api/v1`, and `nanogpt-sub`, host
+  `https://nano-gpt.com/subscription/v1` — same handshake, different prefill)
+  or an OpenRouter OAuth PKCE popup. Both flows **open their approval page in a
+  tab automatically** (popup opened synchronously, aimed once the server hands
+  back a URL; the manual link stays as the popup-blocked fallback). Half-finished
+  flows live in a
+  module-level `_pending` table keyed by an unguessable token with a 10-minute
+  TTL; the three `/admin/signin/*` endpoints bypass the login guard **only while
+  no admin account exists** (the bootstrap setup page offers them too) and demand
+  Basic once claimed. The acquired key never touches the server: `signin.js`
+  fills the route form (key, provider host, and a suggested route name —
+  `OpenRouter (OAuth)` / `NanoGPT` / `NanoGPT (Subscription)`, suffixed ` (n)` on
+  collision, computed
+  server-side in `admin._suggest_route_name` while excluding the route being
+  edited), writes the hidden `provider` field with the provider id, and
+  **auto-submits the form** through the normal create/update path
+  (so `test_connection` still applies; skipped only when required fields like
+  the setup code are still empty). OpenRouter's popup
+  hands the key back via a `localStorage` entry keyed by the flow's state (its
+  auth page severs `window.opener`, so postMessage alone is not enough), with
+  postMessage as a bonus channel. The result page itself never renders the
+  key — it is a "You can close this tab now" confirmation, and the key travels
+  only inside the payload the form consumes.
+  The routes table's **Auth Type** column turns the tag into a blue
+  `OAuth · <service>` pill (hand-configured routes show green `API key`,
+  keyless ones yellow `none`).
+- **Balance lines** (`balance.py` + `GET /admin/routes/<id>/balance`): the routes
+  page renders a small money-left line under each **tagged** route's name
+  (`static/routes.js` fetches them async, so one slow provider cannot block the
+  page). Tagging is the trust anchor — only sign-in-obtained routes are ever
+  queried: NanoGPT pay-as-you-go routes answer `POST /api/check-balance`
+  (`usd_balance`), `nanogpt-sub` routes read `GET /api/subscription/v1/usage`
+  for the daily (then weekly) remaining-token quota and fall back to the cash
+  line when no quota applies, and OpenRouter tries `GET /api/v1/credits`
+  (management keys) before falling back to `GET /api/v1/key`
+  (`limit_remaining`). Failures and untagged routes show
+  nothing (`{"ok": false}`), never an error; results are cached for 60 s keyed
+  by a digest of the upstream key.
 - **Premodels** (`premodels.py`): a premodel bundles a route, a model and a prompt
   preset, addressed as `<p>-slug` in `model`. The prefix is parsed before
   `[Host]`, so `<p>-slug[Host]model` lets the host win while the preset still
@@ -281,6 +328,9 @@ Do not break these; several have regression tests.
   `secured_app` is the same app with auth on (`tests/test_admin_auth.py`).
 - Proxy tests use the hand-rolled `StubClient`/`StubResponse` and `install_stub()`
   from `tests/test_proxy.py`; import them from there in other test modules.
+- The provider fake in `tests/test_signin.py` (`FakeUpstream`/`install`) also
+  serves `tests/test_balance.py`; its balance attributes answer with a body or
+  `None` to simulate a refusal.
 - Streaming tests must consume the response body, e.g.
   `b"".join(response.response)`, otherwise the generator never runs and no request
   row is written (a confusing `IndexError`).
@@ -288,7 +338,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `206 passed` — **update this number whenever the test count changes.**
+  `238 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

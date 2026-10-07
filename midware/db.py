@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS routes (
     upstream_key    TEXT    NOT NULL DEFAULT '',
     api_key_id      INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
     is_active       INTEGER NOT NULL DEFAULT 1,
+    provider        TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL
 );
 
@@ -452,6 +453,14 @@ class Database:
         if existing_checks:
             self._add_columns("msq_checks", existing_checks, {"hard_fail": "INTEGER NOT NULL DEFAULT 0"})
 
+        existing_routes = {row["name"] for row in self._rows("PRAGMA table_info(routes)")}
+        if existing_routes:
+            self._add_columns(
+                "routes",
+                existing_routes,
+                {"provider": "TEXT NOT NULL DEFAULT ''"},
+            )
+
     def _add_columns(self, table: str, existing: set[str], added: dict[str, str]) -> None:
         with self.write() as conn:
             for column, definition in added.items():
@@ -550,17 +559,26 @@ class Database:
         upstream_key: str,
         api_key_id: int | None = None,
         is_active: bool = True,
+        provider: str = "",
     ) -> int:
         with self.write() as conn:
             cur = conn.execute(
-                "INSERT INTO routes (name, target_host, upstream_key, api_key_id, is_active, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (name, target_host.rstrip("/"), upstream_key, api_key_id, int(is_active), to_iso(utcnow())),
+                "INSERT INTO routes (name, target_host, upstream_key, api_key_id, is_active, provider, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    target_host.rstrip("/"),
+                    upstream_key,
+                    api_key_id,
+                    int(is_active),
+                    provider,
+                    to_iso(utcnow()),
+                ),
             )
             return int(cur.lastrowid)
 
     def update_route(self, route_id: int, **fields: Any) -> None:
-        allowed = {"name", "target_host", "upstream_key", "api_key_id", "is_active"}
+        allowed = {"name", "target_host", "upstream_key", "api_key_id", "is_active", "provider"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return

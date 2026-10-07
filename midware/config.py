@@ -55,6 +55,9 @@ DEFAULT_REQUEST_LOG_LIMIT = _env_int("MIDWARE_REQUEST_LOG_LIMIT", 10)
 # Default upstream host used to pre-fill the setup form.
 DEFAULT_TARGET_HOST = os.environ.get("MIDWARE_TARGET_HOST", "https://api.openai.com")
 
+# Name Nano-GPT shows next to keys minted by our device-login flow.
+NANOGPT_CLIENT_NAME = os.environ.get("MIDWARE_NANOGPT_CLIENT_NAME", "Midware Request Middleware")
+
 # SQLite only ever accepts one writer; keep the wait bounded rather than infinite.
 SQLITE_TIMEOUT = float(os.environ.get("MIDWARE_SQLITE_TIMEOUT", "5"))
 
