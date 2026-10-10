@@ -53,26 +53,6 @@
   </div>
 
   <fieldset>
-    <legend>Request merging</legend>
-    {% set merge = form.get('merge_mode', 'append') %}
-    <label><input type="radio" name="merge_mode" value="append" {% if merge == 'append' %}checked{% endif %}>
-      Append</label>
-    <small>Keep everything; the caller's prompt follows the premodel's.</small>
-    <label><input type="radio" name="merge_mode" value="caller" {% if merge == 'caller' %}checked{% endif %}>
-      Caller wins</label>
-    <small>If the caller sent a system prompt, ignore the premodel's prompt.</small>
-    <label><input type="radio" name="merge_mode" value="premodel" {% if merge == 'premodel' %}checked{% endif %}>
-      Premodel wins</label>
-    <small>Delete the caller's system prompts and use the premodel's.</small>
-  </fieldset>
-
-  <label>
-    <input type="checkbox" name="accept_mwvars" value="1" {% if form.get('accept_mwvars') %}checked{% endif %}>
-    Accept MWVARS
-  </label>
-  <small>Allow callers to define <code>@name=value</code> macro variables, used as <code>{{ '{{ name }}' }}</code> or <code>@@name@@</code>.</small>
-
-  <fieldset>
     <legend>Sampling overrides</legend>
     <label>
       <input type="checkbox" role="switch" name="params_enabled" id="params-enabled" value="1"
@@ -150,6 +130,43 @@
     </fieldset>
   </section>
 
+  <label>
+    <input type="checkbox" name="use_workflow" id="use-workflow" value="1"
+           {% if form.get('use_workflow') %}checked{% endif %}>
+    Use Workflows
+  </label>
+  <small>Replace the prompt preset with a chain of AI sub-calls: an Origin publishes the
+    inbound request as variables, API Request nodes call other models (optionally extracting
+    JSON keys), and a Final Request builds the messages that are forwarded upstream.
+    Sub-calls are not limited by the calling key's model or provider restrictions.</small>
+
+  <section id="workflow-editor" {% if not form.get('use_workflow') %}hidden{% endif %}>
+    <input type="hidden" name="workflow_json" id="workflow-json"
+           value="{{ form.get('workflow_json', '') }}">
+    <div id="workflow-canvas" class="workflow-canvas"></div>
+  </section>
+
+  <div id="prompt-sections">
+  <fieldset>
+    <legend>Request merging</legend>
+    {% set merge = form.get('merge_mode', 'append') %}
+    <label><input type="radio" name="merge_mode" value="append" {% if merge == 'append' %}checked{% endif %}>
+      Append</label>
+    <small>Keep everything; the caller's prompt follows the premodel's.</small>
+    <label><input type="radio" name="merge_mode" value="caller" {% if merge == 'caller' %}checked{% endif %}>
+      Caller wins</label>
+    <small>If the caller sent a system prompt, ignore the premodel's prompt.</small>
+    <label><input type="radio" name="merge_mode" value="premodel" {% if merge == 'premodel' %}checked{% endif %}>
+      Premodel wins</label>
+    <small>Delete the caller's system prompts and use the premodel's.</small>
+  </fieldset>
+
+  <label>
+    <input type="checkbox" name="accept_mwvars" value="1" {% if form.get('accept_mwvars') %}checked{% endif %}>
+    Accept MWVARS
+  </label>
+  <small>Allow callers to define <code>@name=value</code> macro variables, used as <code>{{ '{{ name }}' }}</code> or <code>@@name@@</code>.</small>
+
   <fieldset>
     <legend>Prompt source</legend>
     {% set mode = form.get('prompt_mode', 'simple') %}
@@ -174,6 +191,7 @@
     <p id="preset-status"><small>No preset loaded.</small></p>
     <div id="preset-prompts" class="preset-prompts"></div>
   </section>
+  </div>
 </article>
 
   <button type="submit">Save premodel</button>
@@ -183,5 +201,7 @@
 
 {% block scripts %}
 <script id="preset-data" type="application/json">{{ preset_data | tojson }}</script>
+<script id="workflow-data" type="application/json">{{ workflow_data | tojson }}</script>
 <script src="{{ url_for('static', filename='premodels.js') }}"></script>
+<script src="{{ url_for('static', filename='workflow.js') }}"></script>
 {% endblock %}

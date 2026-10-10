@@ -27,11 +27,13 @@ class StubResponse:
 
 
 class StubClient:
-    def __init__(self, response, error=None):
+    def __init__(self, response, error=None, posts=None):
         self.response = response
         self.error = error
         self.sent = []
         self.gets = []
+        self.posts = []
+        self._post_queue = list(posts or [])
 
     def build_request(self, method, url, content=None, headers=None):
         return {"method": method, "url": url, "content": content, "headers": headers}
@@ -46,9 +48,22 @@ class StubClient:
         self.gets.append((url, headers))
         return self.response
 
+    def post(self, url, json=None, headers=None, timeout=None):
+        """Workflow sub-calls; each queued response is consumed in order and
+        the last one repeats (so a chain longer than the queue still runs)."""
+        self.posts.append((url, json, headers, timeout))
+        if self.error:
+            raise self.error
+        if not self._post_queue:
+            return self.response
+        item = self._post_queue.pop(0) if len(self._post_queue) > 1 else self._post_queue[0]
+        if isinstance(item, Exception):
+            raise item
+        return item
 
-def install_stub(app, response=None, error=None):
-    stub = StubClient(response or StubResponse(), error)
+
+def install_stub(app, response=None, error=None, posts=None):
+    stub = StubClient(response or StubResponse(), error, posts=posts)
     app.extensions["midware_http"] = stub
     return stub
 

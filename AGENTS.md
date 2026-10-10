@@ -49,6 +49,8 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
 | `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
 | `midware/premodels.py` | Premodel overlays: slugging, configurable prefix parsing (`prefix_regex`/`normalize_prefix`), SillyTavern preset normalization, MWVAR macros, message merging. |
+| `midware/workflow.py` | Premodel workflows: `normalize_workflow` validation, `WorkflowScope` variable expansion, `run_workflow` sub-call chain (Origin → API Request nodes → Final Request). |
+| `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url` (used by proxy + workflow; keeps `workflow.py` out of an import cycle with the blueprint). |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
 | `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
@@ -57,7 +59,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
-| `midware/templates/`, `midware/static/` | Jinja2 templates (PicoCSS v2 from CDN) and `style.css` / `request_detail.js`. |
+| `midware/templates/`, `midware/static/` | Jinja2 templates (PicoCSS v2 from CDN) and `style.css` / `request_detail.js` / `workflow.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
 | `run.py`, `wsgi.py` | Entrypoints; both read `HOST`/`PORT`, `wsgi.py` is used in the container. |
 | `Dockerfile`, `docker-compose.yml` | Container build; DB lives in the `/data` volume. |
@@ -70,7 +72,9 @@ this development environment, so Docker changes are verified by reading only.
    **not** proxied.
 3. Only `POST` is forwarded; anything else is `405`.
 4. `_forward()` parses the body, extracts an optional `[Host]` prefix from `model`,
-   resolves the route, strips the prefix, and rebuilds the upstream URL.
+   resolves the route, strips the prefix, and rebuilds the upstream URL. Premodel
+   resolution happens first (`<p>-slug` → route/model rewrite, or in workflow mode
+   the chain runs **after** the rate-limit claims and before the final forward).
 5. The response is streamed back while being tee'd into a bytearray capped at
    `MAX_CAPTURE_BYTES` (8 MiB default).
 6. `_persist()` writes the request row and prunes the per-key log to
@@ -111,9 +115,13 @@ this development environment, so Docker changes are verified by reading only.
 - `models(id, route_id FK CASCADE, model_id, fetched_at, UNIQUE(route_id, model_id))`
 - `premodels(id, name, slug UNIQUE, description, route_id FK SET NULL, model,
   merge_mode, accept_mwvars, prompt_mode, system_prompt, preset_json, params_enabled,
-  params_json, *LIMIT_FLAG_FIELDS, *LIMIT_VALUE_FIELDS, created_at, updated_at)` —
-  the limit columns mirror `api_keys` (same names/semantics) and back the per-premodel
-  rate limits.
+  params_json, use_workflow, workflow_json, *LIMIT_FLAG_FIELDS, *LIMIT_VALUE_FIELDS,
+  created_at, updated_at)` — the limit columns mirror `api_keys` (same names/semantics)
+  and back the per-premodel rate limits. `use_workflow` switches the premodel from
+  prompt-overlay mode to a workflow chain; `workflow_json` holds the canonical
+  `{"version": 1, "final": {"messages": [...], "model_override": ""}, "nodes": [...]}`
+  graph, validated by `workflow.normalize_workflow` at save time and re-validated
+  defensively by `load_workflow` at request time.
 - `premodel_rate_usage(premodel_id FK CASCADE, kind, window, window_start, amount,
   PK(premodel_id, kind, window, window_start))` — per-premodel rate-limit counters,
   a twin of `rate_usage`; both are driven by the shared `_rate_usage_*` helpers in
@@ -293,6 +301,62 @@ Do not break these; several have regression tests.
   optional token/request rate limits (the collapsed `Premodel limits` panel of the
   form, same master-switch semantics as key limits). Admin CRUD lives at
   `/admin/premodels`.
+- **Workflows** (`workflow.py`): a premodel with `use_workflow` set replaces the
+  prompt overlay with a linear chain — an undeletable **Origin** publishes
+  `core_context` (the caller's `messages`, JSON-encoded) and `system_request`
+  (method, path, headers minus credentials); up to `WORKFLOW_MAX_INTERMEDIATE` (8)
+  nodes each make nested, non-streaming
+  `POST .../v1/chat/completions` via the shared `httpx.Client` with their own
+  route/model (defaulting to the premodel's) and a per-node timeout. Node types:
+  **API Request** (optional `expect_json` toggle — parses the reply, code fences
+  stripped, and exposes keys as `<node>.<key>`; raw text is always
+  `<node>.content`) and   **Image Captioner** (`image_mode` `batch` = all images in
+  one request, `individual` = one request per image; grabs every `image_url`
+  content part from the caller's messages, exposes `{{ node.content }}` and
+  `{{ node.count }}`, and is silently skipped when the request carries no
+  images). A captioner node with `strip_images` set (opt-in checkbox, default
+  off) **strips images from core context** after it consumes them
+  (`strip_images`) — the final splice and later nodes' `{{ core_context }}`
+  never re-send them, and messages left with no parts are dropped.
+  The undeletable **Final Request** builds the forwarded message list
+  from text blocks (templated with every variable) and core-context blocks
+  (splice the caller's messages), with an optional non-templated
+  `model_override`. Templates expand through
+  `WorkflowScope` (one dotted level; unknown names stay literal, matching MWVAR).
+  **Sub-calls intentionally bypass the calling key's provider/model allowlists** —
+  they are server-side machinery the admin configured; only the final forwarded
+  model is checked (locked by `test_workflow_final_model_still_gated_by_allowlist`).
+  Execution happens in `_forward` **after both rate-limit claims**, so a rejected
+  request never spends upstream tokens; any node failure returns
+  `502 workflow_node_failed` (`workflow_invalid` when the stored blob cannot load)
+  and never forwards. Sub-call token usage is **folded into the single request
+  row** and premodel/key token limits settle on the folded total; error rows stay
+  at zero tokens. The optional **reasoning switch** (`"reasoning": true` on the
+  graph, checkbox in the editor) collects any sub-call reasoning (via
+  `conversation._collect_reasoning`) and prefixes it to the reasoning the client
+  receives, one logged block per node in the form
+  `Started constructing node: <name>` + `<name> logs:` + the text in a fenced
+  block — non-streamed
+  responses are merged into `choices[0].message.reasoning_content` (upstream's
+  own reasoning kept after the prefix; `_merge_reasoning_body`), streamed
+  responses get a synthetic first SSE delta chunk (`id: midware-workflow`), and
+  nodes may reference `<node>.reasoning` in later templates. `system_prompt`,
+  `preset_json`, `merge_mode` and `accept_mwvars`
+  are ignored in workflow mode; sampling params, rate limits, `[Host]` ordering
+  and `/v1/models` listing still apply. The form editor (`static/workflow.js`) is
+  a Shortcuts-style vertical card stack with native HTML5 drag-and-drop
+  reordering (Origin pinned top, Final pinned bottom, ↑/↓ buttons as fallback),
+  a per-card node-type selector, nodes added through an **Add node** picker
+  modal, per-node collapse (chevron toggles the body; a one-line peek shows
+  name/model/prompt), prompt sections for Image Captioner nodes
+  tucked behind a **Prompts** button, the reasoning switch, and Final Request
+  blocks edited in a modal (the card only shows a block summary + **Edit
+  blocks** button; modals are document.body overlays, close on Escape /
+  overlay click, and keep state across re-renders via `redraw()`).
+  `makeDraggable` drops the card's `draggable` flag on mousedown over any
+  `input, textarea, select, button, label` — a draggable ancestor would
+  otherwise swallow mouse carets inside the prompt textareas (keyboard focus
+  kept working, mouse placement did not).
 - **MSQ** (`msq.py`): a recorder periodically streams a fixed prompt to its route's
   model, measuring time-to-first-token (the incremental `StreamAudit` in
   `msq_checks.py`), total time, tokens/s, then scores 0-100 (`score_check`): 100 minus
@@ -361,7 +425,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `259 passed` — **update this number whenever the test count changes.**
+  `305 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

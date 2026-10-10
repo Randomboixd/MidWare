@@ -590,3 +590,248 @@ details.signin > summary {
   color: var(--pico-muted-color);
 }
 
+
+/* Workflow editor */
+.workflow-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.wf-card {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 0.4rem;
+  background: var(--pico-card-background-color);
+}
+
+.wf-card.wf-origin,
+.wf-card.wf-final {
+  border-color: var(--pico-primary-color);
+}
+
+.wf-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.wf-card-header strong {
+  flex: 1;
+}
+
+.wf-card-note {
+  margin: 0 0 0.5rem;
+  color: var(--pico-muted-color);
+  font-size: 0.9rem;
+}
+
+.wf-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wf-card-body[hidden] {
+  display: none;
+}
+
+.wf-node-peek {
+  margin: 0;
+  color: var(--pico-muted-color);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-card-body label,
+.wf-block-text label {
+  margin: 0;
+}
+
+.wf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.5rem;
+}
+
+.wf-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.wf-prompts-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.wf-prompts-toggle button {
+  margin-bottom: 0;
+}
+
+.wf-prompts {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.wf-prompts[hidden] {
+  display: none;
+}
+
+.wf-card-header select {
+  max-width: 11rem;
+  margin-bottom: 0;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.wf-block-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.wf-block-summary button {
+  margin-bottom: 0;
+}
+
+.wf-block-count {
+  color: var(--pico-muted-color);
+  font-size: 0.9rem;
+}
+
+.wf-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.wf-modal[hidden] {
+  display: none;
+}
+
+.wf-modal-panel {
+  width: min(720px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.7rem;
+  padding: 1rem;
+  border-radius: 0.6rem;
+  background: var(--pico-background-color);
+}
+
+.wf-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.wf-modal-header button {
+  margin-bottom: 0;
+}
+
+.wf-node-option {
+  display: grid;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 0;
+}
+
+.wf-node-option small {
+  color: var(--pico-muted-color);
+}
+
+.wf-actions {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+button.wf-icon {
+  margin: 0;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.wf-drag {
+  cursor: grab;
+  color: var(--pico-muted-color);
+  user-select: none;
+}
+
+.wf-vars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+code.wf-var {
+  background: var(--pico-muted-color);
+  color: var(--pico-background-color);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.wf-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wf-card.wf-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.wf-block-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.wf-block-kind {
+  flex: 1;
+  align-self: center;
+  color: var(--pico-muted-color);
+}
+
+.wf-block-add {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.wf-block-add button,
+.wf-add-node button {
+  margin: 0;
+}
+
+.wf-add-node {
+  text-align: center;
+}
+
+.wf-drop-before {
+  box-shadow: 0 -3px 0 0 var(--pico-primary-color);
+}
+
+.wf-drop-after {
+  box-shadow: 0 3px 0 0 var(--pico-primary-color);
+}

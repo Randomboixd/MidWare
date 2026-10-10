@@ -27,6 +27,7 @@ from ..db import (
 )
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage
+from ..upstream import HOP_BY_HOP, split_target, upstream_url
 from ..usage import (
     model_from_request_body,
     parse_sse_events,
@@ -35,22 +36,9 @@ from ..usage import (
     usage_from_response,
     usage_from_stream,
 )
+from ..workflow import WorkflowError, WorkflowNodeError, load_workflow, run_workflow
 
 bp = Blueprint("proxy", __name__)
-
-HOP_BY_HOP = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "content-length",
-    "host",
-}
 
 HOST_PREFIX_RE = re.compile(r"^\s*\[(?P<name>[^\]#]+)?(?:#(?P<id>\d+))?\]\s*")
 
@@ -63,14 +51,6 @@ def _http_client() -> httpx.Client:
 
 def _capture_limit() -> int:
     return int(current_app.config.get("MAX_CAPTURE_BYTES", _DEFAULT_CAPTURE_LIMIT))
-
-
-def _split_target(route) -> tuple[str, str]:
-    """Split a configured target host into its base URL and path prefix."""
-    target = (route["target_host"] or "https://api.openai.com").rstrip("/")
-    if target.endswith("/v1"):
-        return target[: -len("/v1")], "/v1"
-    return target, ""
 
 
 def _key_limits(api_key) -> dict:
@@ -259,6 +239,32 @@ def _filtered_headers(headers, drop: set[str] | None = None):
         yield name, value
 
 
+def _merge_reasoning_body(body: bytes | None, reasoning: str) -> bytes:
+    """Prepend workflow node logs to an upstream message's reasoning fields."""
+    if not body or not reasoning:
+        return body
+    try:
+        decoded = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    if not isinstance(decoded, dict):
+        return body
+    choices = decoded.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return body
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return body
+    existing = message.get("reasoning_content")
+    if not isinstance(existing, str):
+        existing = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
+    merged = reasoning + ("\n\n" + existing if existing else "")
+    message["reasoning_content"] = merged
+    if isinstance(message.get("reasoning"), str):
+        message["reasoning"] = merged
+    return json.dumps(decoded, ensure_ascii=False).encode("utf-8")
+
+
 def _prepare_headers(route, force_sse: bool) -> dict[str, str]:
     """Build upstream headers, swapping the client's MidWare key for the route key.
 
@@ -403,6 +409,7 @@ def _persist(
     error: str | None = None,
     model_raw: str | None = None,
     host_prefix: str | None = None,
+    workflow_usage: dict | None = None,
 ) -> None:
     db = get_db()
     api_key = ctx["api_key"]
@@ -467,6 +474,13 @@ def _persist(
         except (ValueError, TypeError):
             upstream_request_id = None
 
+    if workflow_usage and status_code < 400:
+        # Workflow sub-calls are real spend; fold them into this row's totals so
+        # token rate limits see the whole pipeline, not just the final call.
+        prompt += max(0, int(workflow_usage.get("prompt") or 0))
+        completion += max(0, int(workflow_usage.get("completion") or 0))
+        total = prompt + completion
+
     token_windows = _enabled_token_windows(api_key)
     if token_windows:
         db.rate_usage_add(
@@ -528,6 +542,7 @@ def _forward(ctx: dict, path: str) -> Response:
     model_field = parsed_body.get("model") if isinstance(parsed_body, dict) else None
     prefix = _premodel_prefix(db)
     premodel = None
+    workflow = None
     premodel_slug, model_remainder = extract_premodel_prefix(model_field, prefix)
     if premodel_slug:
         premodel = db.get_premodel_by_slug(premodel_slug)
@@ -546,10 +561,28 @@ def _forward(ctx: dict, path: str) -> Response:
         target = db.get_route(premodel["route_id"]) if premodel["route_id"] else None
         if target is not None:
             route = target
-        new_model = (model_remainder or "").strip() or (premodel["model"] or "").strip()
-        parsed_body["model"] = new_model
-        if isinstance(parsed_body.get("messages"), list):
+        workflow_override = ""
+        if bool(premodel["use_workflow"]):
+            try:
+                workflow = load_workflow(premodel["workflow_json"])
+            except WorkflowError as exc:
+                return _json_error(
+                    f"Premodel '{prefix}{premodel_slug}' has an invalid workflow: {exc}",
+                    502,
+                    "workflow_invalid",
+                    "midware_workflow_error",
+                )
+            workflow_override = workflow["final"]["model_override"]
+        elif isinstance(parsed_body.get("messages"), list):
+            # Workflow mode replaces the prompt overlay entirely; the Final
+            # Request builder decides what messages reach the upstream.
             parsed_body["messages"] = apply_premodel_messages(premodel, parsed_body["messages"])
+        new_model = (
+            (model_remainder or "").strip()
+            or workflow_override
+            or (premodel["model"] or "").strip()
+        )
+        parsed_body["model"] = new_model
         apply_sampling_params(parsed_body, premodel)
         model = new_model or None
         rewritten = True
@@ -589,7 +622,7 @@ def _forward(ctx: dict, path: str) -> Response:
     if rewritten and isinstance(parsed_body, dict):
         raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
 
-    base_url, prefix = _split_target(route)
+    base_url, prefix = split_target(route)
     upstream_path = f"{prefix}/{(path or '').lstrip('/')}"
 
     streamed = _stream_requested(parsed_body)
@@ -647,6 +680,47 @@ def _forward(ctx: dict, path: str) -> Response:
         if rate_error:
             return reject(rate_error)
 
+    workflow_usage: dict | None = None
+    workflow_reasoning = ""
+    if workflow is not None:
+        # Sub-calls run after the claims so a rejected request never spends
+        # upstream tokens; their usage folds into the single request row.
+        try:
+            result = run_workflow(
+                client,
+                workflow,
+                premodel,
+                parsed_body.get("messages")
+                if isinstance(parsed_body.get("messages"), list)
+                else [],
+                route_lookup=db.get_route,
+                request_context={
+                    "method": request.method,
+                    "path": request.full_path.rstrip("?"),
+                    "headers": dict(request.headers),
+                },
+            )
+        except WorkflowNodeError as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            persist(
+                model=model,
+                status_code=502,
+                latency_ms=latency_ms,
+                streamed=False,
+                response_body=None,
+                error=f"workflow[{exc.node_name}]: {exc.detail}",
+            )
+            return _json_error(
+                f"Workflow node '{exc.node_name}' failed: {exc.detail}",
+                502,
+                "workflow_node_failed",
+                "midware_workflow_error",
+            )
+        parsed_body["messages"] = result.messages
+        raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+        workflow_usage = result.usage
+        workflow_reasoning = result.reasoning
+
     try:
         upstream = client.send(
             client.build_request("POST", url, content=raw_body, headers=headers),
@@ -678,6 +752,8 @@ def _forward(ctx: dict, path: str) -> Response:
     if not streamed:
         body = upstream.content
         upstream.close()
+        if workflow_reasoning and upstream.status_code < 400:
+            body = _merge_reasoning_body(body, workflow_reasoning)
         latency_ms = int((time.perf_counter() - started) * 1000)
         persist(
             model=model,
@@ -685,12 +761,19 @@ def _forward(ctx: dict, path: str) -> Response:
             latency_ms=latency_ms,
             streamed=False,
             response_body=body.decode("utf-8", "replace") if body else None,
+            workflow_usage=workflow_usage,
         )
         return Response(body, status=upstream.status_code, headers=dict(response_headers), content_type=content_type)
 
     capture_limit = _capture_limit()
 
     def generate() -> Iterator[bytes]:
+        if workflow_reasoning and upstream.status_code < 400:
+            injected = {
+                "id": "midware-workflow",
+                "choices": [{"delta": {"reasoning_content": workflow_reasoning}}],
+            }
+            yield f"data: {json.dumps(injected, ensure_ascii=False)}\n\n".encode("utf-8")
         buffer = bytearray()
         try:
             for chunk in upstream.iter_bytes():
@@ -721,6 +804,7 @@ def _forward(ctx: dict, path: str) -> Response:
                 latency_ms=latency_ms,
                 streamed=True,
                 response_body=bytes(buffer).decode("utf-8", "replace"),
+                workflow_usage=workflow_usage,
             )
         except Exception as exc:  # never let bookkeeping break a delivered stream
             current_app.logger.warning("MidWare failed to record streamed request: %s", exc)

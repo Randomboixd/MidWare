@@ -31,6 +31,7 @@ from ..premodels import (
     normalize_slug,
     parse_params,
 )
+from ..workflow import WorkflowError, normalize_workflow
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -681,6 +682,18 @@ def _read_premodel_form(db, existing):
         if normalized and normalized["prompts"]:
             preset_json = json.dumps(normalized, ensure_ascii=False)
 
+    use_workflow = _form_bool("use_workflow")
+    workflow_json = existing["workflow_json"] if existing is not None else None
+    workflow_error = None
+    if use_workflow:
+        raw_workflow = (form.get("workflow_json") or "").strip()
+        try:
+            workflow_json = json.dumps(normalize_workflow(raw_workflow), ensure_ascii=False)
+        except WorkflowError as exc:
+            workflow_error = str(exc)
+            # Keep the raw blob so the editor re-opens with the user's work.
+            workflow_json = raw_workflow or None
+
     fields = {
         "name": name,
         "slug": slug,
@@ -694,6 +707,8 @@ def _read_premodel_form(db, existing):
         "preset_json": preset_json,
         "params_enabled": params_enabled,
         "params_json": params_json,
+        "use_workflow": use_workflow,
+        "workflow_json": workflow_json,
     }
     # Children survive a master toggle in the form; enforcement is gated on the
     # master flag alone, so re-enabling restores the previous configuration.
@@ -711,8 +726,10 @@ def _read_premodel_form(db, existing):
         errors.append("Choose a connection.")
     if not model:
         errors.append("Choose or type a model.")
-    if prompt_mode == "sillytavern" and not preset_json:
+    if not use_workflow and prompt_mode == "sillytavern" and not preset_json:
         errors.append("Upload a SillyTavern preset with at least one prompt.")
+    if workflow_error:
+        errors.append(workflow_error)
     clash = db.get_premodel_by_slug(slug) if slug else None
     if clash is not None and (existing is None or clash["id"] != existing["id"]):
         errors.append(f"Slug '{slug}' is already in use.")
@@ -727,6 +744,13 @@ def _render_premodel_form(db, form, premodel):
             preset_data = json.loads(raw)
         except (ValueError, TypeError):
             preset_data = {"prompts": []}
+    workflow_data = None
+    raw_workflow = form.get("workflow_json") if isinstance(form, dict) else None
+    if raw_workflow:
+        try:
+            workflow_data = json.loads(raw_workflow)
+        except (ValueError, TypeError):
+            workflow_data = None
     params = parse_params(form.get("params_json")) if isinstance(form, dict) else {}
     return render_template(
         "premodel_form.html",
@@ -735,6 +759,7 @@ def _render_premodel_form(db, form, premodel):
         models=db.list_models(),
         form=form,
         preset_data=preset_data,
+        workflow_data=workflow_data,
         params=params,
         sampling_keys=SAMPLING_KEYS,
         premodel_prefix=_premodel_prefix(db),

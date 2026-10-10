@@ -26,7 +26,7 @@ MidWare has a few terms that can get confusing because apparently naming things 
 
 **Host** — The upstream service behind a route. In some parts of the UI/code you'll see these terms used together.
 
-**Premodel** — A server-side model configuration that behaves like a model itself. It can select an underlying model, inject settings/prompts, merge caller configuration, carry its own rate limits, and expose a new model slug such as `<p>-st-assistant-model` (the prefix is configurable in Settings).
+**Premodel** — A server-side model configuration that behaves like a model itself. It can select an underlying model, inject settings/prompts, merge caller configuration, carry its own rate limits, and expose a new model slug such as `<p>-st-assistant-model` (the prefix is configurable in Settings). With **Workflows** enabled, the premodel instead runs a chain of AI sub-calls before forwarding the final request.
 
 **API Key** — A MidWare-generated `mw-...` credential. Clients authenticate to MidWare with these instead of receiving your actual upstream provider keys.
 
@@ -77,6 +77,7 @@ This allows the same MidWare instance to expose models from multiple providers w
 * Basic Auth protected administration
 * Instance claiming during initial setup
 * Premodels
+* Premodel workflows (chained AI sub-calls)
 * SillyTavern preset importing
 * Cached upstream model discovery
 * MSQ model monitoring
@@ -103,6 +104,44 @@ There are currently three merge modes:
 * **Merge** — MidWare attempts to combine them.
 
 This is useful when you want a client to see a simple model while keeping the actual configuration server-side.
+
+## Workflows
+
+Tick **Use Workflows** on a premodel and the prompt preset is replaced by a
+Shortcuts-style chain of AI sub-calls, edited as a vertical stack of cards
+(drag the ⠿ handle to reorder, collapse cards with the chevron, add nodes via
+the **Add node** picker):
+
+* **Origin** (fixed) — publishes the inbound request as template variables:
+  `core_context` (the caller's messages) and `system_request` (method, path,
+  headers minus credentials).
+* **API Request** nodes (0–8, fully configurable) — each makes a nested,
+  non-streaming chat call server-side with its own connection and model. Turn on
+  *Expect JSON* and the reply is parsed so every key becomes a variable
+  (`{{ analyze.category }}`); the raw text is always `{{ analyze.content }}`.
+* **Image Captioner** nodes — grab every image in the caller's messages and
+  caption them with a vision model. Either all images in one request (faster) or
+  one request per image (more compatible); the captions are exposed as
+  `{{ captioner.content }}` and the image count as `{{ captioner.count }}`.
+  Requests without images simply skip the node. Prompts (system + caption) are
+  tucked behind a **Prompts** button with a sensible default, and the optional
+  **Strip images** checkbox removes captioned images from the rest of the chain
+  so the final request never sends the same image twice.
+* **Final Request** (fixed) — builds the message list that is forwarded
+  upstream: templated text blocks plus core-context blocks that splice the
+  client's original messages. The card shows a block summary; **Edit blocks**
+  opens a dialog where you add, reorder and edit blocks (they can pile up
+  quickly). Optionally overrides the model.
+
+Turn on **Node reasoning** and any reasoning a sub-call produces is prefixed to
+the reasoning the client receives, one logged block per node — also available to
+later nodes as `{{ node.reasoning }}`.
+
+Template variables use the familiar `{{ name }}` / `@@name@@` forms. Sub-calls
+are **not** limited by the calling key's model/provider restrictions (only the
+final model is), their token usage is folded into the one request row, and a
+failing node aborts with `502 workflow_node_failed` before anything is
+forwarded.
 
 ## MSQ
 

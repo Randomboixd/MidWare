@@ -23,7 +23,10 @@
       <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
       <td>{{ route_names.get(p['route_id'], '—') }}</td>
       <td class="mono">{{ p['model'] }}</td>
-      <td><span class="pill">{{ p['merge_mode'] }}</span></td>
+      <td>
+        {% if p['use_workflow'] %}<span class="pill">workflow</span>
+        {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
+      </td>
       <td>
         <a role="button" class="outline" style="padding:0.25rem 0.6rem;font-size:0.8rem"
            href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>

@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS premodels (
     preset_json   TEXT,
     params_enabled INTEGER NOT NULL DEFAULT 0,
     params_json   TEXT,
+    use_workflow  INTEGER NOT NULL DEFAULT 0,
+    workflow_json TEXT,
     limit_tokens_enabled INTEGER NOT NULL DEFAULT 0,
     limit_tokens_hour    INTEGER NOT NULL DEFAULT 0,
     max_tokens_hour      INTEGER NOT NULL DEFAULT 0,
@@ -426,6 +428,8 @@ class Database:
                 {
                     "params_enabled": "INTEGER NOT NULL DEFAULT 0",
                     "params_json": "TEXT",
+                    "use_workflow": "INTEGER NOT NULL DEFAULT 0",
+                    "workflow_json": "TEXT",
                     **{flag: "INTEGER NOT NULL DEFAULT 0" for flag in LIMIT_FLAG_FIELDS},
                     **{value: "INTEGER NOT NULL DEFAULT 0" for value in LIMIT_VALUE_FIELDS},
                 },
@@ -741,6 +745,8 @@ class Database:
         "preset_json",
         "params_enabled",
         "params_json",
+        "use_workflow",
+        "workflow_json",
         *LIMIT_FLAG_FIELDS,
         *LIMIT_VALUE_FIELDS,
     )
@@ -760,6 +766,8 @@ class Database:
         preset_json: str | None = None,
         params_enabled: bool = False,
         params_json: str | None = None,
+        use_workflow: bool = False,
+        workflow_json: str | None = None,
         **extra: Any,
     ) -> int:
         stamp = to_iso(utcnow())
@@ -776,6 +784,8 @@ class Database:
             "preset_json": preset_json,
             "params_enabled": int(bool(params_enabled)),
             "params_json": params_json,
+            "use_workflow": int(bool(use_workflow)),
+            "workflow_json": workflow_json,
             "created_at": stamp,
             "updated_at": stamp,
         }
@@ -802,6 +812,8 @@ class Database:
             updates["accept_mwvars"] = int(bool(updates["accept_mwvars"]))
         if "params_enabled" in updates:
             updates["params_enabled"] = int(bool(updates["params_enabled"]))
+        if "use_workflow" in updates:
+            updates["use_workflow"] = int(bool(updates["use_workflow"]))
         for flag in LIMIT_FLAG_FIELDS:
             if flag in updates:
                 updates[flag] = int(bool(updates[flag]))
