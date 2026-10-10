@@ -123,6 +123,22 @@ CREATE TABLE IF NOT EXISTS premodels (
     preset_json   TEXT,
     params_enabled INTEGER NOT NULL DEFAULT 0,
     params_json   TEXT,
+    limit_tokens_enabled INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_hour    INTEGER NOT NULL DEFAULT 0,
+    max_tokens_hour      INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_day     INTEGER NOT NULL DEFAULT 0,
+    max_tokens_day       INTEGER NOT NULL DEFAULT 0,
+    limit_tokens_week    INTEGER NOT NULL DEFAULT 0,
+    max_tokens_week      INTEGER NOT NULL DEFAULT 0,
+    limit_requests_enabled INTEGER NOT NULL DEFAULT 0,
+    limit_requests_minute  INTEGER NOT NULL DEFAULT 0,
+    max_requests_minute    INTEGER NOT NULL DEFAULT 0,
+    limit_requests_hour    INTEGER NOT NULL DEFAULT 0,
+    max_requests_hour      INTEGER NOT NULL DEFAULT 0,
+    limit_requests_day     INTEGER NOT NULL DEFAULT 0,
+    max_requests_day       INTEGER NOT NULL DEFAULT 0,
+    limit_requests_week    INTEGER NOT NULL DEFAULT 0,
+    max_requests_week      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
 );
@@ -198,6 +214,17 @@ CREATE TABLE IF NOT EXISTS rate_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rate_usage_start ON rate_usage(window_start);
+
+CREATE TABLE IF NOT EXISTS premodel_rate_usage (
+    premodel_id  INTEGER NOT NULL REFERENCES premodels(id) ON DELETE CASCADE,
+    kind         TEXT    NOT NULL,
+    window       TEXT    NOT NULL,
+    window_start TEXT    NOT NULL,
+    amount       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (premodel_id, kind, window, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_premodel_rate_usage_start ON premodel_rate_usage(window_start);
 """
 
 
@@ -399,6 +426,8 @@ class Database:
                 {
                     "params_enabled": "INTEGER NOT NULL DEFAULT 0",
                     "params_json": "TEXT",
+                    **{flag: "INTEGER NOT NULL DEFAULT 0" for flag in LIMIT_FLAG_FIELDS},
+                    **{value: "INTEGER NOT NULL DEFAULT 0" for value in LIMIT_VALUE_FIELDS},
                 },
             )
 
@@ -542,6 +571,10 @@ class Database:
 
     def request_log_limit(self, default: int = 10) -> int:
         return max(0, self.get_int_setting("request_log_limit", default))
+
+    def premodel_prefix(self, default: str = "<p>-") -> str:
+        raw = self.get_setting("premodel_prefix")
+        return raw if raw else default
 
     # -- setup / routes -----------------------------------------------------
 
@@ -708,6 +741,8 @@ class Database:
         "preset_json",
         "params_enabled",
         "params_json",
+        *LIMIT_FLAG_FIELDS,
+        *LIMIT_VALUE_FIELDS,
     )
 
     def create_premodel(
@@ -725,33 +760,37 @@ class Database:
         preset_json: str | None = None,
         params_enabled: bool = False,
         params_json: str | None = None,
+        **extra: Any,
     ) -> int:
         stamp = to_iso(utcnow())
+        values: dict[str, Any] = {
+            "name": name,
+            "slug": slug,
+            "description": description,
+            "route_id": route_id,
+            "model": model,
+            "merge_mode": merge_mode,
+            "accept_mwvars": int(bool(accept_mwvars)),
+            "prompt_mode": prompt_mode,
+            "system_prompt": system_prompt,
+            "preset_json": preset_json,
+            "params_enabled": int(bool(params_enabled)),
+            "params_json": params_json,
+            "created_at": stamp,
+            "updated_at": stamp,
+        }
+        for flag in LIMIT_FLAG_FIELDS:
+            if flag in extra:
+                values[flag] = int(bool(extra[flag]))
+        for value in LIMIT_VALUE_FIELDS:
+            if value in extra:
+                values[value] = max(0, int(extra[value] or 0))
+        columns = ", ".join(values)
+        placeholders = ", ".join("?" for _ in values)
         with self.write() as conn:
             cur = conn.execute(
-                """
-                INSERT INTO premodels (
-                    name, slug, description, route_id, model, merge_mode,
-                    accept_mwvars, prompt_mode, system_prompt, preset_json,
-                    params_enabled, params_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    name,
-                    slug,
-                    description,
-                    route_id,
-                    model,
-                    merge_mode,
-                    int(bool(accept_mwvars)),
-                    prompt_mode,
-                    system_prompt,
-                    preset_json,
-                    int(bool(params_enabled)),
-                    params_json,
-                    stamp,
-                    stamp,
-                ),
+                f"INSERT INTO premodels ({columns}) VALUES ({placeholders})",
+                tuple(values.values()),
             )
             return int(cur.lastrowid)
 
@@ -763,6 +802,12 @@ class Database:
             updates["accept_mwvars"] = int(bool(updates["accept_mwvars"]))
         if "params_enabled" in updates:
             updates["params_enabled"] = int(bool(updates["params_enabled"]))
+        for flag in LIMIT_FLAG_FIELDS:
+            if flag in updates:
+                updates[flag] = int(bool(updates[flag]))
+        for value in LIMIT_VALUE_FIELDS:
+            if value in updates:
+                updates[value] = max(0, int(updates[value] or 0))
         updates["updated_at"] = to_iso(utcnow())
         assignments = ", ".join(f"{key} = ?" for key in updates)
         with self.write() as conn:
@@ -1180,51 +1225,76 @@ class Database:
 
     # -- rate limits ---------------------------------------------------------
 
-    def _prune_rate_usage(self, conn: sqlite3.Connection, now: datetime | None = None) -> None:
+    # rate_usage counts against API keys; premodel_rate_usage counts against
+    # premodels. They share one shape, so the SQL runs through three private
+    # helpers parameterized by (table, id column) — both names are module
+    # constants, never user input.
+    _RATE_TABLES = {
+        "api_key": ("rate_usage", "api_key_id"),
+        "premodel": ("premodel_rate_usage", "premodel_id"),
+    }
+
+    def _prune_rate_usage(self, conn: sqlite3.Connection, table: str, now: datetime | None = None) -> None:
         """Drop counters older than any window we could ever read back."""
         cutoff = to_iso((now or utcnow()) - timedelta(days=14))
-        conn.execute("DELETE FROM rate_usage WHERE window_start < ?", (cutoff,))
+        conn.execute(f"DELETE FROM {table} WHERE window_start < ?", (cutoff,))
 
-    def rate_usage_amounts(
-        self, api_key_id: int, kind: str, windows: tuple[str, ...], now: datetime | None = None
+    def _rate_usage_amounts(
+        self,
+        subject: str,
+        subject_id: int,
+        kind: str,
+        windows: tuple[str, ...],
+        now: datetime | None = None,
     ) -> dict[str, int]:
-        """Current consumption of ``kind`` for a key in each fixed window."""
+        """Current consumption of ``kind`` for a subject in each fixed window."""
+        table, id_column = self._RATE_TABLES[subject]
         counts: dict[str, int] = {}
         for window in windows:
             start = to_iso(rate_window_start(window, now))
             counts[window] = int(
                 self._scalar(
-                    "SELECT amount FROM rate_usage "
-                    "WHERE api_key_id = ? AND kind = ? AND window = ? AND window_start = ?",
-                    (api_key_id, kind, window, start),
+                    f"SELECT amount FROM {table} "
+                    f"WHERE {id_column} = ? AND kind = ? AND window = ? AND window_start = ?",
+                    (subject_id, kind, window, start),
                 )
                 or 0
             )
         return counts
 
-    def rate_usage_add(
-        self, api_key_id: int, kind: str, amounts: dict[str, int], now: datetime | None = None
+    def _rate_usage_add(
+        self,
+        subject: str,
+        subject_id: int,
+        kind: str,
+        amounts: dict[str, int],
+        now: datetime | None = None,
     ) -> None:
-        """Add ``amounts`` ({window: delta}) to the key's current windows."""
+        """Add ``amounts`` ({window: delta}) to the subject's current windows."""
         items = {window: int(delta) for window, delta in amounts.items() if int(delta) > 0}
         if not items:
             return
+        table, id_column = self._RATE_TABLES[subject]
         with self.write() as conn:
             for window, delta in items.items():
                 start = to_iso(rate_window_start(window, now))
                 conn.execute(
-                    """
-                    INSERT INTO rate_usage (api_key_id, kind, window, window_start, amount)
+                    f"""
+                    INSERT INTO {table} ({id_column}, kind, window, window_start, amount)
                     VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(api_key_id, kind, window, window_start)
+                    ON CONFLICT({id_column}, kind, window, window_start)
                     DO UPDATE SET amount = amount + excluded.amount
                     """,
-                    (api_key_id, kind, window, start, delta),
+                    (subject_id, kind, window, start, delta),
                 )
-            self._prune_rate_usage(conn, now)
+            self._prune_rate_usage(conn, table, now)
 
-    def rate_usage_claim(
-        self, api_key_id: int, limits: dict[str, int], now: datetime | None = None
+    def _rate_usage_claim(
+        self,
+        subject: str,
+        subject_id: int,
+        limits: dict[str, int],
+        now: datetime | None = None,
     ) -> tuple[dict[str, int], bool]:
         """Count one request against every window in ``limits`` ({window: max}).
 
@@ -1235,36 +1305,67 @@ class Database:
         """
         if not limits:
             return {}, True
+        table, id_column = self._RATE_TABLES[subject]
         try:
             with self.write() as conn:
                 for window in limits:
                     start = to_iso(rate_window_start(window, now))
                     conn.execute(
-                        """
-                        INSERT INTO rate_usage (api_key_id, kind, window, window_start, amount)
+                        f"""
+                        INSERT INTO {table} ({id_column}, kind, window, window_start, amount)
                         VALUES (?, 'requests', ?, ?, 1)
-                        ON CONFLICT(api_key_id, kind, window, window_start)
+                        ON CONFLICT({id_column}, kind, window, window_start)
                         DO UPDATE SET amount = amount + 1
                         """,
-                        (api_key_id, window, start),
+                        (subject_id, window, start),
                     )
                 counts = {
                     window: int(
                         conn.execute(
-                            "SELECT amount FROM rate_usage "
-                            "WHERE api_key_id = ? AND kind = 'requests' AND window = ? AND window_start = ?",
-                            (api_key_id, window, to_iso(rate_window_start(window, now))),
+                            f"SELECT amount FROM {table} "
+                            f"WHERE {id_column} = ? AND kind = 'requests' AND window = ? AND window_start = ?",
+                            (subject_id, window, to_iso(rate_window_start(window, now))),
                         ).fetchone()[0]
                     )
                     for window in limits
                 }
                 if any(counts[window] > limits[window] for window in limits):
                     raise _RateLimitHit(counts)
-                self._prune_rate_usage(conn, now)
+                self._prune_rate_usage(conn, table, now)
         except _RateLimitHit as hit:
             # the bumps were rolled back, so report what is actually stored
             return {window: amount - 1 for window, amount in hit.counts.items()}, False
         return counts, True
+
+    def rate_usage_amounts(
+        self, api_key_id: int, kind: str, windows: tuple[str, ...], now: datetime | None = None
+    ) -> dict[str, int]:
+        return self._rate_usage_amounts("api_key", api_key_id, kind, windows, now)
+
+    def rate_usage_add(
+        self, api_key_id: int, kind: str, amounts: dict[str, int], now: datetime | None = None
+    ) -> None:
+        self._rate_usage_add("api_key", api_key_id, kind, amounts, now)
+
+    def rate_usage_claim(
+        self, api_key_id: int, limits: dict[str, int], now: datetime | None = None
+    ) -> tuple[dict[str, int], bool]:
+        return self._rate_usage_claim("api_key", api_key_id, limits, now)
+
+    def premodel_rate_usage_amounts(
+        self, premodel_id: int, kind: str, windows: tuple[str, ...], now: datetime | None = None
+    ) -> dict[str, int]:
+        return self._rate_usage_amounts("premodel", premodel_id, kind, windows, now)
+
+    def premodel_rate_usage_add(
+        self, premodel_id: int, kind: str, amounts: dict[str, int], now: datetime | None = None
+    ) -> None:
+        self._rate_usage_add("premodel", premodel_id, kind, amounts, now)
+
+    def premodel_rate_usage_claim(
+        self, premodel_id: int, limits: dict[str, int], now: datetime | None = None
+    ) -> tuple[dict[str, int], bool]:
+        return self._rate_usage_claim("premodel", premodel_id, limits, now)
 
     # -- requests -----------------------------------------------------------
 

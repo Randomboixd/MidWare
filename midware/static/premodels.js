@@ -14,6 +14,12 @@
   var modelList = document.getElementById("premodel-models");
   var paramsEnabled = document.getElementById("params-enabled");
   var paramsPanel = document.getElementById("params-panel");
+  var limitsToggle = document.getElementById("limits-toggle");
+  var limitsPanel = document.getElementById("limits-panel");
+  var limitTokens = document.getElementById("limit-tokens");
+  var limitTokensPanel = document.getElementById("limit-tokens-panel");
+  var limitRequests = document.getElementById("limit-requests");
+  var limitRequestsPanel = document.getElementById("limit-requests-panel");
   var simplePanel = document.getElementById("simple-panel");
   var presetPanel = document.getElementById("preset-panel");
   var presetFile = document.getElementById("preset-file");
@@ -201,6 +207,29 @@
     paramsEnabled.addEventListener("change", updateParamsPanel);
     updateParamsPanel();
   }
+
+  if (limitsToggle && limitsPanel) {
+    limitsToggle.addEventListener("click", function () {
+      limitsPanel.hidden = false;
+      limitsToggle.hidden = true;
+    });
+  }
+
+  function syncLimitPanels() {
+    if (limitTokensPanel && limitTokens) {
+      limitTokensPanel.hidden = !limitTokens.checked;
+    }
+    if (limitRequestsPanel && limitRequests) {
+      limitRequestsPanel.hidden = !limitRequests.checked;
+    }
+  }
+  if (limitTokens) {
+    limitTokens.addEventListener("change", syncLimitPanels);
+  }
+  if (limitRequests) {
+    limitRequests.addEventListener("change", syncLimitPanels);
+  }
+  syncLimitPanels();
 
   function prefillParams(raw) {
     if (!raw || typeof raw !== "object") {

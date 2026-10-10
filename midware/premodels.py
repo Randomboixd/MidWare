@@ -1,6 +1,7 @@
 """Premodels: named overlays that bundle a route, a model, and a prompt preset.
 
-A premodel is addressed in a request's ``model`` field as ``<p>-slug``. When
+A premodel is addressed in a request's ``model`` field as ``<p>-slug`` (the
+prefix is configurable from the settings page). When
 MidWare sees that prefix it resolves the bundled route and model, merges the
 premodel's prompt inventory into the caller's messages (honoring the chosen
 merge mode), and expands MWVAR macros.
@@ -24,7 +25,9 @@ import json
 import re
 from typing import Any
 
-PREMODEL_PREFIX_RE = re.compile(r"^\s*<p>-(?P<slug>[A-Za-z0-9._-]+)\s*")
+DEFAULT_PREMODEL_PREFIX = "<p>-"
+PREFIX_MAX = 32
+
 MWVAR_MARKER_RE = re.compile(r"^\s*!!!MWVARS?!!!", re.IGNORECASE)
 MWVAR_LINE_RE = re.compile(r"^\s*@(?P<name>[^=]+?)\s*=\s*(?P<value>.*)$")
 MACRO_RE = re.compile(r"\{\{\s*(?P<name>[^{}]+?)\s*\}\}")
@@ -33,6 +36,29 @@ FALLBACK_MACRO_RE = re.compile(r"@@\s*(?P<name>[^@]+?)\s*@@")
 MERGE_MODES = ("caller", "premodel", "append")
 PROMPT_MODES = ("simple", "sillytavern")
 DESCRIPTION_MAX = 250
+
+# The prefix is a live setting, so the matcher is built per configured value
+# (cached; a deployment only ever uses one or two prefixes in practice).
+_PREFIX_RES: dict[str, re.Pattern[str]] = {}
+
+
+def prefix_regex(prefix: str) -> re.Pattern[str]:
+    pattern = _PREFIX_RES.get(prefix)
+    if pattern is None:
+        pattern = re.compile(rf"^\s*{re.escape(prefix)}(?P<slug>[A-Za-z0-9._-]+)\s*")
+        _PREFIX_RES[prefix] = pattern
+    return pattern
+
+
+def normalize_prefix(raw: Any) -> str | None:
+    """A usable prefix, or ``None`` when the value is empty/oversized/spaced."""
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text or len(text) > PREFIX_MAX or any(ch.isspace() for ch in text):
+        return None
+    return text
+
 
 # Sampling parameters a premodel can inject when the caller did not set them.
 SAMPLING_KEYS = ("temperature", "top_p", "max_tokens")
@@ -51,11 +77,11 @@ def normalize_slug(raw: str, name: str = "") -> str:
     return slugify(raw) or slugify(name)
 
 
-def extract_premodel_prefix(model: Any) -> tuple[str | None, str]:
-    """Split ``<p>-slug`` off a model string, returning ``(slug, remainder)``."""
+def extract_premodel_prefix(model: Any, prefix: str = DEFAULT_PREMODEL_PREFIX) -> tuple[str | None, str]:
+    """Split ``<prefix>slug`` off a model string, returning ``(slug, remainder)``."""
     if not isinstance(model, str):
         return None, ""
-    match = PREMODEL_PREFIX_RE.match(model)
+    match = prefix_regex(prefix).match(model)
     if not match:
         return None, model
     return match.group("slug"), model[match.end():]

@@ -50,6 +50,20 @@ def test_slugify_and_prefix_parsing():
     assert pm.extract_premodel_prefix("<p>-autistic-glm[Host]m") == ("autistic-glm", "[Host]m")
     assert pm.extract_premodel_prefix("gpt-4o") == (None, "gpt-4o")
 
+    assert pm.extract_premodel_prefix("!p!autistic-glm", "!p!") == ("autistic-glm", "")
+    assert pm.extract_premodel_prefix("<p>-autistic-glm", "!p!") == (None, "<p>-autistic-glm")
+    assert pm.extract_premodel_prefix("!!story", "!!") == ("story", "")
+
+
+def test_normalize_prefix_validation():
+    assert pm.normalize_prefix("  !p!  ") == "!p!"
+    assert pm.normalize_prefix("<p>-") == "<p>-"
+    assert pm.normalize_prefix("") is None
+    assert pm.normalize_prefix("   ") is None
+    assert pm.normalize_prefix("has space") is None
+    assert pm.normalize_prefix("x" * (pm.PREFIX_MAX + 1)) is None
+    assert pm.normalize_prefix(None) is None
+
 
 def test_normalize_preset_honors_prompt_order():
     preset = {
@@ -353,6 +367,7 @@ def test_unknown_premodel_is_404(configured):
     )
 
     assert response.status_code == 404
+    assert response.headers["Server"] == "MidWare"
     assert response.get_json()["error"]["code"] == "unknown_premodel"
     assert stub.sent == []
     assert db.count_requests() == 0
@@ -607,3 +622,158 @@ def test_migration_adds_premodel_params_columns(tmp_path):
     db.init_schema()
     columns = {row["name"] for row in db._rows("PRAGMA table_info(premodels)")}
     assert {"params_enabled", "params_json"} <= columns
+    assert {"limit_tokens_enabled", "max_tokens_day", "limit_requests_minute", "max_requests_week"} <= columns
+    tables = {row["name"] for row in db._rows("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "premodel_rate_usage" in tables
+
+
+# -- configurable prefix -----------------------------------------------------
+
+
+def test_settings_custom_prefix_routes_and_catalogues(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_premodel(db)
+    client = app.test_client()
+
+    response = client.post(
+        "/admin/settings", data={"premodel_prefix": "!p!"}, follow_redirects=True
+    )
+    assert response.status_code == 200
+    assert db.premodel_prefix() == "!p!"
+    assert "Premodel prefix is now" in response.get_data(as_text=True)
+
+    payload = client.get("/v1/models", headers=auth_header(token)).get_json()
+    ids = [entry["id"] for entry in payload["data"]]
+    assert "!p!autistic-glm" in ids
+    assert "<p>-autistic-glm" not in ids
+
+    stub = install_stub(app, StubResponse(content=b"{}"))
+    proxied = client.post(
+        "/v1/chat/completions",
+        json={"model": "!p!autistic-glm", "messages": []},
+        headers=auth_header(token),
+    )
+    assert proxied.status_code == 200
+    sent = json.loads(stub.sent[0][0]["content"])
+    assert sent["model"] == "xiaomi/mimo"
+
+    html = client.get("/admin/premodels").get_data(as_text=True)
+    assert "!p!autistic-glm" in html
+
+
+def test_settings_prefix_error_uses_configured_prefix(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+    client.post("/admin/settings", data={"premodel_prefix": "!p!"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "!p!nope", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 404
+    assert "!p!nope" in response.get_json()["error"]["message"]
+
+
+def test_settings_rejects_invalid_prefix(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+
+    response = client.post("/admin/settings", data={"premodel_prefix": "has space"})
+    assert response.status_code == 302
+    assert db.premodel_prefix() == "<p>-"
+
+    client.post("/admin/settings", data={"premodel_prefix": ""})
+    assert db.premodel_prefix() == "<p>-"
+
+
+def test_settings_reset_premodel_prefix(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+
+    client.post("/admin/settings", data={"premodel_prefix": "!p!"})
+    assert db.premodel_prefix() == "!p!"
+    page = client.get("/admin/settings").get_data(as_text=True)
+    assert 'name="premodel_prefix"' in page
+    assert 'value="!p!"' in page
+
+    client.post("/admin/settings", data={"action": "reset_premodel_prefix"})
+    assert db.premodel_prefix() == "<p>-"
+
+
+def test_custom_prefix_applies_to_host_override_remainder(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_premodel(db)
+    client = app.test_client()
+    client.post("/admin/settings", data={"premodel_prefix": "~pm~"})
+    stub = install_stub(app, StubResponse(content=b"{}"))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "~pm~autistic-glm[Default]override-model", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    sent = json.loads(stub.sent[0][0]["content"])
+    assert sent["model"] == "override-model"
+
+
+def test_slash_prefix_intercepts_before_upstream(configured):
+    """Regression: prefix 'premodels/' must swallow the model, never forward it."""
+    app, token = configured
+    db = app.extensions["midware_db"]
+    route = db.active_route()
+    db.create_premodel(
+        name="Skibidi",
+        slug="skibidi-toilet",
+        route_id=route["id"],
+        model="real-upstream-model",
+        system_prompt="You are skibidi.",
+    )
+    client = app.test_client()
+    saved = client.post("/admin/settings", data={"premodel_prefix": "premodels/"})
+    assert saved.status_code == 302
+    assert db.premodel_prefix() == "premodels/"
+
+    stub = install_stub(app, StubResponse(content=b"{}"))
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "premodels/skibidi-toilet", "messages": [{"role": "user", "content": "Hello!"}]},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert len(stub.sent) == 1
+    sent = json.loads(stub.sent[0][0]["content"])
+    assert sent["model"] == "real-upstream-model"
+
+    payload = client.get("/v1/models", headers=auth_header(token)).get_json()
+    assert "premodels/skibidi-toilet" in [entry["id"] for entry in payload["data"]]
+
+
+def test_unmatched_prefix_passes_model_through(configured):
+    """Bare models (including slashy names) are forwarded — that is by design,
+    so a non-matching prefix can never trap a real upstream model name."""
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_premodel(db)
+    client = app.test_client()
+    client.post("/admin/settings", data={"premodel_prefix": "!p!"})
+    stub = install_stub(app, StubResponse(content=b"{}"))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "openai/gpt-4o", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    sent = json.loads(stub.sent[0][0]["content"])
+    assert sent["model"] == "openai/gpt-4o"

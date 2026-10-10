@@ -52,6 +52,10 @@ UPSTREAM_VERIFY_TLS = _env_bool("MIDWARE_UPSTREAM_VERIFY_TLS", True)
 # editable from the control panel.
 DEFAULT_REQUEST_LOG_LIMIT = _env_int("MIDWARE_REQUEST_LOG_LIMIT", 10)
 
+# Fallback premodel addressing prefix ("<p>-slug"). The live value lives in the
+# settings table and is editable from the control panel.
+DEFAULT_PREMODEL_PREFIX = os.environ.get("MIDWARE_PREMODEL_PREFIX", "<p>-")
+
 # Default upstream host used to pre-fill the setup form.
 DEFAULT_TARGET_HOST = os.environ.get("MIDWARE_TARGET_HOST", "https://api.openai.com")
 

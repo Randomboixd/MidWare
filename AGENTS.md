@@ -48,7 +48,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
 | `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
 | `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
-| `midware/premodels.py` | Premodel overlays: slugging, SillyTavern preset normalization, MWVAR macros, message merging. |
+| `midware/premodels.py` | Premodel overlays: slugging, configurable prefix parsing (`prefix_regex`/`normalize_prefix`), SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
 | `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
@@ -102,12 +102,22 @@ this development environment, so Docker changes are verified by reading only.
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
   token_source, upstream_request_id, error, request_body, response_body, route_id,
   api_key_id)`
-- `settings(key, value)` — live-editable values (e.g. `request_log_limit`).
+- `settings(key, value)` — live-editable values (`request_log_limit`,
+  `premodel_prefix`; each falls back to its `DEFAULT_*` config constant).
 - `meta(key, value)` — bookkeeping (`configured_at`, `models_refreshed_at`,
   `models_refresh_error`) and the admin login (`admin_username`,
   `admin_password_hash` — a salted scrypt hash — and the one-time `admin_setup_code`,
   see `adminauth.py`).
 - `models(id, route_id FK CASCADE, model_id, fetched_at, UNIQUE(route_id, model_id))`
+- `premodels(id, name, slug UNIQUE, description, route_id FK SET NULL, model,
+  merge_mode, accept_mwvars, prompt_mode, system_prompt, preset_json, params_enabled,
+  params_json, *LIMIT_FLAG_FIELDS, *LIMIT_VALUE_FIELDS, created_at, updated_at)` —
+  the limit columns mirror `api_keys` (same names/semantics) and back the per-premodel
+  rate limits.
+- `premodel_rate_usage(premodel_id FK CASCADE, kind, window, window_start, amount,
+  PK(premodel_id, kind, window, window_start))` — per-premodel rate-limit counters,
+  a twin of `rate_usage`; both are driven by the shared `_rate_usage_*` helpers in
+  `db.py` (keyed by `Database._RATE_TABLES`).
 - `msq_recorders(id, name, route_id FK SET NULL, model, system_prompt, user_prompt,
   interval_seconds, enabled, penalize_symbols, slop_list, max_ttft_ms, max_total_ms,
   hardcore_json, collect_requests, ignore_thinking, created_at, updated_at, last_run_at,
@@ -190,6 +200,13 @@ Do not break these; several have regression tests.
   (`type: midware_rate_limit_error`), and the rejection is still logged as a
   `429` request row (`error = "rate_limited: <code>"`). Keys with no limits in
   force do zero counter writes.
+- **Per-premodel rate limits**: premodels carry the same `limit_*`/`max_*` columns
+  and are checked immediately after the key in `_forward`, with their own
+  `premodel_rate_usage` counters (`db.premodel_rate_usage_*` helpers). Identical
+  semantics — master switch + ticked window + cap above `0`; request claims are
+  all-or-nothing; tokens settle in `_persist`; `429` codes are shared with key
+  limits. A key-limit rejection rolls back before the premodel claim runs, so it
+  never eats premodel quota; plain (non-premodel) calls touch no premodel counters.
 - **SSE parsing** (`parse_sse_events`): events end at blank lines. Captured bodies
   sometimes lose separators, so a `data:` line inside an event only starts a new
   event when the previous payload is complete JSON, or the previous payload was not a
@@ -255,7 +272,11 @@ Do not break these; several have regression tests.
   nothing (`{"ok": false}`), never an error; results are cached for 60 s keyed
   by a digest of the upstream key.
 - **Premodels** (`premodels.py`): a premodel bundles a route, a model and a prompt
-  preset, addressed as `<p>-slug` in `model`. The prefix is parsed before
+  preset, addressed as `<p>-slug` in `model`. The prefix is **configurable** — the
+  `premodel_prefix` setting (`MIDWARE_PREMODEL_PREFIX` changes the default; the
+  settings page has a reset button) — and read per request via
+  `db.premodel_prefix()`; `extract_premodel_prefix(model, prefix)` builds its regex
+  with `prefix_regex` (escaped, cached). The prefix is parsed before
   `[Host]`, so `<p>-slug[Host]model` lets the host win while the preset still
   applies; trailing text after the slug overrides the premodel's model. Prompt
   merge modes are `append` (default: premodel system prompt then caller's),
@@ -268,7 +289,9 @@ Do not break these; several have regression tests.
   of the value. Macros expand in both the `{{ name }}` and `@@name@@` forms. When
   `params_enabled` is set, `temperature`,
   `top_p` and `max_tokens` fill in any value the caller omitted. Premodels are
-  merged into `GET /v1/models` as `<p>-slug`. Admin CRUD lives at
+  merged into `GET /v1/models` as `<prefix>slug`. Each premodel also carries
+  optional token/request rate limits (the collapsed `Premodel limits` panel of the
+  form, same master-switch semantics as key limits). Admin CRUD lives at
   `/admin/premodels`.
 - **MSQ** (`msq.py`): a recorder periodically streams a fixed prompt to its route's
   model, measuring time-to-first-token (the incremental `StreamAudit` in
@@ -338,7 +361,7 @@ Do not break these; several have regression tests.
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `238 passed` — **update this number whenever the test count changes.**
+  `259 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

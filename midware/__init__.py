@@ -55,6 +55,13 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     register_template_helpers(app)
     register_cors(app)
 
+    @app.after_request
+    def _identify(response):
+        # Stamped on every response (including passed-through upstream errors) so
+        # "is this actually MidWare answering?" is always one `curl -i` away.
+        response.headers["Server"] = "MidWare"
+        return response
+
     # Kick off a model-catalogue refresh when it has gone stale (roughly daily),
     # and fetch it immediately on the very first proxied request after install so
     # clients never see an empty /v1/models.

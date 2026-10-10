@@ -43,14 +43,25 @@
 {% endif %}
 {% endif %}
 
-<h2>Request logging</h2>
 <form method="post">
+  <h2>Request logging</h2>
   <label>
     Saved requests per API key
     <input type="number" name="request_log_limit" min="0" max="100000" value="{{ log_limit }}">
     <small>Each key keeps its newest N request/response bodies. MidWare trims older rows immediately. Set 0 to keep none.</small>
   </label>
-  <button type="submit">Save</button>
+
+  <h2>Premodels</h2>
+  <label>
+    Premodel prefix
+    <input type="text" name="premodel_prefix" value="{{ premodel_prefix }}" maxlength="32" required>
+    <small>Clients address a premodel as <code>{{ premodel_prefix }}slug</code> in the
+      <code>model</code> field. Default: <code>{{ default_premodel_prefix }}</code>.
+      No spaces, 1-32 characters, case-sensitive, and it must match from the very start
+      of the model string (include a trailing separator, e.g. <code>premodels/</code>).</small>
+  </label>
+  <button type="submit">Save settings</button>
+  <button type="submit" name="action" value="reset_premodel_prefix" class="secondary outline">Reset prefix to default</button>
 </form>
 
 <h2>Maintenance</h2>

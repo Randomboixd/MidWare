@@ -26,7 +26,7 @@ MidWare has a few terms that can get confusing because apparently naming things 
 
 **Host** — The upstream service behind a route. In some parts of the UI/code you'll see these terms used together.
 
-**Premodel** — A server-side model configuration that behaves like a model itself. It can select an underlying model, inject settings/prompts, merge caller configuration, and expose a new model slug such as `<p>-st-assistant-model`.
+**Premodel** — A server-side model configuration that behaves like a model itself. It can select an underlying model, inject settings/prompts, merge caller configuration, carry its own rate limits, and expose a new model slug such as `<p>-st-assistant-model` (the prefix is configurable in Settings).
 
 **API Key** — A MidWare-generated `mw-...` credential. Clients authenticate to MidWare with these instead of receiving your actual upstream provider keys.
 

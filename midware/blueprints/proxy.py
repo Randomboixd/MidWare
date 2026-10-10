@@ -141,32 +141,34 @@ def _rate_limit_error(window: str, message: str, code: str) -> Response:
     return response
 
 
-def _rate_limit_check(db, api_key) -> tuple[Response, str] | None:
-    """Reject a call that would push the key past a configured quota.
+def _rate_limit_check(db, subject, subject_id: int, label: str, *, amounts, claim) -> tuple[Response, str] | None:
+    """Reject a call that would push ``subject`` (a key or premodel row) past quota.
 
     Request counters are claimed atomically (all windows or none) so a rejected
     attempt never eats quota; token counters are settled after the response in
-    ``_persist`` because only the upstream knows the final usage.
+    ``_persist`` because only the upstream knows the final usage. ``amounts`` /
+    ``claim`` are the matching db helpers — key and premodel counters live in
+    separate tables and are checked independently (key first).
     """
-    token_windows = _enabled_token_windows(api_key)
+    token_windows = _enabled_token_windows(subject)
     if token_windows:
-        counts = db.rate_usage_amounts(api_key["id"], "tokens", token_windows)
+        counts = amounts(subject_id, "tokens", token_windows)
         for window in token_windows:
-            limit = int(api_key[f"max_tokens_{window}"] or 0)
+            limit = int(subject[f"max_tokens_{window}"] or 0)
             if counts[window] >= limit:
                 message = (
-                    f"Token limit reached for this API key: {counts[window]}/{limit} "
+                    f"Token limit reached for this {label}: {counts[window]}/{limit} "
                     f"tokens used this {window}."
                 )
                 return _rate_limit_error(window, message, "token_limit_exceeded"), "token_limit_exceeded"
 
-    request_limits = _enabled_request_limits(api_key)
+    request_limits = _enabled_request_limits(subject)
     if request_limits:
-        counts, ok = db.rate_usage_claim(api_key["id"], request_limits)
+        counts, ok = claim(subject_id, request_limits)
         if not ok:
             window = next(w for w in request_limits if counts[w] >= request_limits[w])
             message = (
-                f"Request limit reached for this API key: {counts[window]}/"
+                f"Request limit reached for this {label}: {counts[window]}/"
                 f"{request_limits[window]} requests sent this {window}."
             )
             return (
@@ -187,6 +189,11 @@ def _host_label(name: str) -> str:
     """Turn a route name into the short tag clients type as ``[Name]``."""
     cleaned = re.sub(r"\s+", " ", (name or "").strip())
     return cleaned[:32]
+
+
+def _premodel_prefix(db) -> str:
+    """The live premodel addressing prefix (settings override, config default)."""
+    return db.premodel_prefix(current_app.config["DEFAULT_PREMODEL_PREFIX"])
 
 
 def _route_labels(route) -> list[str]:
@@ -296,10 +303,6 @@ def _stream_requested(payload: dict | None) -> bool:
     return False
 
 
-def _server_header() -> tuple[str, str]:
-    return ("Server", "MidWare")
-
-
 def _models_catalogue(ctx: dict) -> Response:
     """Serve MidWare's own model list instead of proxying the upstream's.
 
@@ -331,6 +334,7 @@ def _models_catalogue(ctx: dict) -> Response:
     routes = {route["id"]: route for route in db.list_routes()}
     active = db.active_route()
     active_id = active["id"] if active else None
+    prefix = _premodel_prefix(db)
     for premodel in db.list_premodels():
         if not _premodel_allowed(limits, premodel):
             continue
@@ -342,7 +346,7 @@ def _models_catalogue(ctx: dict) -> Response:
         route = routes.get(premodel["route_id"])
         data.append(
             {
-                "id": f"<p>-{premodel['slug']}",
+                "id": f"{prefix}{premodel['slug']}",
                 "object": "model",
                 "created": 0,
                 "owned_by": route["name"] if route else "premodel",
@@ -471,6 +475,16 @@ def _persist(
             {window: total for window in token_windows},
         )
 
+    premodel = ctx.get("premodel")
+    if premodel is not None:
+        token_windows = _enabled_token_windows(premodel)
+        if token_windows:
+            db.premodel_rate_usage_add(
+                premodel["id"],
+                "tokens",
+                {window: total for window in token_windows},
+            )
+
     db.record_request(
         api_key_id=api_key["id"],
         route_id=route["id"],
@@ -512,19 +526,21 @@ def _forward(ctx: dict, path: str) -> Response:
     rewritten = False
 
     model_field = parsed_body.get("model") if isinstance(parsed_body, dict) else None
-    premodel_slug, model_remainder = extract_premodel_prefix(model_field)
+    prefix = _premodel_prefix(db)
+    premodel = None
+    premodel_slug, model_remainder = extract_premodel_prefix(model_field, prefix)
     if premodel_slug:
         premodel = db.get_premodel_by_slug(premodel_slug)
         if premodel is None:
             return _json_error(
-                f"Unknown premodel '<p>-{premodel_slug}'.",
+                f"Unknown premodel '{prefix}{premodel_slug}'.",
                 404,
                 "unknown_premodel",
                 "midware_routing_error",
             )
         if not _premodel_allowed(limits, premodel):
             return _permission_error(
-                f"Premodel '<p>-{premodel_slug}' is not allowed for this API key.",
+                f"Premodel '{prefix}{premodel_slug}' is not allowed for this API key.",
                 "premodel_not_allowed",
             )
         target = db.get_route(premodel["route_id"]) if premodel["route_id"] else None
@@ -588,7 +604,7 @@ def _forward(ctx: dict, path: str) -> Response:
 
     def persist(**kwargs):
         _persist(
-            ctx={"api_key": ctx["api_key"], "route": route},
+            ctx={"api_key": ctx["api_key"], "route": route, "premodel": premodel},
             path=path,
             request_body=raw_body.decode("utf-8", "replace"),
             model_raw=model_raw,
@@ -596,8 +612,7 @@ def _forward(ctx: dict, path: str) -> Response:
             **kwargs,
         )
 
-    rate_error = _rate_limit_check(db, ctx["api_key"])
-    if rate_error:
+    def reject(rate_error):
         response, code = rate_error
         persist(
             model=model,
@@ -608,6 +623,29 @@ def _forward(ctx: dict, path: str) -> Response:
             error=f"rate_limited: {code}",
         )
         return response
+
+    api_key = ctx["api_key"]
+    rate_error = _rate_limit_check(
+        db,
+        api_key,
+        api_key["id"],
+        "API key",
+        amounts=db.rate_usage_amounts,
+        claim=db.rate_usage_claim,
+    )
+    if rate_error:
+        return reject(rate_error)
+    if premodel is not None:
+        rate_error = _rate_limit_check(
+            db,
+            premodel,
+            premodel["id"],
+            "premodel",
+            amounts=db.premodel_rate_usage_amounts,
+            claim=db.premodel_rate_usage_claim,
+        )
+        if rate_error:
+            return reject(rate_error)
 
     try:
         upstream = client.send(
@@ -632,7 +670,6 @@ def _forward(ctx: dict, path: str) -> Response:
         )
 
     response_headers = list(_filtered_headers(upstream.headers))
-    response_headers.append(_server_header())
     content_type = upstream.headers.get("content-type", "application/json")
 
     if upstream.status_code >= 400:

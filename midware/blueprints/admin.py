@@ -27,6 +27,7 @@ from ..premodels import (
     PROMPT_MODES,
     SAMPLING_KEYS,
     normalize_preset,
+    normalize_prefix,
     normalize_slug,
     parse_params,
 )
@@ -515,6 +516,7 @@ def _render_key_form(db, form, api_key):
         routes=db.list_routes(),
         premodels=db.list_premodels(),
         models=db.list_models(),
+        premodel_prefix=_premodel_prefix(db),
     )
 
 
@@ -552,6 +554,11 @@ def key_edit(key_id: int):
     return _render_key_form(db, _key_form_from_row(existing), existing)
 
 
+def _premodel_prefix(db) -> str:
+    """The live premodel addressing prefix, falling back to the config default."""
+    return db.premodel_prefix(current_app.config["DEFAULT_PREMODEL_PREFIX"])
+
+
 @bp.route("/settings", methods=["GET", "POST"])
 def settings():
     db = get_db()
@@ -563,16 +570,31 @@ def settings():
             return redirect(url_for("admin.settings"))
         if action == "credentials":
             return _update_credentials()
+        if action == "reset_premodel_prefix":
+            default = current_app.config["DEFAULT_PREMODEL_PREFIX"]
+            db.set_setting("premodel_prefix", default)
+            flash(f"Premodel prefix reset to '{default}'.", "success")
+            return redirect(url_for("admin.settings"))
 
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
-        flash(f"Settings saved. Request log limit set to {log_limit}.", "success")
+        saved = f"Settings saved. Request log limit set to {log_limit}."
+        if "premodel_prefix" in request.form:
+            prefix = normalize_prefix(request.form.get("premodel_prefix"))
+            if prefix is None:
+                flash("Premodel prefix must be 1-32 characters without spaces.", "error")
+            else:
+                db.set_setting("premodel_prefix", prefix)
+                saved += f" Premodel prefix is now '{prefix}'."
+        flash(saved, "success")
         return redirect(url_for("admin.settings"))
 
     return render_template(
         "settings.html",
         log_limit=db.request_log_limit(),
+        premodel_prefix=_premodel_prefix(db),
+        default_premodel_prefix=current_app.config["DEFAULT_PREMODEL_PREFIX"],
         configured=db.is_configured(),
         configured_at=db.get_meta("configured_at"),
         route_count=len(db.list_routes()),
@@ -673,6 +695,12 @@ def _read_premodel_form(db, existing):
         "params_enabled": params_enabled,
         "params_json": params_json,
     }
+    # Children survive a master toggle in the form; enforcement is gated on the
+    # master flag alone, so re-enabling restores the previous configuration.
+    for flag in LIMIT_FLAG_FIELDS:
+        fields[flag] = _form_bool(flag)
+    for value in LIMIT_VALUE_FIELDS:
+        fields[value] = _form_int(value, 0, maximum=_LIMIT_MAX)
 
     errors: list[str] = list(param_errors)
     if not name:
@@ -709,6 +737,7 @@ def _render_premodel_form(db, form, premodel):
         preset_data=preset_data,
         params=params,
         sampling_keys=SAMPLING_KEYS,
+        premodel_prefix=_premodel_prefix(db),
     )
 
 
@@ -741,6 +770,7 @@ def premodels():
         "premodels.html",
         premodels=db.list_premodels(),
         route_names={route["id"]: route["name"] for route in routes},
+        premodel_prefix=_premodel_prefix(db),
     )
 
 

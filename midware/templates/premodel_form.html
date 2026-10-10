@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit' if premodel else 'New' }} premodel - MidWare{% endblock %}
 
+{% set limits_open = form.get('limit_tokens_enabled', False) or form.get('limit_requests_enabled', False) %}
+
 {% block content %}
 <hgroup>
   <h1>{{ 'Edit premodel' if premodel else 'New premodel' }}</h1>
   <p>A preset bound to one connection and model. Clients call it with
-     <code>&lt;p&gt;-&lt;slug&gt;</code>.</p>
+     <code>{{ premodel_prefix }}&lt;slug&gt;</code>.</p>
 </hgroup>
 
 <article>
@@ -18,7 +20,7 @@
     <label>
       Slug
       <input type="text" id="premodel-slug" name="slug" value="{{ form.get('slug', '') }}" required>
-      <small>Sent as <code>&lt;p&gt;-&lt;slug&gt;</code>. Lowercase letters, digits and dashes.</small>
+      <small>Sent as <code>{{ premodel_prefix }}&lt;slug&gt;</code>. Lowercase letters, digits and dashes.</small>
     </label>
   </div>
 
@@ -88,6 +90,65 @@
       </div>
     </div>
   </fieldset>
+
+  <button type="button" id="limits-toggle" class="secondary outline"
+          {% if limits_open %}hidden{% endif %}>Premodel limits</button>
+
+  <section id="limits-panel" {% if not limits_open %}hidden{% endif %}>
+    <fieldset>
+      <legend>Token limits</legend>
+      <label>
+        <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1"
+               {% if form.get('limit_tokens_enabled') %}checked{% endif %}>
+        Set maximum tokens
+      </label>
+      <div id="limit-tokens-panel" hidden>
+        <small>Once this premodel has spent the configured tokens inside a window, further
+          requests through it are rejected with a 429 until the window resets. Counted
+          separately from the calling key's limits. Untick a window (or leave its box
+          empty) to leave it unlimited.</small>
+        <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+          {% for window, label in (('hour', 'Per hour'), ('day', 'Per day'), ('week', 'Per week')) %}
+          <label>
+            <input type="checkbox" name="limit_tokens_{{ window }}" value="1"
+                   {% if form.get('limit_tokens_' ~ window) %}checked{% endif %}>
+            {{ label }}
+            <input type="number" name="max_tokens_{{ window }}" min="0" step="1"
+                   placeholder="Max tokens"
+                   value="{{ form.get('max_tokens_' ~ window) or '' }}">
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Request limits</legend>
+      <label>
+        <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1"
+               {% if form.get('limit_requests_enabled') %}checked{% endif %}>
+        Set request limit
+      </label>
+      <div id="limit-requests-panel" hidden>
+        <small>Caps how many requests may be sent through this premodel inside a window;
+          the next request past the cap gets a 429. Counted separately from the calling
+          key's limits. Untick a window (or leave its box empty) to leave it unlimited.</small>
+        <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+          {% for window, label in (('minute', 'Per minute'), ('hour', 'Per hour'),
+                                   ('day', 'Per day'), ('week', 'Per week')) %}
+          <label>
+            <input type="checkbox" name="limit_requests_{{ window }}" value="1"
+                   {% if form.get('limit_requests_' ~ window) %}checked{% endif %}>
+            {{ label }}
+            <input type="number" name="max_requests_{{ window }}" min="0" step="1"
+                   placeholder="Max requests"
+                   value="{{ form.get('max_requests_' ~ window) or '' }}">
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </fieldset>
+  </section>
 
   <fieldset>
     <legend>Prompt source</legend>

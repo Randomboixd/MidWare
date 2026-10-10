@@ -62,7 +62,7 @@
         <label>
           <input type="checkbox" name="allowed_premodel_ids" value="{{ p['id'] }}"
                  {% if allowed_pms is none or p['id'] in allowed_pms %}checked{% endif %}>
-          <code>&lt;p&gt;-{{ p['slug'] }}</code> — {{ p['name'] }}
+          <code>{{ premodel_prefix }}{{ p['slug'] }}</code> — {{ p['name'] }}
         </label>
         {% endfor %}
       {% else %}
