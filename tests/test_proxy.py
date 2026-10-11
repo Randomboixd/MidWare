@@ -33,6 +33,8 @@ class StubClient:
         self.sent = []
         self.gets = []
         self.posts = []
+        self.requests = []
+        self.http_response = None
         self._post_queue = list(posts or [])
 
     def build_request(self, method, url, content=None, headers=None):
@@ -60,6 +62,15 @@ class StubClient:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def request(self, method, url, content=None, headers=None, timeout=None):
+        """Generic request path, used by workflow midware.fetch."""
+        self.requests.append((method, url, content, headers, timeout))
+        if self.error:
+            raise self.error
+        if self.http_response is not None:
+            return self.http_response
+        return StubResponse(content=b"stub-fetch-body")
 
 
 def install_stub(app, response=None, error=None, posts=None):

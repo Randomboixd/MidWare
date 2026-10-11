@@ -17,8 +17,11 @@ addressed. Only the final forwarded model is subject to the key's limits.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import re
+import time
 from typing import Any, Callable
 
 import httpx
@@ -33,13 +36,131 @@ WORKFLOW_MAX_CONTENT = 20_000
 WORKFLOW_MAX_MODEL = 200
 WORKFLOW_NODE_TIMEOUT_DEFAULT = 60
 WORKFLOW_NODE_TIMEOUT_MAX = 120
+JS_NODE_TIMEOUT_DEFAULT = 5
+JS_NODE_TIMEOUT_MAX = 30
+JS_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024
+JS_FETCH_TIMEOUT_SECONDS = 10.0
+JS_FETCH_MAX_BYTES = 1_000_000
+JS_CONTEXT_TRIM_MAX = 1000
 
-NODE_TYPES = ("api_request", "image_captioner")
+NODE_TYPES = (
+    "api_request",
+    "image_captioner",
+    "environment",
+    "context",
+    "assure",
+    "javascript",
+)
+REQUEST_NODE_TYPES = ("api_request", "image_captioner")
 IMAGE_MODES = ("batch", "individual")
+ENV_ACTIONS = ("time",)
+ENV_ACTION_LABELS = {"time": "Declare Time"}
+ASSURE_OPERATORS = (
+    "equals",
+    "not_equals",
+    "contains",
+    "not_contains",
+    "starts_with",
+    "ends_with",
+    "greater",
+    "less",
+    "empty",
+    "not_empty",
+)
+ASSURE_UNARY_OPERATORS = ("empty", "not_empty")
 FINAL_ROLES = ("system", "user", "assistant")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 CODE_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+CALL_MACRO_RE = re.compile(
+    r"\{\{\s*(?P<name>[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+)\s*"
+    r"\(\s*(?P<q>['\"])(?P<arg>[^'\"]*)(?P=q)\s*\)\s*\}\}"
+)
+CALL_FALLBACK_RE = re.compile(
+    r"@@\s*(?P<name>[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+)\s*"
+    r"\(\s*(?P<q>['\"])(?P<arg>[^'\"]*)(?P=q)\s*\)\s*@@"
+)
 STRIPPED_REQUEST_HEADERS = HOP_BY_HOP | {"authorization", "x-api-key"}
+
+# The JavaScript node's runtime. Everything crosses the Python/JS boundary as a
+# JSON string because mini-racer only converts primitives and JS handles on
+# calls; midware.fetch is a blocking Python callable surfaced as an async JS
+# function (wrap_py_function is async-only), so scripts may `await` it. The
+# head defines console/midware/APIRequest at top level (user code is
+# concatenated between head and tail, so their `run` and any APIRequest
+# subclasses close over the same scope), and Python-side failures are returned
+# as {"error": ...} JSON — exceptions raised inside the bridge come back masked
+# as "Error running Python function".
+_JS_BOOTSTRAP_HEAD = """
+var __mw_out = { vars: {}, log: [] };
+var console = {
+  log: (...a) => __mw_out.log.push(
+    a.map(x => typeof x === "string" ? x : JSON.stringify(x)).join(" ")
+  ),
+};
+console.warn = console.log;
+console.error = console.log;
+let __mw_chat = null;
+class APIRequest {
+  constructor() {
+    this.model = "";
+    this.temperature = null;
+    this.max_tokens = null;
+  }
+  async create(params) {
+    if (!__mw_chat) { throw new Error("midware.chat is not available in this node"); }
+    const body = Object.assign({}, params || {});
+    const model = body.model || this.model;
+    if (model) { body.model = model; }
+    if (body.temperature == null && this.temperature != null) { body.temperature = this.temperature; }
+    if (body.max_tokens == null && this.max_tokens != null) { body.max_tokens = this.max_tokens; }
+    if (!Array.isArray(body.messages)) { body.messages = []; }
+    return __mw_chat(body);
+  }
+  async ask(text, params) {
+    const resp = await this.create(Object.assign({}, params || {}, {
+      messages: [{ role: "user", content: String(text) }],
+    }));
+    const choice = resp && resp.choices && resp.choices[0];
+    const msg = choice && choice.message;
+    return (msg && msg.content) || "";
+  }
+}
+async function __mw_main(mwDataJson, fetchFn, chatFn) {
+  const mwData = JSON.parse(mwDataJson);
+  let msgs = mwData.messages;
+  __mw_out.vars = {};
+  __mw_out.log = [];
+  __mw_chat = (params) => chatFn(JSON.stringify(params || {})).then(s => {
+    const r = JSON.parse(s);
+    if (r && r.error) { throw new Error(r.error); }
+    return r;
+  });
+  const midware = {
+    get messages() { return msgs; },
+    get vars() { return mwData.vars; },
+    get systemRequest() { return mwData.systemRequest; },
+    setMessages(m) {
+      if (!Array.isArray(m)) throw new Error("setMessages expects an array");
+      msgs = m;
+    },
+    set(k, v) { __mw_out.vars[k] = v; },
+    fetch: (u, o) => fetchFn(u, JSON.stringify(o || {})).then(s => {
+      const r = JSON.parse(s);
+      if (r && r.error) { throw new Error(r.error); }
+      return r;
+    }),
+    chat: (params) => __mw_chat(params),
+  };
+  const res = await run(midware);
+  return JSON.stringify({
+    result: res === undefined ? null : res,
+    vars: __mw_out.vars,
+    messages: msgs,
+    log: __mw_out.log,
+  });
+}
+"""
+_JS_BOOTSTRAP_TAIL = "__mw_main"
 
 
 class WorkflowError(ValueError):
@@ -121,61 +242,258 @@ def _normalize_node(raw: Any, index: int, seen: set[str]) -> dict[str, Any]:
         raise WorkflowError(f"Duplicate node name '{name}'.")
     seen.add(name)
 
-    route_id = _as_int(raw.get("route_id"))
-    if raw.get("route_id") not in (None, "") and route_id is None:
-        raise WorkflowError(f"Node '{name}' has an invalid connection.")
-    if route_id is not None and route_id < 1:
-        route_id = None
-
-    prompt = raw.get("prompt")
-    if not isinstance(prompt, str):
-        prompt = "" if prompt is None else str(prompt)
-    if not prompt.strip():
-        raise WorkflowError(f"Node '{name}' needs a prompt.")
-    if len(prompt) > WORKFLOW_MAX_CONTENT:
-        raise WorkflowError(f"Node '{name}' prompt exceeds {WORKFLOW_MAX_CONTENT} characters.")
-
-    system_prompt = raw.get("system_prompt")
-    if not isinstance(system_prompt, str):
-        system_prompt = "" if system_prompt is None else str(system_prompt)
-    if len(system_prompt) > WORKFLOW_MAX_CONTENT:
-        raise WorkflowError(
-            f"Node '{name}' system prompt exceeds {WORKFLOW_MAX_CONTENT} characters."
-        )
-
-    model = str(raw.get("model") or "").strip()
-    if len(model) > WORKFLOW_MAX_MODEL:
-        raise WorkflowError(f"Node '{name}' model name is too long.")
-
-    max_tokens = _as_int(raw.get("max_tokens"))
-    if max_tokens is not None and max_tokens < 1:
-        max_tokens = None
-
-    timeout = _as_int(raw.get("timeout_seconds"))
-    if not timeout or timeout < 1:
-        timeout = WORKFLOW_NODE_TIMEOUT_DEFAULT
-    timeout = min(timeout, WORKFLOW_NODE_TIMEOUT_MAX)
-
-    image_mode = str(raw.get("image_mode") or "batch").strip().lower()
-    if image_mode not in IMAGE_MODES:
-        raise WorkflowError(
-            f"Node '{name}' has unknown image mode '{image_mode}' "
-            f"(expected {' or '.join(IMAGE_MODES)})."
-        )
-
-    return {
+    node: dict[str, Any] = {
         "type": node_type,
         "name": name,
-        "route_id": route_id,
-        "model": model,
-        "system_prompt": system_prompt,
-        "prompt": prompt,
-        "expect_json": bool(raw.get("expect_json")) if node_type == "api_request" else False,
-        "image_mode": image_mode,
-        "strip_images": bool(raw.get("strip_images")) if node_type == "image_captioner" else False,
-        "max_tokens": max_tokens,
-        "timeout_seconds": timeout,
+        "route_id": None,
+        "model": "",
+        "system_prompt": "",
+        "prompt": "",
+        "expect_json": False,
+        "image_mode": "batch",
+        "strip_images": False,
+        "max_tokens": None,
+        "timeout_seconds": WORKFLOW_NODE_TIMEOUT_DEFAULT,
+        "actions": [],
+        "left": "",
+        "operator": "equals",
+        "right": "",
+        "use_system_timezone": True,
+        "trim_count": 0,
+        "trim_drop_system": False,
+        "trim_drop_images": False,
+        "allow_network": False,
     }
+
+    if node_type in REQUEST_NODE_TYPES:
+        route_id = _as_int(raw.get("route_id"))
+        if raw.get("route_id") not in (None, "") and route_id is None:
+            raise WorkflowError(f"Node '{name}' has an invalid connection.")
+        if route_id is not None and route_id < 1:
+            route_id = None
+        node["route_id"] = route_id
+
+        prompt = raw.get("prompt")
+        if not isinstance(prompt, str):
+            prompt = "" if prompt is None else str(prompt)
+        if not prompt.strip():
+            raise WorkflowError(f"Node '{name}' needs a prompt.")
+        if len(prompt) > WORKFLOW_MAX_CONTENT:
+            raise WorkflowError(f"Node '{name}' prompt exceeds {WORKFLOW_MAX_CONTENT} characters.")
+        node["prompt"] = prompt
+
+        system_prompt = raw.get("system_prompt")
+        if not isinstance(system_prompt, str):
+            system_prompt = "" if system_prompt is None else str(system_prompt)
+        if len(system_prompt) > WORKFLOW_MAX_CONTENT:
+            raise WorkflowError(
+                f"Node '{name}' system prompt exceeds {WORKFLOW_MAX_CONTENT} characters."
+            )
+        node["system_prompt"] = system_prompt
+
+        model = str(raw.get("model") or "").strip()
+        if len(model) > WORKFLOW_MAX_MODEL:
+            raise WorkflowError(f"Node '{name}' model name is too long.")
+        node["model"] = model
+
+        max_tokens = _as_int(raw.get("max_tokens"))
+        if max_tokens is not None and max_tokens < 1:
+            max_tokens = None
+        node["max_tokens"] = max_tokens
+
+        timeout = _as_int(raw.get("timeout_seconds"))
+        if not timeout or timeout < 1:
+            timeout = WORKFLOW_NODE_TIMEOUT_DEFAULT
+        node["timeout_seconds"] = min(timeout, WORKFLOW_NODE_TIMEOUT_MAX)
+
+        image_mode = str(raw.get("image_mode") or "batch").strip().lower()
+        if image_mode not in IMAGE_MODES:
+            raise WorkflowError(
+                f"Node '{name}' has unknown image mode '{image_mode}' "
+                f"(expected {' or '.join(IMAGE_MODES)})."
+            )
+        node["image_mode"] = image_mode
+
+        if node_type == "api_request":
+            node["expect_json"] = bool(raw.get("expect_json"))
+        else:
+            node["strip_images"] = bool(raw.get("strip_images"))
+
+    elif node_type == "environment":
+        actions_raw = raw.get("actions")
+        if not isinstance(actions_raw, list) or not actions_raw:
+            raise WorkflowError(f"Environment node '{name}' needs at least one action.")
+        actions: list[str] = []
+        for action in actions_raw:
+            action = str(action).strip().lower()
+            if action not in ENV_ACTIONS:
+                raise WorkflowError(f"Environment node '{name}' has unknown action '{action}'.")
+            if action not in actions:
+                actions.append(action)
+        node["actions"] = actions
+        if "use_system_timezone" in raw:
+            node["use_system_timezone"] = bool(raw.get("use_system_timezone"))
+
+    elif node_type == "context":
+        trim_count = _as_int(raw.get("trim_count"))
+        if trim_count is None or trim_count < 0:
+            trim_count = 0
+        node["trim_count"] = min(trim_count, JS_CONTEXT_TRIM_MAX)
+        node["trim_drop_system"] = bool(raw.get("trim_drop_system"))
+        node["trim_drop_images"] = bool(raw.get("trim_drop_images"))
+
+    elif node_type == "javascript":
+        script = raw.get("prompt")
+        if not isinstance(script, str):
+            script = "" if script is None else str(script)
+        if not script.strip():
+            raise WorkflowError(
+                f"JavaScript node '{name}' needs a script defining run(midware)."
+            )
+        if len(script) > WORKFLOW_MAX_CONTENT:
+            raise WorkflowError(f"JavaScript node '{name}' script is too long.")
+        node["prompt"] = script
+        node["allow_network"] = bool(raw.get("allow_network"))
+        timeout = _as_int(raw.get("timeout_seconds"))
+        if not timeout or timeout < 1:
+            timeout = JS_NODE_TIMEOUT_DEFAULT
+        node["timeout_seconds"] = min(timeout, JS_NODE_TIMEOUT_MAX)
+        # Optional connection + default model for midware.chat / APIRequest.create().
+        route_id = _as_int(raw.get("route_id"))
+        if raw.get("route_id") not in (None, "") and route_id is None:
+            raise WorkflowError(f"Node '{name}' has an invalid connection.")
+        if route_id is not None and route_id < 1:
+            route_id = None
+        node["route_id"] = route_id
+        model = str(raw.get("model") or "").strip()
+        if len(model) > WORKFLOW_MAX_MODEL:
+            raise WorkflowError(f"Node '{name}' model name is too long.")
+        node["model"] = model
+
+    else:  # assure
+        left = raw.get("left")
+        if not isinstance(left, str):
+            left = "" if left is None else str(left)
+        if not left.strip():
+            raise WorkflowError(f"Assure node '{name}' needs a left-hand value.")
+        if len(left) > WORKFLOW_MAX_CONTENT:
+            raise WorkflowError(f"Assure node '{name}' left-hand value is too long.")
+        node["left"] = left
+
+        operator = str(raw.get("operator") or "equals").strip().lower()
+        if operator not in ASSURE_OPERATORS:
+            raise WorkflowError(f"Assure node '{name}' has unknown operator '{operator}'.")
+        node["operator"] = operator
+
+        right = raw.get("right")
+        if not isinstance(right, str):
+            right = "" if right is None else str(right)
+        if len(right) > WORKFLOW_MAX_CONTENT:
+            raise WorkflowError(f"Assure node '{name}' right-hand value is too long.")
+        if operator not in ASSURE_UNARY_OPERATORS and not right.strip():
+            raise WorkflowError(f"Assure node '{name}' needs a right-hand value.")
+        node["right"] = right
+
+    return node
+
+
+def _collect_reference_paths(text: Any) -> list[str]:
+    """Every ``{{ name }}`` / ``@@name@@`` path mentioned in a template string."""
+    if not isinstance(text, str) or not text:
+        return []
+    paths: list[str] = []
+    residue = text
+    for regex in (CALL_MACRO_RE, CALL_FALLBACK_RE):
+        for match in regex.finditer(residue):
+            paths.append(match.group("name").strip())
+        residue = regex.sub("", residue)
+    for regex in (MACRO_RE, FALLBACK_MACRO_RE):
+        for match in regex.finditer(residue):
+            name = match.group("name").strip()
+            if name:
+                paths.append(name)
+    return paths
+
+
+def _known_reference_paths(nodes: list[dict[str, Any]]) -> set[str]:
+    """Paths a template may reference after ``nodes`` have run."""
+    known: set[str] = {"core_context", "system_request"}
+    for node in nodes:
+        name = node["name"]
+        known.add(name)
+        if node["type"] in REQUEST_NODE_TYPES:
+            known.add(f"{name}.content")
+            known.add(f"{name}.reasoning")
+            if node["type"] == "image_captioner":
+                known.add(f"{name}.count")
+        elif node["type"] == "environment" and "time" in node["actions"]:
+            known.add(f"{name}.time")
+            known.add(f"{name}.time.unix")
+            known.add(f"{name}.time.formatted")
+        elif node["type"] == "context":
+            for key in (
+                "count",
+                "user_count",
+                "assistant_count",
+                "image_count",
+                "chars",
+                "text",
+                "last_user",
+                "last_assistant",
+                "first_user",
+                "trimmed",
+            ):
+                known.add(f"{name}.{key}")
+    return known
+
+
+def _lifted_reference_names(nodes: list[dict[str, Any]]) -> set[str]:
+    """Nodes whose keys are not knowable in advance; dotted paths under them are free."""
+    return {
+        node["name"]
+        for node in nodes
+        if (node["type"] == "api_request" and node["expect_json"])
+        or node["type"] == "javascript"
+    }
+
+
+def _check_reference_paths(
+    known: set[str], lifted: set[str], path: str, where: str
+) -> None:
+    if path in known:
+        return
+    if path.split(".", 1)[0] in lifted:
+        return
+    raise WorkflowError(f"{where} references unknown variable '{{{{ {path} }}}}'.")
+
+
+def _validate_references(result: dict[str, Any]) -> None:
+    """Save-time type checking: every ``{{ path }}`` must exist at its position.
+
+    A node's templates only see the origin variables plus variables published
+    by *earlier* nodes; Expect JSON nodes lift the check for any dotted path
+    under them. The Final Request sees every node's variables.
+    """
+    nodes = result["nodes"]
+    for index, node in enumerate(nodes):
+        if node["type"] == "javascript":
+            # The script is code, not a template; its strings may legitimately
+            # contain {{ ... }} literals meant for later expansion.
+            continue
+        prior = nodes[:index]
+        known = _known_reference_paths(prior)
+        lifted = _lifted_reference_names(prior)
+        where = f"Node '{node['name']}'"
+        for field in ("system_prompt", "prompt", "model", "left", "right"):
+            for path in _collect_reference_paths(node.get(field)):
+                _check_reference_paths(known, lifted, path, where)
+    known = _known_reference_paths(nodes)
+    lifted = _lifted_reference_names(nodes)
+    for block in result["final"]["messages"]:
+        if block["kind"] != "text":
+            continue
+        for path in _collect_reference_paths(block["content"]):
+            _check_reference_paths(known, lifted, path, "Final Request")
 
 
 def normalize_workflow(raw: Any) -> dict[str, Any]:
@@ -220,12 +538,14 @@ def normalize_workflow(raw: Any) -> dict[str, Any]:
     seen: set[str] = set()
     nodes = [_normalize_node(node, index, seen) for index, node in enumerate(nodes_raw)]
 
-    return {
+    result = {
         "version": 1,
         "reasoning": bool(raw.get("reasoning")),
         "final": {"messages": blocks, "model_override": override},
         "nodes": nodes,
     }
+    _validate_references(result)
+    return result
 
 
 def load_workflow(raw: Any) -> dict[str, Any]:
@@ -243,7 +563,7 @@ def _stringify(value: Any) -> str:
 
 
 class WorkflowScope:
-    """Flat variable table with one level of dotted lookup (``node.key``)."""
+    """Variable table with dotted lookup; nesting may go arbitrarily deep."""
 
     def __init__(self, variables: dict[str, Any] | None = None):
         self._vars: dict[str, Any] = dict(variables or {})
@@ -251,35 +571,63 @@ class WorkflowScope:
     def set(self, name: str, value: Any) -> None:
         self._vars[name] = value
 
+    def snapshot(self) -> dict[str, Any]:
+        """Shallow copy of the variable table (for the JavaScript node's mwData)."""
+        return dict(self._vars)
+
+    def resolve(self, name: str) -> tuple[Any, bool]:
+        """Raw value for ``node.key...``; ``(None, False)`` when absent."""
+        parts = name.strip().split(".")
+        if not parts or not parts[0] or parts[0] not in self._vars:
+            return None, False
+        value = self._vars[parts[0]]
+        for part in parts[1:]:
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                return None, False
+        return value, True
+
     def lookup(self, name: str) -> str | None:
-        name = name.strip()
-        if not name:
+        value, found = self.resolve(name)
+        if not found or value is None or callable(value):
             return None
-        if name in self._vars:
-            return _stringify(self._vars[name])
-        head, sep, tail = name.partition(".")
-        if sep and head in self._vars:
-            container = self._vars[head]
-            if isinstance(container, dict) and tail in container:
-                return _stringify(container[tail])
-        return None
+        return _stringify(value)
 
 
 def _render(text: Any, scope: WorkflowScope) -> Any:
-    """Expand ``{{ name }}`` / ``@@name@@`` against the scope; unknown = literal."""
+    """Expand ``{{ name }}`` / ``@@name@@`` against the scope; unknown = literal.
+
+    Call syntax ``{{ path("argument") }}`` invokes a callable stored in the
+    scope (currently only ``<node>.time.formatted``); an unknown path or a
+    non-callable target stays literal, as does a bare reference to a callable.
+    """
     if not isinstance(text, str) or not text:
         return text
 
+    def call_replace(match: re.Match[str]) -> str:
+        value, found = scope.resolve(match.group("name"))
+        if not found or not callable(value):
+            return match.group(0)
+        try:
+            result = value(match.group("arg"))
+        except (ValueError, TypeError):
+            return match.group(0)
+        return _stringify(result) if not isinstance(result, str) else result
+
     def replace(match: re.Match[str]) -> str:
-        found = scope.lookup(match.group("name"))
-        return match.group(0) if found is None else found
+        value, found = scope.resolve(match.group("name"))
+        if not found or value is None or callable(value):
+            return match.group(0)
+        return _stringify(value)
 
     if "{{" in text:
+        text = CALL_MACRO_RE.sub(call_replace, text)
         text = MACRO_RE.sub(replace, text)
     if "@@" in text:
+        text = CALL_FALLBACK_RE.sub(call_replace, text)
         text = FALLBACK_MACRO_RE.sub(replace, text)
     return text
-
 
 def _extract_json(text: str) -> Any | None:
     cleaned = (text or "").strip()
@@ -548,9 +896,517 @@ def _run_node(
     usage: dict[str, int],
     images: list[str],
 ) -> str:
+    if node["type"] == "environment":
+        return _run_environment(node, scope)
+    if node["type"] == "assure":
+        return _run_assure(node, scope)
     if node["type"] == "image_captioner":
         return _run_image_captioner(http, node, route, premodel, scope, usage, images)
     return _run_api_request(http, node, route, premodel, scope, usage)
+
+
+_TIMESTAMP_TOKENS = (
+    ("YYYY", "%Y"),
+    ("YY", "%y"),
+    ("MM", "%m"),
+    ("DD", "%d"),
+    ("HH", "%H"),
+    ("MN", "%M"),
+    ("SE", "%S"),
+)
+
+
+def _format_timestamp(unix: int, fmt: str, use_system: bool = True) -> str:
+    """Render ``unix`` with YY/YYYY/MM/DD/HH/MN/SE tokens.
+
+    ``use_system`` picks the machine's local timezone (default) or UTC. A
+    token is only substituted at non-letter boundaries, so surrounding text
+    (``SECONDS``, ``DDOS``) stays literal; everything that is not a token
+    passes through unchanged.
+    """
+    local = time.localtime(unix) if use_system else time.gmtime(unix)
+    out: list[str] = []
+    index = 0
+    while index < len(fmt):
+        for token, directive in _TIMESTAMP_TOKENS:
+            if not fmt.startswith(token, index):
+                continue
+            before = fmt[index - 1] if index > 0 else ""
+            next_index = index + len(token)
+            after = fmt[next_index] if next_index < len(fmt) else ""
+            if before.isalpha() or after.isalpha():
+                continue
+            out.append(time.strftime(directive, local))
+            index = next_index
+            break
+        else:
+            out.append(fmt[index])
+            index += 1
+    return "".join(out)
+
+
+def _run_environment(node: dict[str, Any], scope: WorkflowScope) -> str:
+    """Publish environment variables; no HTTP, no usage."""
+    variables: dict[str, Any] = {}
+    exposed: list[str] = []
+    for action in node["actions"]:
+        if action == "time":
+            unix = int(time.time())
+            use_sys = node.get("use_system_timezone", True)
+            variables["time"] = {
+                "unix": unix,
+                "formatted": lambda fmt, ts=unix, sys_tz=use_sys: _format_timestamp(
+                    ts, str(fmt), use_system=sys_tz
+                ),
+            }
+            exposed.append(f"Declare time: {unix}")
+    scope.set(node["name"], variables)
+    return "\n".join(exposed)
+
+
+def _assure_check(operator: str, left: str, right: str) -> bool:
+    if operator == "equals":
+        return left == right
+    if operator == "not_equals":
+        return left != right
+    if operator == "contains":
+        return right in left
+    if operator == "not_contains":
+        return right not in left
+    if operator == "starts_with":
+        return left.startswith(right)
+    if operator == "ends_with":
+        return left.endswith(right)
+    if operator in ("greater", "less"):
+        try:
+            left_num: Any = float(left)
+            right_num: Any = float(right)
+        except ValueError:
+            left_num, right_num = left, right
+        if operator == "greater":
+            return left_num > right_num
+        return left_num < right_num
+    if operator == "empty":
+        return not left.strip()
+    if operator == "not_empty":
+        return bool(left.strip())
+    return False
+
+
+def _run_assure(node: dict[str, Any], scope: WorkflowScope) -> str:
+    """Guard clause: a failed comparison aborts the whole workflow."""
+    left = _render(node["left"], scope)
+    right = _render(node["right"], scope)
+    left = left if isinstance(left, str) else _stringify(left)
+    right = right if isinstance(right, str) else _stringify(right)
+    if not _assure_check(node["operator"], left, right):
+        raise WorkflowNodeError(node["name"], "Assurance test failed.")
+    return f"Passed {node['name']} Assurance Test"
+
+
+# -- context node ------------------------------------------------------------
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """Plain text of one message; images become ``[image]`` placeholders."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                chunks.append(str(part.get("text") or ""))
+            elif part.get("type") in ("image_url", "image"):
+                chunks.append("[image]")
+        return "".join(chunks)
+    return ""
+
+
+def _flatten_messages_text(messages: list[dict[str, Any]]) -> str:
+    lines = [
+        f"{message.get('role') or '?'}: {_message_text(message)}" for message in messages
+    ]
+    return "\n".join(lines)
+
+
+def _reshape_messages(
+    messages: list[dict[str, Any]],
+    keep_last: int = 0,
+    drop_system: bool = False,
+    drop_images: bool = False,
+) -> list[dict[str, Any]]:
+    result = [message for message in messages if isinstance(message, dict)]
+    if drop_system:
+        result = [message for message in result if message.get("role") != "system"]
+    if keep_last > 0:
+        result = result[-keep_last:]
+    if drop_images:
+        result = strip_images(result)
+    return result
+
+
+def _run_context(node: dict[str, Any], scope: WorkflowScope, caller_messages: list[Any]) -> str:
+    """Publish conversation stats/extracts; no HTTP, no usage."""
+    messages = [message for message in caller_messages if isinstance(message, dict)]
+    text = _flatten_messages_text(messages)
+    user_count = sum(1 for message in messages if message.get("role") == "user")
+    assistant_count = sum(1 for message in messages if message.get("role") == "assistant")
+    image_count = len(extract_image_urls(messages))
+    last_user = next(
+        (
+            _message_text(message)
+            for message in reversed(messages)
+            if message.get("role") == "user"
+        ),
+        "",
+    )
+    first_user = next(
+        (_message_text(message) for message in messages if message.get("role") == "user"),
+        "",
+    )
+    last_assistant = next(
+        (
+            _message_text(message)
+            for message in reversed(messages)
+            if message.get("role") == "assistant"
+        ),
+        "",
+    )
+    trimmed = _reshape_messages(
+        messages,
+        keep_last=node.get("trim_count") or 0,
+        drop_system=bool(node.get("trim_drop_system")),
+        drop_images=bool(node.get("trim_drop_images")),
+    )
+    scope.set(
+        node["name"],
+        {
+            "count": len(messages),
+            "user_count": user_count,
+            "assistant_count": assistant_count,
+            "image_count": image_count,
+            "chars": len(text),
+            "text": text,
+            "last_user": last_user,
+            "last_assistant": last_assistant,
+            "first_user": first_user,
+            "trimmed": json.dumps(trimmed, ensure_ascii=False),
+        },
+    )
+    return (
+        f"Inspected context: {len(messages)} messages "
+        f"({user_count} user / {assistant_count} assistant, {image_count} images)"
+    )
+
+
+# -- javascript node ---------------------------------------------------------
+
+
+def _load_mini_racer():
+    """Import the optional V8 engine; pinned because we touch a private attr."""
+    try:
+        import py_mini_racer
+    except ImportError as exc:
+        raise WorkflowError(
+            "JavaScript nodes need the optional 'mini-racer' package "
+            "(pip install 'mini-racer>=0.14,<0.15')."
+        ) from exc
+    return py_mini_racer
+
+
+@contextlib.contextmanager
+def _bind_py_function(mr, fn):
+    """Sync driver for mini-racer's async-only ``wrap_py_function``.
+
+    The private ``_ctx.event_loop`` access is why the dependency is pinned;
+    exceptions are re-raised on the caller's thread after the async CM exits.
+    """
+    cm = mr.wrap_py_function(fn)
+    loop = mr._ctx.event_loop
+    js_fn = asyncio.run_coroutine_threadsafe(cm.__aenter__(), loop).result()
+    try:
+        yield js_fn
+    except BaseException as exc:
+        asyncio.run_coroutine_threadsafe(
+            cm.__aexit__(type(exc), exc, None), loop
+        ).result()
+    else:
+        asyncio.run_coroutine_threadsafe(cm.__aexit__(None, None, None), loop).result()
+
+
+def _system_request_payload(request_context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "method": str(request_context.get("method") or ""),
+        "path": str(request_context.get("path") or ""),
+        "headers": _filtered_request_headers(dict(request_context.get("headers") or {})),
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    """Strip callables/non-JSON values so the scope snapshot can be dumped."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(inner)
+            for key, inner in value.items()
+            if not callable(inner)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(inner) for inner in value]
+    if callable(value):
+        return None
+    return str(value)
+
+
+def _js_polish(value: Any) -> Any:
+    """Integral floats (``2.0``) become ints so templates render ``2``, not ``2.0``."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, list):
+        return [_js_polish(inner) for inner in value]
+    if isinstance(value, dict):
+        return {str(key): _js_polish(inner) for key, inner in value.items()}
+    return value
+
+
+def _make_js_fetch(http: httpx.Client, allow_network: bool):
+    """Blocking ``midware.fetch`` bridge (async only to satisfy wrap_py_function)."""
+
+    async def js_fetch(url: str, opts_json: str) -> str:
+
+        def refuse(message: str) -> str:
+            return json.dumps({"error": message})
+
+        if not allow_network:
+            return refuse(
+                "network is disabled for this node (Allow network is unticked)."
+            )
+        url = str(url)
+        scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+        if scheme not in ("http", "https"):
+            return refuse("midware.fetch only supports http(s) URLs.")
+        try:
+            opts = json.loads(opts_json) if opts_json else {}
+        except (ValueError, TypeError):
+            opts = {}
+        if not isinstance(opts, dict):
+            opts = {}
+        method = str(opts.get("method") or "GET").upper()
+        body = opts.get("body")
+        raw_headers = opts.get("headers")
+        headers = (
+            {str(key): str(value) for key, value in raw_headers.items()}
+            if isinstance(raw_headers, dict)
+            else None
+        )
+        try:
+            response = http.request(
+                method,
+                url,
+                content=body if isinstance(body, str) else None,
+                headers=headers,
+                timeout=JS_FETCH_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError as exc:
+            return refuse(f"fetch failed: {type(exc).__name__}")
+        content = response.content[:JS_FETCH_MAX_BYTES]
+        return json.dumps(
+            {
+                "status": response.status_code,
+                "ok": 200 <= response.status_code < 300,
+                "body": content.decode("utf-8", errors="replace"),
+                "headers": dict(response.headers),
+            },
+            ensure_ascii=False,
+        )
+
+    return js_fetch
+
+
+# Carried from an APIRequest/midware.chat payload into the upstream body. Only
+# well-known sampling knobs pass through; everything else (model, messages,
+# stream) is handled explicitly so a script can't smuggle odd fields upstream.
+_CHAT_PARAM_KEYS = (
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "stop",
+    "presence_penalty",
+    "frequency_penalty",
+    "seed",
+    "logit_bias",
+    "user",
+)
+
+
+def _make_js_chat(
+    http: httpx.Client,
+    node: dict[str, Any],
+    route: Any,
+    premodel: Any,
+    usage: dict[str, int],
+):
+    """Server-side chat bridge for ``midware.chat`` / ``APIRequest.create``.
+
+    Goes through the node's connection (the route's host + upstream key never
+    reach the sandbox), folds usage into the request's totals, and returns the
+    full parsed response. ``allow_network`` does not gate it — like an API
+    Request node it is MidWare routing, not arbitrary internet.
+    """
+
+    async def js_chat(params_json: str) -> str:
+
+        def refuse(message: str) -> str:
+            return json.dumps({"error": message})
+
+        try:
+            params = json.loads(params_json) if params_json else {}
+        except (ValueError, TypeError):
+            return refuse("chat params must be valid JSON.")
+        if not isinstance(params, dict):
+            return refuse("chat params must be an object.")
+        if route is None:
+            return refuse(
+                "This JavaScript node has no connection; pick one to call a model."
+            )
+        model = (
+            str(params.get("model") or "").strip()
+            or node.get("model")
+            or (premodel.get("model") or "").strip()
+        )
+        if not model:
+            return refuse("No model set for this chat call.")
+        messages = params.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return refuse("chat needs a non-empty messages array.")
+        if not all(isinstance(message, dict) for message in messages):
+            return refuse("every chat message must be an object.")
+
+        payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
+        for key in _CHAT_PARAM_KEYS:
+            if key in params and params[key] is not None:
+                payload[key] = params[key]
+
+        try:
+            response = http.post(
+                upstream_url(route, "chat/completions"),
+                json=payload,
+                headers=_node_headers(route),
+                timeout=float(node.get("timeout_seconds") or JS_NODE_TIMEOUT_DEFAULT),
+            )
+        except httpx.HTTPError as exc:
+            return refuse(f"chat request failed: {type(exc).__name__}")
+        if response.status_code >= 400:
+            return refuse(f"chat request returned HTTP {response.status_code}.")
+        try:
+            data = response.json()
+        except (ValueError, TypeError):
+            return refuse("chat request did not return JSON.")
+        if isinstance(data, dict):
+            node_usage = data.get("usage")
+            if isinstance(node_usage, dict):
+                usage["prompt"] += max(0, _as_int(node_usage.get("prompt_tokens")) or 0)
+                usage["completion"] += max(
+                    0, _as_int(node_usage.get("completion_tokens")) or 0
+                )
+        return json.dumps(data, ensure_ascii=False)
+
+    return js_chat
+
+
+def _run_javascript(
+    node: dict[str, Any],
+    scope: WorkflowScope,
+    caller_messages: list[Any],
+    request_context: dict[str, Any],
+    http: httpx.Client,
+    route: Any,
+    premodel: Any,
+    usage: dict[str, int],
+) -> tuple[str, list[dict[str, Any]] | None]:
+    """Execute the node's script; returns (reasoning lines, rewritten messages|None)."""
+    try:
+        py_mini_racer = _load_mini_racer()
+    except WorkflowError as exc:
+        raise WorkflowNodeError(node["name"], str(exc)) from exc
+    mw_data = json.dumps(
+        {
+            "messages": caller_messages,
+            "systemRequest": _system_request_payload(request_context),
+            "vars": _json_safe(scope.snapshot()),
+        },
+        ensure_ascii=False,
+    )
+    script = _JS_BOOTSTRAP_HEAD + "\n" + node["prompt"] + "\n" + _JS_BOOTSTRAP_TAIL
+    timeout = node.get("timeout_seconds") or JS_NODE_TIMEOUT_DEFAULT
+    outcome: dict[str, Any] = {}
+    js_fetch = _make_js_fetch(http, bool(node.get("allow_network")))
+    js_chat = _make_js_chat(http, node, route, premodel, usage)
+    # mini-racer's context managers can consume exceptions raised in the body,
+    # so nothing may escape the `with` blocks unrecorded.
+    try:
+        with py_mini_racer.MiniRacer() as mr:
+            mr.set_hard_memory_limit(JS_MEMORY_LIMIT_BYTES)
+            with _bind_py_function(mr, js_fetch) as fetch_fn, _bind_py_function(
+                mr, js_chat
+            ) as chat_fn:
+                try:
+                    main = mr.eval(script, timeout_sec=5)
+                    out = main(mw_data, fetch_fn, chat_fn, timeout_sec=timeout)
+                    if hasattr(out, "get"):
+                        out = out.get(timeout=timeout + 1)
+                    outcome["data"] = json.loads(out) if isinstance(out, str) else None
+                except BaseException as exc:
+                    outcome["error"] = exc
+    except BaseException as exc:
+        outcome.setdefault("error", exc)
+
+    error = outcome.get("error")
+    if error is not None:
+        detail = (str(error).strip() or type(error).__name__).splitlines()[0]
+        kind = type(error).__name__
+        if isinstance(error, WorkflowError):
+            raise error
+        if kind == "JSTimeoutException":
+            raise WorkflowNodeError(
+                node["name"], f"JavaScript timed out ({timeout}s)."
+            )
+        if kind == "JSPromiseError":
+            raise WorkflowNodeError(node["name"], f"JavaScript failed: {detail[:300]}")
+        raise WorkflowNodeError(node["name"], f"JavaScript failed: {detail[:300]}")
+
+    data = outcome.get("data")
+    if not isinstance(data, dict):
+        raise WorkflowNodeError(node["name"], "JavaScript returned no result.")
+
+    variables: dict[str, Any] = {}
+    raw_vars = data.get("vars")
+    if isinstance(raw_vars, dict):
+        for key, value in raw_vars.items():
+            variables[str(key)] = _js_polish(value)
+    scope.set(node["name"], variables)
+
+    new_messages: list[dict[str, Any]] | None = None
+    raw_messages = data.get("messages")
+    if isinstance(raw_messages, list):
+        new_messages = [
+            message for message in raw_messages if isinstance(message, dict)
+        ]
+
+    lines: list[str] = []
+    raw_log = data.get("log")
+    if isinstance(raw_log, list):
+        lines.extend(str(entry) for entry in raw_log)
+    result = data.get("result")
+    if result is not None:
+        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        if text.strip():
+            lines.append(f"Returned: {text[:500]}")
+    return "\n".join(lines), new_messages
 
 
 def _build_final_messages(
@@ -582,14 +1438,7 @@ def run_workflow(
         {
             "core_context": json.dumps(caller_messages, ensure_ascii=False),
             "system_request": json.dumps(
-                {
-                    "method": str(request_context.get("method") or ""),
-                    "path": str(request_context.get("path") or ""),
-                    "headers": _filtered_request_headers(
-                        dict(request_context.get("headers") or {})
-                    ),
-                },
-                ensure_ascii=False,
+                _system_request_payload(request_context), ensure_ascii=False
             ),
         }
     )
@@ -598,11 +1447,37 @@ def run_workflow(
     reasoning_entries: list[tuple[str, str]] = []
 
     for node in workflow["nodes"]:
-        route = route_lookup(node["route_id"]) if node["route_id"] else None
-        if route is None and premodel["route_id"]:
-            route = route_lookup(premodel["route_id"])
-        if route is None:
-            raise WorkflowNodeError(node["name"], "The node's connection no longer exists.")
+        if node["type"] == "context":
+            reasoning = _run_context(node, scope, caller_messages)
+            reasoning_entries.append((node["name"], reasoning))
+            continue
+        if node["type"] == "javascript":
+            # Optional connection for midware.chat / APIRequest; a node that only
+            # computes needs none, so a missing route is not an error here.
+            route = None
+            if node["route_id"]:
+                route = route_lookup(node["route_id"])
+            if route is None and premodel["route_id"]:
+                route = route_lookup(premodel["route_id"])
+            reasoning, new_messages = _run_javascript(
+                node, scope, caller_messages, request_context, http, route, premodel, usage
+            )
+            if reasoning:
+                reasoning_entries.append((node["name"], reasoning))
+            if new_messages is not None:
+                # Same semantics as the captioner's strip: a rewritten context
+                # is what the Final Request splices and later nodes see.
+                caller_messages = new_messages
+                scope.set("core_context", json.dumps(caller_messages, ensure_ascii=False))
+                images = extract_image_urls(caller_messages)
+            continue
+        route = None
+        if node["type"] in REQUEST_NODE_TYPES:
+            route = route_lookup(node["route_id"]) if node["route_id"] else None
+            if route is None and premodel["route_id"]:
+                route = route_lookup(premodel["route_id"])
+            if route is None:
+                raise WorkflowNodeError(node["name"], "The node's connection no longer exists.")
         reasoning = _run_node(http, node, route, premodel, scope, usage, images)
         if reasoning:
             reasoning_entries.append((node["name"], reasoning))

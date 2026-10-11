@@ -629,6 +629,27 @@ details.signin > summary {
   font-size: 0.9rem;
 }
 
+.wf-script {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85rem;
+  min-height: 10rem;
+}
+
+.wf-cm {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  min-height: 10rem;
+}
+
+.wf-cm .cm-editor {
+  min-height: 10rem;
+}
+
+.wf-cm .cm-editor .cm-scroller {
+  min-height: 10rem;
+}
+
 .wf-card-body {
   display: flex;
   flex-direction: column;
@@ -646,6 +667,11 @@ details.signin > summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wf-checklist {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .wf-card-body label,

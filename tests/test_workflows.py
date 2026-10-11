@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 
 import httpx
 import pytest
@@ -8,8 +10,12 @@ import pytest
 from midware.workflow import (
     WorkflowError,
     WorkflowScope,
+    _assure_check,
     _extract_json,
+    _format_timestamp,
     _render,
+    _run_context,
+    _run_environment,
     normalize_workflow,
 )
 from test_proxy import StubResponse, auth_header, install_stub
@@ -669,6 +675,35 @@ def test_workflow_form_rejects_invalid_blob(configured_client):
     assert db.get_premodel_by_slug("chain") is None
 
 
+def test_workflow_form_roundtrip_preserves_call_syntax(configured_client):
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    route_id = db.active_route()["id"]
+    prompt = 'Clock: {{ env.time.formatted("MN:SE") }} / {{ env.time.unix }}'
+    blob = simple_workflow(
+        nodes=[
+            {"type": "environment", "name": "env", "actions": ["time"]},
+            {"type": "api_request", "name": "note", "prompt": prompt},
+        ]
+    )
+
+    response = client.post(
+        "/admin/premodels/new",
+        data={
+            "name": "Chain",
+            "slug": "chain",
+            "route_id": str(route_id),
+            "model": "m",
+            "use_workflow": "1",
+            "workflow_json": json.dumps(blob),
+        },
+    )
+
+    assert response.status_code == 302
+    stored = json.loads(db.get_premodel_by_slug("chain")["workflow_json"])
+    assert stored["nodes"][1]["prompt"] == prompt
+
+
 def test_workflow_badge_on_list(configured_client):
     client, _ = configured_client
     db = client.application.extensions["midware_db"]
@@ -1127,3 +1162,753 @@ def test_workflow_reasoning_merges_upstream_reasoning(configured):
     assert message["reasoning_content"] == (
         "Started constructing node: prep\nprep logs: ```\nNode thinking.\n```\n\nUpstream's own."
     )
+
+
+# -- environment node --------------------------------------------------------
+
+
+def test_normalize_environment_node():
+    result = normalize_workflow(
+        simple_workflow(
+            nodes=[{"type": "environment", "name": "env", "actions": ["time", "time"]}]
+        )
+    )
+    node = result["nodes"][0]
+    assert node["type"] == "environment"
+    assert node["actions"] == ["time"]
+    assert node["prompt"] == ""
+    assert node["route_id"] is None
+
+
+@pytest.mark.parametrize(
+    "blob, match",
+    [
+        ({"type": "environment", "name": "env"}, "at least one action"),
+        ({"type": "environment", "name": "env", "actions": []}, "at least one action"),
+        ({"type": "environment", "name": "env", "actions": ["vibes"]}, "unknown action"),
+    ],
+)
+def test_normalize_environment_rejects_bad_actions(blob, match):
+    with pytest.raises(WorkflowError, match=match):
+        normalize_workflow(simple_workflow(nodes=[blob]))
+
+
+def test_format_timestamp_tokens():
+    ts = 1_700_000_000
+    local = time.localtime(ts)
+    assert _format_timestamp(ts, "YYYY-MM-DD") == time.strftime("%Y-%m-%d", local)
+    assert _format_timestamp(ts, "YY-MM-DD HH:MN:SE") == time.strftime(
+        "%y-%m-%d %H:%M:%S", local
+    )
+    assert _format_timestamp(ts, "day DD") == "day " + time.strftime("%d", local)
+
+
+def test_format_timestamp_only_substitutes_bounded_tokens():
+    ts = 1_700_000_000
+    local = time.localtime(ts)
+    assert _format_timestamp(ts, "MN:SE") == time.strftime("%M:%S", local)
+    assert _format_timestamp(ts, "SECONDS") == "SECONDS"
+    assert _format_timestamp(ts, "DDOS at HH") == "DDOS at " + time.strftime("%H", local)
+    assert _format_timestamp(ts, "plain text") == "plain text"
+
+
+def test_format_timestamp_utc_mode():
+    ts = 1_700_000_000
+    utc = time.gmtime(ts)
+    assert _format_timestamp(ts, "YYYY-MM-DD HH:MN:SE", use_system=False) == time.strftime(
+        "%Y-%m-%d %H:%M:%S", utc
+    )
+
+
+def test_environment_timezone_flag_defaults_to_system():
+    node = normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "environment",
+                    "name": "env",
+                    "actions": ["time"],
+                }
+            ]
+        )
+    )["nodes"][0]
+    assert node["use_system_timezone"] is True
+
+    explicit = normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "environment",
+                    "name": "env",
+                    "actions": ["time"],
+                    "use_system_timezone": False,
+                }
+            ]
+        )
+    )["nodes"][0]
+    assert explicit["use_system_timezone"] is False
+
+
+def test_environment_formatted_honours_timezone_flag():
+    node = {
+        "name": "env",
+        "actions": ["time"],
+        "use_system_timezone": False,
+    }
+    scope = WorkflowScope()
+    _run_environment(node, scope)
+    unix, found = scope.resolve("env.time.unix")
+    assert found
+    rendered = _render('{{ env.time.formatted("YYYY-MM-DD HH:MN:SE") }}', scope)
+    assert rendered == time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(unix))
+
+
+def test_typecheck_rejects_unknown_variable_in_prompt():
+    with pytest.raises(WorkflowError, match="unknown variable"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {"type": "api_request", "name": "prep", "prompt": "{{ mystery.path }}"}
+                ]
+            )
+        )
+
+
+def test_typecheck_rejects_unknown_subkey_on_plain_node():
+    with pytest.raises(WorkflowError, match="prep\\.mystery"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {"type": "api_request", "name": "prep", "prompt": "ok"},
+                    {"type": "api_request", "name": "note", "prompt": "{{ prep.mystery }}"},
+                ]
+            )
+        )
+
+
+def test_typecheck_rejects_forward_reference():
+    with pytest.raises(WorkflowError, match="unknown variable"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {
+                        "type": "api_request",
+                        "name": "first",
+                        "prompt": "see {{ later.content }}",
+                    },
+                    {"type": "api_request", "name": "later", "prompt": "hi"},
+                ]
+            )
+        )
+
+
+def test_typecheck_rejects_unknown_variable_in_final_block():
+    with pytest.raises(WorkflowError, match="Final Request.*ghost"):
+        normalize_workflow(
+            simple_workflow(
+                messages=[
+                    {"kind": "text", "role": "user", "content": "{{ ghost }}"}
+                ]
+            )
+        )
+
+
+def test_typecheck_rejects_unknown_variable_in_assure_operand():
+    with pytest.raises(WorkflowError, match="unknown variable"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {
+                        "type": "assure",
+                        "name": "gate",
+                        "left": "{{ env.time.unix }}",
+                        "operator": "equals",
+                        "right": "1",
+                    }
+                ]
+            )
+        )
+
+
+def test_typecheck_allows_origin_and_prior_node_paths():
+    normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "api_request",
+                    "name": "prep",
+                    "prompt": "Ctx: {{ core_context }} Hdrs: {{ system_request }}",
+                },
+                {
+                    "type": "image_captioner",
+                    "name": "cap",
+                    "prompt": "Recap: {{ prep.content }} / {{ prep.reasoning }}",
+                },
+            ],
+            messages=[
+                {
+                    "kind": "text",
+                    "role": "user",
+                    "content": "{{ cap.count }} images: {{ cap.content }}",
+                }
+            ],
+        )
+    )
+
+
+def test_typecheck_expect_json_lifts_dotted_paths():
+    normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "api_request",
+                    "name": "analyze",
+                    "prompt": "go",
+                    "expect_json": True,
+                },
+                {
+                    "type": "api_request",
+                    "name": "note",
+                    "prompt": "Category: {{ analyze.category }} Extra: {{ analyze.whatever.nested }}",
+                },
+            ]
+        )
+    )
+
+
+def test_typecheck_expect_json_lifts_final_block_paths():
+    normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "api_request",
+                    "name": "analyze",
+                    "prompt": "go",
+                    "expect_json": True,
+                }
+            ],
+            messages=[
+                {"kind": "text", "role": "user", "content": "{{ analyze.category }}"}
+            ],
+        )
+    )
+
+
+def test_typecheck_environment_paths_after_environment_node():
+    normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {"type": "environment", "name": "env", "actions": ["time"]},
+                {
+                    "type": "assure",
+                    "name": "gate",
+                    "left": '{{ env.time.formatted("HH") }}',
+                    "operator": "not_empty",
+                    "right": "",
+                },
+            ]
+        )
+    )
+
+
+def test_typecheck_environment_subkey_rejected():
+    with pytest.raises(WorkflowError, match="env\\.time\\.mystery"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {"type": "environment", "name": "env", "actions": ["time"]},
+                    {
+                        "type": "api_request",
+                        "name": "note",
+                        "prompt": "{{ env.time.mystery }}",
+                    },
+                ]
+            )
+        )
+
+
+# -- context node ------------------------------------------------------------
+
+
+def test_normalize_context_node():
+    result = normalize_workflow(
+        simple_workflow(
+            nodes=[{"type": "context", "name": "ctx"}]
+        )
+    )
+    node = result["nodes"][0]
+    assert node["type"] == "context"
+    assert node["trim_count"] == 0
+    assert node["trim_drop_system"] is False
+    assert node["trim_drop_images"] is False
+
+    explicit = normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "context",
+                    "name": "ctx",
+                    "trim_count": 5,
+                    "trim_drop_system": True,
+                    "trim_drop_images": True,
+                }
+            ]
+        )
+    )["nodes"][0]
+    assert explicit["trim_count"] == 5
+    assert explicit["trim_drop_system"] is True
+    assert explicit["trim_drop_images"] is True
+
+    capped = normalize_workflow(
+        simple_workflow(nodes=[{"type": "context", "name": "ctx", "trim_count": 99999}])
+    )["nodes"][0]
+    assert capped["trim_count"] == 1000
+
+
+def test_run_context_publishes_stats_and_extracts():
+    messages = [
+        {"role": "system", "content": "be nice"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look at this "},
+                {"type": "image_url", "image_url": {"url": "http://x/img.png"}},
+            ],
+        },
+    ]
+    scope = WorkflowScope()
+    reasoning = _run_context({"name": "ctx", "trim_count": 0}, scope, messages)
+
+    stats, found = scope.resolve("ctx")
+    assert found
+    assert stats["count"] == 4
+    assert stats["user_count"] == 2
+    assert stats["assistant_count"] == 1
+    assert stats["image_count"] == 1
+    assert stats["last_user"] == "look at this [image]"
+    assert stats["first_user"] == "first question"
+    assert stats["last_assistant"] == "first answer"
+    assert stats["text"].startswith("system: be nice\nuser: first question")
+    assert "4 messages" in reasoning
+    assert "2 user / 1 assistant" in reasoning
+
+    trimmed = json.loads(stats["trimmed"])
+    assert [message["role"] for message in trimmed] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+
+
+def test_run_context_trim_options():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "three "},
+                {"type": "image_url", "image_url": {"url": "http://x/i.png"}},
+            ],
+        },
+    ]
+    scope = WorkflowScope()
+    _run_context(
+        {
+            "name": "ctx",
+            "trim_count": 2,
+            "trim_drop_system": True,
+            "trim_drop_images": True,
+        },
+        scope,
+        messages,
+    )
+    stats, _ = scope.resolve("ctx")
+    trimmed = json.loads(stats["trimmed"])
+    # Drop-images keeps messages that still have text parts (captioner semantics).
+    assert trimmed == [
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": [{"type": "text", "text": "three "}]},
+    ]
+
+
+def test_context_node_end_to_end(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {"type": "context", "name": "ctx"},
+                {
+                    "type": "api_request",
+                    "name": "note",
+                    "prompt": (
+                        "N={{ ctx.count }} U={{ ctx.user_count }} "
+                        "L={{ ctx.last_user }} T={{ ctx.text }}"
+                    ),
+                },
+            ]
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "<p>-wf",
+            "messages": [
+                {"role": "system", "content": "be nice"},
+                {"role": "user", "content": "hello world"},
+            ],
+        },
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    prompt = stub.posts[0][1]["messages"][-1]["content"]
+    assert prompt == (
+        "N=2 U=1 L=hello world T=system: be nice\nuser: hello world"
+    )
+
+
+def test_context_typecheck_known_and_unknown():
+    normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {"type": "context", "name": "ctx"},
+                {
+                    "type": "api_request",
+                    "name": "note",
+                    "prompt": "{{ ctx.count }} {{ ctx.trimmed }} {{ ctx.text }}",
+                },
+            ]
+        )
+    )
+    with pytest.raises(WorkflowError, match="ctx\\.nope"):
+        normalize_workflow(
+            simple_workflow(
+                nodes=[
+                    {"type": "context", "name": "ctx"},
+                    {"type": "api_request", "name": "note", "prompt": "{{ ctx.nope }}"},
+                ]
+            )
+        )
+
+
+def test_context_reasoning_entry(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            reasoning=True,
+            nodes=[
+                {"type": "context", "name": "ctx"},
+                {"type": "api_request", "name": "note", "prompt": "hi {{ ctx.count }}"},
+            ],
+        ),
+    )
+    install_stub(
+        app,
+        final_response(),
+        posts=[chat_reply("ok", usage={"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12})],
+    )
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": [{"role": "user", "content": "hey"}]},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    reasoning = response.get_json()["choices"][0]["message"]["reasoning_content"]
+    assert "Started constructing node: ctx" in reasoning
+    assert "Inspected context: 1 messages" in reasoning
+
+
+def test_environment_node_publishes_time_variables(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {"type": "environment", "name": "env", "actions": ["time"]},
+                {
+                    "type": "api_request",
+                    "name": "note",
+                    "prompt": "At {{ env.time.unix }} it is {{ env.time.formatted(\"YYYY-MM-DD\") }}",
+                },
+            ]
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert len(stub.posts) == 1
+    prompt = stub.posts[0][1]["messages"][-1]["content"]
+    match = re.search(r"At (\d{9,10}) it is (\d{4}-\d{2}-\d{2})", prompt)
+    assert match, prompt
+    assert int(match.group(1)) <= int(time.time())
+
+
+def test_environment_node_reasoning_and_no_forward(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[{"type": "environment", "name": "env", "actions": ["time"]}],
+            reasoning=True,
+        ),
+    )
+    stub = install_stub(app, final_response())
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": [{"role": "user", "content": "Hi"}]},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert stub.posts == []
+    message = response.get_json()["choices"][0]["message"]
+    assert re.search(r"Started constructing node: env\nenv logs: ```\nDeclare time: \d+", message["reasoning_content"])
+
+
+def test_render_time_formatted_call_syntax():
+    scope = WorkflowScope()
+    scope.set("env", {"time": {"unix": 0, "formatted": lambda fmt: f"FORMATTED:{fmt}"}})
+    assert _render('{{ env.time.formatted("YY-MM-DD") }}', scope) == "FORMATTED:YY-MM-DD"
+    assert _render("{{ env.time.formatted('HH') }}", scope) == "FORMATTED:HH"
+    assert _render("@@env.time.formatted('HH')@@", scope) == "FORMATTED:HH"
+    assert _render("{{ env.time.unix }}", scope) == "0"
+    assert _render("{{ env.time.formatted }}", scope) == "{{ env.time.formatted }}"
+    assert _render('{{ env.time.formatted("x") }}', WorkflowScope()) == (
+        '{{ env.time.formatted("x") }}'
+    )
+
+
+def test_environment_formatted_colon_format_end_to_end(configured):
+    """Regression: {{ env.time.formatted("MN:SE") }} must not stay literal."""
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {"type": "environment", "name": "env", "actions": ["time"]},
+                {
+                    "type": "api_request",
+                    "name": "note",
+                    "prompt": 'Clock: {{ env.time.formatted("MN:SE") }}',
+                },
+            ]
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    prompt = stub.posts[0][1]["messages"][-1]["content"]
+    assert "{{" not in prompt
+    assert re.fullmatch(r"Clock: \d{2}:\d{2}", prompt), prompt
+
+
+# -- assure node -------------------------------------------------------------
+
+
+def test_normalize_assure_node():
+    result = normalize_workflow(
+        simple_workflow(
+            nodes=[
+                {"type": "api_request", "name": "note", "prompt": "ok"},
+                {
+                    "type": "assure",
+                    "name": "gate",
+                    "left": "{{ note.content }}",
+                    "operator": "contains",
+                    "right": "ok",
+                },
+            ]
+        )
+    )
+    node = result["nodes"][1]
+    assert node["type"] == "assure"
+    assert node["left"] == "{{ note.content }}"
+    assert node["operator"] == "contains"
+    assert node["right"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "blob, match",
+    [
+        ({"type": "assure", "name": "gate", "left": "", "operator": "equals", "right": "x"},
+         "left-hand value"),
+        ({"type": "assure", "name": "gate", "left": "a", "operator": "telepathy", "right": "x"},
+         "unknown operator"),
+        ({"type": "assure", "name": "gate", "left": "a", "operator": "equals", "right": "  "},
+         "right-hand value"),
+    ],
+)
+def test_normalize_assure_rejects_invalid(blob, match):
+    with pytest.raises(WorkflowError, match=match):
+        normalize_workflow(simple_workflow(nodes=[blob]))
+
+
+def test_normalize_assure_unary_operator_needs_no_right():
+    result = normalize_workflow(
+        simple_workflow(
+            nodes=[{"type": "assure", "name": "gate", "left": "x", "operator": "not_empty"}]
+        )
+    )
+    assert result["nodes"][0]["right"] == ""
+
+
+@pytest.mark.parametrize(
+    "operator, left, right, expected",
+    [
+        ("equals", "abc", "abc", True),
+        ("equals", "abc", "xyz", False),
+        ("not_equals", "abc", "xyz", True),
+        ("contains", "hello world", "world", True),
+        ("contains", "hello", "xyz", False),
+        ("not_contains", "hello", "xyz", True),
+        ("starts_with", "hello", "he", True),
+        ("starts_with", "hello", "lo", False),
+        ("ends_with", "hello", "lo", True),
+        ("ends_with", "hello", "he", False),
+        ("greater", "10", "9", True),
+        ("greater", "9", "10", False),
+        ("less", "9", "10", True),
+        ("greater", "b", "a", True),
+        ("empty", "   ", "ignored", True),
+        ("empty", "x", "ignored", False),
+        ("not_empty", "x", "ignored", True),
+    ],
+)
+def test_assure_check(operator, left, right, expected):
+    assert _assure_check(operator, left, right) is expected
+
+
+def test_assure_pass_end_to_end(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "assure",
+                    "name": "gate",
+                    "left": "allowed",
+                    "operator": "equals",
+                    "right": "allowed",
+                },
+                {"type": "api_request", "name": "note", "prompt": "Go"},
+            ],
+            reasoning=True,
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert len(stub.posts) == 1
+    message = response.get_json()["choices"][0]["message"]
+    assert "Passed gate Assurance Test" in message["reasoning_content"]
+
+
+def test_assure_fail_aborts_workflow(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {
+                    "type": "assure",
+                    "name": "gate",
+                    "left": "allowed",
+                    "operator": "equals",
+                    "right": "denied",
+                },
+                {"type": "api_request", "name": "note", "prompt": "Go"},
+            ]
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 502
+    body = response.get_json()
+    assert body["error"]["code"] == "workflow_node_failed"
+    assert "gate" in body["error"]["message"]
+    assert stub.posts == []
+    assert stub.sent == []
+    assert "workflow[gate]" in db.list_requests(limit=1)[0]["error"]
+
+
+def test_assure_sees_environment_variables(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    create_workflow_premodel(
+        db,
+        simple_workflow(
+            nodes=[
+                {"type": "environment", "name": "env", "actions": ["time"]},
+                {
+                    "type": "assure",
+                    "name": "gate",
+                    "left": "{{ env.time.unix }}",
+                    "operator": "greater",
+                    "right": "1",
+                },
+                {"type": "api_request", "name": "note", "prompt": "Go"},
+            ]
+        ),
+    )
+    stub = install_stub(app, final_response(), posts=[chat_reply("ok")])
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "<p>-wf", "messages": []},
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert len(stub.posts) == 1

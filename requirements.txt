@@ -1,3 +1,4 @@
 Flask>=3.0
 httpx>=0.27
 tiktoken>=0.7
+mini-racer>=0.14,<0.15

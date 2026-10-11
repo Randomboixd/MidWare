@@ -127,6 +127,65 @@ the **Add node** picker):
   tucked behind a **Prompts** button with a sensible default, and the optional
   **Strip images** checkbox removes captioned images from the rest of the chain
   so the final request never sends the same image twice.
+* **Environment** nodes — no request, no tokens; they publish variables from the
+  server. *Declare Time* exposes `{{ env.time.unix }}` and
+  `{{ env.time.formatted("YYYY-MM-DD") }}` (tokens `HH` hour, `MN` minute —
+  not month, `MM` is the month — `SE` second, `DD` day, `YY`/`YYYY` year; only
+  substituted at non-letter boundaries, so words like
+  `SECONDS` stay literal text). The `env` part must match the node's actual
+  name — the chips on the card always show the correct prefix. The **Use
+  system timezone when formatting is called** checkbox (on by default) picks
+  the machine's local timezone; untick it to format in UTC instead. More
+  actions will land here over time.
+* **Context** nodes — no request, no tokens; they inspect the conversation and
+  publish statistics you can use in later prompts: message counts (total,
+  user, assistant, images), character count, a flattened `text` transcript, the
+  `first_user` / `last_user` / `last_assistant` extracts, and `trimmed` — the
+  conversation after applying the node's trim options (*Keep last N messages*,
+  *Drop system messages*, *Drop images*). Handy for summarising or shrinking a
+  long history before the final call.
+* **JavaScript** nodes — a sandboxed JavaScript escape hatch. The card takes a
+  script defining `function run(midware)` (async allowed); inside it you get
+  `midware.messages`, `midware.vars`, `midware.systemRequest`,
+  `midware.set(key, value)` (publishes `{{ node.key }}`), `midware.setMessages(array)`
+  to rewrite the conversation for everything downstream, `console.log` (collected
+  into node reasoning), `await midware.fetch(url, opts)` — gated by the node's
+  **Allow network** checkbox (off by default), http(s) only — and
+  `await midware.chat({messages, model, …})`, a server-side model call through
+  the node's **Connection** (the upstream key never enters the sandbox and does
+  not need Allow network; the model falls back to the node's/default model, and
+  token usage is folded into the request row). There is also a built-in
+  **`APIRequest`** class you can subclass once at the top level to get an
+  OpenAI-like client:
+  ```js
+  class GLMRequest extends APIRequest {
+    constructor() { super(); this.model = "xiaomi/glm-5.3:thinking"; }
+  }
+  async function run(midware) {
+    const glm = new GLMRequest();
+    const answer = await glm.ask("Say hi");   // or glm.create({ messages, temperature })
+    midware.set("answer", answer);
+  }
+  ```
+  `create(params)` merges your constructor defaults (`this.model`,
+  `this.temperature`, `this.max_tokens`) with per-call params and returns the
+  full response; `ask(text)` is one-shot sugar. The script box is a
+  **CodeMirror 6** editor (lazy-loaded from a CDN) that autocompletes the
+  sandbox's real surface — `midware.*`, `console.*`, `this.*` inside an
+  `APIRequest` subclass, plus the globals that actually exist in the isolate —
+  and falls back to a plain textarea if the editor cannot load, so saving
+  always works. Runs in a V8 isolate with a
+  16 MB memory cap, no filesystem, no access to MidWare secrets, and a 1–30 s
+  timeout (default 5); errors surface as `502 workflow_node_failed`.
+  `mini-racer` ships in `requirements.txt`, so no extra install is needed.
+  Because the script is code rather than a template, saving skips it during
+  type checking (like Expect JSON, any dotted path under the node's name is
+  accepted).
+* **Assure** nodes — guard clauses. Put a templated string on the left, pick an
+  operator (equals, contains, starts with, greater than, is empty, …) and put a
+  templated string on the right. If the check is false the workflow stops with
+  an error before the Final Request; a passed check is logged to the node's
+  reasoning as `Passed <name> Assurance Test`.
 * **Final Request** (fixed) — builds the message list that is forwarded
   upstream: templated text blocks plus core-context blocks that splice the
   client's original messages. The card shows a block summary; **Edit blocks**
@@ -137,7 +196,14 @@ Turn on **Node reasoning** and any reasoning a sub-call produces is prefixed to
 the reasoning the client receives, one logged block per node — also available to
 later nodes as `{{ node.reasoning }}`.
 
-Template variables use the familiar `{{ name }}` / `@@name@@` forms. Sub-calls
+Template variables use the familiar `{{ name }}` / `@@name@@` forms. Saving a
+workflow type-checks every reference: a path must exist at its position (the
+origin variables plus whatever **earlier** nodes publish — the card chips show
+the exact prefixes), so typos and forward references are caught in the form
+before they can fail at 2am. Nodes with **Expect JSON** on are exempt — their
+keys only exist at runtime, so anything dotted under them is accepted (the same
+applies to JavaScript nodes, whose variables are only known once the script
+runs). Sub-calls
 are **not** limited by the calling key's model/provider restrictions (only the
 final model is), their token usage is folded into the one request row, and a
 failing node aborts with `502 workflow_node_failed` before anything is

@@ -318,11 +318,102 @@ Do not break these; several have regression tests.
   off) **strips images from core context** after it consumes them
   (`strip_images`) — the final splice and later nodes' `{{ core_context }}`
   never re-send them, and messages left with no parts are dropped.
+  **Environment** nodes make no request — each configured action publishes
+  variables; currently `time` (`Declare Time`) exposes `<node>.time.unix` and
+  `<node>.time.formatted("YY-MM-DD")` via the **call syntax**
+  `{{ path("arg") }}` / `@@path("arg")@@` (`CALL_MACRO_RE` /
+  `CALL_FALLBACK_RE` run before the plain macro pass; a callable referenced
+  without a call stays literal). Timestamp tokens: `YY`/`YYYY`, `MM` (month),
+  `DD`, `HH`, `MN` (minute — not month), `SE`; other characters pass through,
+  and a token is only
+  substituted at non-letter boundaries so words like `SECONDS` stay literal.
+  The node's **Use system timezone when formatting is called** checkbox
+  (`use_system_timezone`, default on; old blobs without the key default to on)
+  picks `time.localtime`; unticked means UTC via `time.gmtime`.
+  **Context** nodes make no request — they publish conversation statistics for
+  inspection/trimming: `<node>.count`, `.user_count`, `.assistant_count`,
+  `.image_count`, `.chars`, `.text` (flattened with images as `[image]`),
+  `.first_user`, `.last_user`, `.last_assistant` and `.trimmed` (a JSON string).
+  Options: `trim_count` (keep the last N messages, 0–1000, 0 = keep all),
+  `trim_drop_system`, `trim_drop_images` (both default off; drop-images reuses
+  `conversation.strip_images` semantics — messages left with text survive, fully
+  emptied messages are dropped). The node's reasoning entry is
+  `Inspected context: N messages (X user / Y assistant, Z images)`.
+  **JavaScript** nodes run the script in a sandboxed V8 isolate via the
+  `mini-racer` package (`mini-racer>=0.14,<0.15` — the pin matters: the sync
+  `_bind_py_function` driver touches the private `mr._ctx.event_loop`; the
+  module import is `py_mini_racer`; it is a hard dependency in `requirements.txt`,
+  and `_load_mini_racer` still raises a clear `WorkflowNodeError` if somehow
+  missing). The script
+  must define `function run(midware)` (may be async) with access to
+  `midware.messages`, `midware.vars`, `midware.systemRequest`,
+  `midware.set(k, v)` (→ `<node>.k`), `midware.setMessages(array)` (rewrites
+  context exactly like the captioner strip — re-publishes `core_context` and
+  refreshes `images`), `console.log`, `await midware.fetch(url, opts)`
+  (returns `{status, ok, body, headers}`; http(s) only, 10 s timeout, 1 MB body
+  cap, gated by the per-node `allow_network` checkbox, default off) and
+  `await midware.chat({messages, model, ...})` — a **server-side** chat call
+  through the node's connection (`_make_js_chat`). Unlike `midware.fetch`, chat
+  does **not** require `allow_network`: like an API Request node it is MidWare
+  routing (the route's host + upstream key never reach the sandbox), the model
+  falls back `params.model` → node `model` → premodel model, well-known sampling
+  knobs (`temperature`, `top_p`, `max_tokens`, …, `_CHAT_PARAM_KEYS`) pass
+  through, and usage folds into the request's totals. A `route_id`/`model` may
+  be set on the node (the editor shows Connection + Model); with neither a node
+  nor premodel route, `midware.chat` fails with a clear "no connection" error.
+  A built-in **`APIRequest`** class (defined at top level, so scripts can
+  `class GLMRequest extends APIRequest { … }` once outside `run`) wraps the
+  bridge into an OpenAI-like API: `create(params)` merges constructor defaults
+  (`this.model`, `this.temperature`, `this.max_tokens`) with per-call params and
+  returns the full parsed response; `ask(text, params)` is sugar that sends a
+  single user message and returns the assistant text. The script
+  body is stored in the node's `prompt` field (required, ≤
+  `WORKFLOW_MAX_CONTENT`), `timeout_seconds` clamps 1–30 (default 5), and V8 is
+  capped at 16 MB with no filesystem and no access to MidWare secrets. The
+  sandbox swallows no errors: a throw, a missing `run`, a timeout or a rejected
+  fetch all surface as `WorkflowNodeError` → `502 workflow_node_failed`.
+  Two bridge quirks shaped the design (regression-locked): everything crossing
+  Python↔JS must be a JSON string (mini-racer only converts primitives/handles
+  on calls), and Python exceptions raised inside `wrap_py_function` come back
+  masked as "Error running Python function" — so `midware.fetch`/`midware.chat`
+  failures are **returned** as `{"error": "..."}` JSON and re-thrown on the JS
+  side. The
+  bootstrap defines `console` and `APIRequest` at top level (user code is
+  concatenated between head and tail, so their `run` and subclasses close over
+  the same scope), and mini-racer's
+  context managers can consume exceptions raised in the body — `_run_javascript`
+  uses the inside-catch outcome-dict pattern so nothing escapes the `with`.
+  Because scripts are code and not templates, the type checker **skips their
+  scan** and, like Expect JSON nodes, **lifts** the check for any dotted path
+  under a javascript node's name. `tests/test_workflows_js.py` is the JS suite
+  and `importorskip`s `py_mini_racer` — engine-missing behaviour is locked by
+  monkeypatching `sys.modules`.
+  **Assure** nodes are guard
+  clauses: two templated operands (left, right) plus an operator from
+  `ASSURE_OPERATORS` (`equals`, `not_equals`, `contains`, `not_contains`,
+  `starts_with`, `ends_with`, `greater`, `less`, unary `empty`/`not_empty` —
+  `greater`/`less` compare numerically when both sides parse as floats, else as
+  strings); a failed check raises `WorkflowNodeError` and the whole workflow
+  aborts before the Final Request, a passed one logs
+  `Passed <name> Assurance Test`. Neither type needs a prompt, model or
+  connection; `normalize_workflow` stores the unused request fields with
+  defaults so the editor can switch types losslessly.
   The undeletable **Final Request** builds the forwarded message list
   from text blocks (templated with every variable) and core-context blocks
   (splice the caller's messages), with an optional non-templated
   `model_override`. Templates expand through
-  `WorkflowScope` (one dotted level; unknown names stay literal, matching MWVAR).
+  `WorkflowScope` (arbitrary nesting depth — `node.key.subkey`; unknown names
+  stay literal, matching MWVAR). Save-time **type checking**
+  (`_validate_references`, run by `normalize_workflow`): every `{{ path }}` in
+  a node's prompt/system prompt/model/assure operands or in a Final text block
+  must exist *at that position* — origin vars (`core_context`,
+  `system_request`) always, plus the paths published by **earlier** nodes
+  (`<n>`, `<n>.content`, `<n>.reasoning`, captioner `<n>.count`, environment
+  `<n>.time`/`.unix`/`.formatted`, context `<n>.count`/`.trimmed`/`.text`/...);
+  Expect JSON and JavaScript nodes lift the check for any dotted path under
+  their name (their keys are unknowable in advance), and forward references are
+  rejected. Unknown names still stay literal at *runtime*, but now cannot be
+  saved.
   **Sub-calls intentionally bypass the calling key's provider/model allowlists** —
   they are server-side machinery the admin configured; only the final forwarded
   model is checked (locked by `test_workflow_final_model_still_gated_by_allowlist`).
@@ -353,9 +444,32 @@ Do not break these; several have regression tests.
   blocks edited in a modal (the card only shows a block summary + **Edit
   blocks** button; modals are document.body overlays, close on Escape /
   overlay click, and keep state across re-renders via `redraw()`).
-  `makeDraggable` drops the card's `draggable` flag on mousedown over any
-  `input, textarea, select, button, label` — a draggable ancestor would
-  otherwise swallow mouse carets inside the prompt textareas (keyboard focus
+  New JavaScript nodes seed `JS_SCRIPT_STARTER` (a minimal
+  `async function run(midware)` skeleton) when the prompt is empty — in
+  `cloneDefaults` and on the type-picker switch to `javascript`.
+  The JS node's script box (`scriptEditor`) lazily upgrades a plain
+  `<textarea class="wf-script">` to a **CodeMirror 6** editor: the first
+  render kicks off `import()`s from esm.sh with exact-version pins
+  (`?deps=` forces one `@codemirror/state` instance across packages —
+  without it the mount throws "Unrecognized extension value"); the textarea
+  stays the source of truth until the editor mounts, then is removed. Any
+  import failure, mount throw, or mid-import redraw (`!fallback.isConnected`)
+  keeps the textarea and logs `console.warn` — the editor is optional and
+  never blocks save. Completions come from `makeJsCompletionSource`
+  fed through `jsSupport.language.data.of` (NOT a second
+  `autocompletion()` call — `basicSetup` already wires one): member-aware
+  for `midware.*` / `console.*` / `this.*` (the last only when the script
+  contains `extends APIRequest`), plus snippets for `run` and an
+  `APIRequest` subclass, sandbox-accurate globals from the mini-racer probe,
+  and the ABSENT APIs (`URL`, `TextEncoder`, `fetch`, …) offered with an
+  "Not available in this sandbox" info tooltip. Theme and syntax colours
+  come from Pico CSS variables (`picoEditorTheme`), so light/dark follow
+  the site. `makeDraggable` drops the card's `draggable` flag on mousedown
+  over any
+  `input, textarea, select, button, label, .cm-content, .cm-gutters` — a
+  draggable ancestor would
+  otherwise swallow mouse carets inside the prompt textareas / CM surface
+  (keyboard focus
   kept working, mouse placement did not).
 - **MSQ** (`msq.py`): a recorder periodically streams a fixed prompt to its route's
   model, measuring time-to-first-token (the incremental `StreamAudit` in
@@ -424,8 +538,13 @@ Do not break these; several have regression tests.
 - Tests run against `:memory:` SQLite with `TESTING=True`, which disables the
   model-refresh hooks and the MSQ scheduler. Drive probes directly with
   `msq.run_recorder` / `msq.run_due` and a stubbed HTTP client.
+- Workflow JavaScript-node tests live in `tests/test_workflows_js.py` and
+  `importorskip("py_mini_racer")` — the whole file skips when the optional
+  engine is not installed (it is now in `requirements.txt`, but the skip keeps
+  a stripped install working); keep engine-missing behaviour covered by
+  `test_js_missing_engine_reports_node_error`.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `305 passed` — **update this number whenever the test count changes.**
+  `382 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 
