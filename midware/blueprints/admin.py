@@ -434,7 +434,10 @@ def keys():
     db = get_db()
     if request.method == "POST":
         if request.form.get("action") == "delete":
-            db.delete_api_key(request.form.get("key_id", type=int))
+            from ..images import unlink_image
+
+            for row in db.delete_api_key(request.form.get("key_id", type=int)):
+                unlink_image(row["id"], row["ext"])
             flash("Key deleted.", "success")
         return redirect(url_for("admin.keys"))
 
@@ -475,6 +478,8 @@ def _key_form_from_row(row) -> dict:
         "allowed_route_ids": sorted(parse_id_list(row["allowed_route_ids"])),
         "restrict_models": bool(row["restrict_models"]),
         "allowed_model_ids": sorted(parse_model_list(row["allowed_model_ids"])),
+        "image_response_mode": row["image_response_mode"] or "b64",
+        "image_retention_days": int(row["image_retention_days"] or 0),
     }
     for flag in LIMIT_FLAG_FIELDS:
         form[flag] = bool(row[flag])
@@ -495,6 +500,8 @@ def _read_key_form() -> tuple[dict, list[str]]:
         "allowed_route_ids": _form_ids("allowed_route_ids"),
         "restrict_models": _form_bool("restrict_models"),
         "allowed_model_ids": _form_model_ids("allowed_model_ids"),
+        "image_response_mode": "url" if _form_bool("image_urls") else "b64",
+        "image_retention_days": _form_int("image_retention_days", 0, maximum=36500),
     }
     # Children survive a master toggle in the form; enforcement is gated on the
     # master flag alone, so re-enabling restores the previous configuration.

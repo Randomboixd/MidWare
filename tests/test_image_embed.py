@@ -2,20 +2,25 @@
 
 Covers the endpoint-family split (routing + prompt-only token accounting),
 multipart image edits (pass-through, prefix rewrite, viewer), the premodel
-chat-only rule at both request and save time, and the conversation viewer's
-image/embedding blocks.
+chat-only rule at both request and save time, the conversation viewer's
+image/embedding blocks, and the per-key URL response mode (server-side
+storage, retention, and the public /img/ route).
 """
 
 from __future__ import annotations
 
+import base64
 import io
 import json
+from pathlib import Path
 
 from midware.conversation import build_conversation
+from midware.images import sweep
 from midware.usage import parse_multipart_fields
 from test_proxy import StubResponse, auth_header, install_stub
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"midware-test-image-bytes"
+JPEG = b"\xff\xd8\xff\xe0" + b"jfif-ish-bytes"
 
 
 def image_response(url="https://cdn.example.com/a.png", usage=None):
@@ -455,3 +460,270 @@ def test_conversation_shows_multipart_prompt_not_image_bytes():
     assert convo["messages"][0]["text"] == "make it blue"
     assert "PNG" not in convo["messages"][0]["text"]
     assert "base64, 8 characters" in convo["messages"][1]["text"]
+
+
+# -- per-key URL response mode -----------------------------------------------
+
+
+def b64_image_response(data=PNG, usage=None, extra_item=None):
+    body = {
+        "created": 1,
+        "data": [{"b64_json": base64.b64encode(data).decode()}],
+    }
+    if extra_item is not None:
+        body["data"].append(extra_item)
+    if usage:
+        body["usage"] = usage
+    return StubResponse(content=json.dumps(body).encode())
+
+
+def _url_key(db, **kwargs):
+    return db.create_api_key("url-mode", image_response_mode="url", **kwargs)
+
+
+def _generate(client, token, prompt="a red panda"):
+    return client.post(
+        "/v1/images/generations",
+        json={"model": "gpt-image-1", "prompt": prompt},
+        headers=auth_header(token),
+    )
+
+
+def test_image_url_mode_rewrites_b64_to_stored_url(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    stub = install_stub(app, b64_image_response(usage={"input_tokens": 3, "output_tokens": 5}))
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+
+    assert response.status_code == 200
+    item = response.get_json()["data"][0]
+    assert "b64_json" not in item
+    assert item["url"].startswith("http://localhost/img/")
+    image_id = item["url"].rsplit("/", 1)[1]
+    served = client.get(f"/img/{image_id}")
+    assert served.status_code == 200
+    assert served.data == PNG
+    assert served.content_type == "image/png"
+    assert served.headers["Cache-Control"].startswith("public")
+    assert served.headers["Access-Control-Allow-Origin"] == "*"
+    # The log keeps the rewritten (small) body, never the base64 blob.
+    row = db.list_requests(limit=1)[0]
+    assert "b64_json" not in (row["response_body"] or "")
+    assert image_id in (row["response_body"] or "")
+    assert row["total_tokens"] == 8
+    assert row["token_source"] == "upstream"
+    assert stub.sent
+
+
+def test_image_default_key_still_gets_base64(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    stub = install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, token)
+
+    assert response.status_code == 200
+    item = response.get_json()["data"][0]
+    assert item["b64_json"] == base64.b64encode(PNG).decode()
+    assert "url" not in item
+    assert db._row("SELECT COUNT(*) AS n FROM stored_images")["n"] == 0
+    assert stub.sent
+
+
+def test_image_url_mode_upstream_url_passes_through(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    install_stub(app, image_response(url="https://cdn.example.com/a.png"))
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+
+    assert response.status_code == 200
+    item = response.get_json()["data"][0]
+    assert item["url"] == "https://cdn.example.com/a.png"
+    assert db._row("SELECT COUNT(*) AS n FROM stored_images")["n"] == 0
+
+
+def test_image_url_mode_multi_item_stores_each(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    second = {"b64_json": base64.b64encode(JPEG).decode()}
+    install_stub(app, b64_image_response(extra_item=second))
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+
+    items = response.get_json()["data"]
+    assert len(items) == 2
+    ids = [item["url"].rsplit("/", 1)[1] for item in items]
+    assert ids[0] != ids[1]
+    assert all("b64_json" not in item for item in items)
+    assert client.get(f"/img/{ids[0]}").data == PNG
+    jpeg = client.get(f"/img/{ids[1]}")
+    assert jpeg.data == JPEG
+    assert jpeg.content_type == "image/jpeg"
+    assert db._row("SELECT COUNT(*) AS n FROM stored_images")["n"] == 2
+
+
+def test_image_url_mode_retention_expiry_and_sweep(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db, image_retention_days=1)
+    install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+    image_id = response.get_json()["data"][0]["url"].rsplit("/", 1)[1]
+    row = db.get_stored_image(image_id)
+    assert row["expires_at"] is not None
+
+    # Force the expiry into the past; serving must 404 and clean up.
+    with db.write() as conn:
+        conn.execute(
+            "UPDATE stored_images SET expires_at = '2000-01-01T00:00:00+00:00'"
+        )
+    assert client.get(f"/img/{image_id}").status_code == 404
+    assert db.get_stored_image(image_id) is None
+    images_dir = Path(app.config["IMAGES_DIR"])
+    assert not any(images_dir.iterdir())
+
+
+def test_image_url_mode_permanent_has_no_expiry(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+    image_id = response.get_json()["data"][0]["url"].rsplit("/", 1)[1]
+    assert db.get_stored_image(image_id)["expires_at"] is None
+    # Permanent images survive the sweep.
+    with app.app_context():
+        assert sweep() == 0
+    assert client.get(f"/img/{image_id}").status_code == 200
+
+
+def test_image_url_mode_sweep_removes_expired_rows_and_files(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db, image_retention_days=1)
+    install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+    image_id = response.get_json()["data"][0]["url"].rsplit("/", 1)[1]
+    ext = db.get_stored_image(image_id)["ext"]
+    with db.write() as conn:
+        conn.execute(
+            "UPDATE stored_images SET expires_at = '2000-01-01T00:00:00+00:00'"
+        )
+
+    with app.app_context():
+        assert sweep() == 1
+    assert db.get_stored_image(image_id) is None
+    images_dir = Path(app.config["IMAGES_DIR"])
+    assert not (images_dir / f"{image_id}.{ext}").exists()
+
+
+def test_image_url_mode_unknown_id_is_404(configured):
+    app, _ = configured
+    client = app.test_client()
+    assert client.get("/img/" + "0" * 32).status_code == 404
+
+
+def test_image_url_mode_does_not_touch_chat(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    chat_body = {
+        "id": "c1",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+    }
+    install_stub(app, StubResponse(content=json.dumps(chat_body).encode()))
+    client = app.test_client()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        headers=auth_header(url_token),
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["choices"][0]["message"]["content"] == "hi"
+    assert db._row("SELECT COUNT(*) AS n FROM stored_images")["n"] == 0
+
+
+def test_image_url_mode_key_delete_unlinks_files(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = _url_key(db)
+    install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+    image_id = response.get_json()["data"][0]["url"].rsplit("/", 1)[1]
+    ext = db.get_stored_image(image_id)["ext"]
+    key_id = db.get_api_key_by_token(url_token)["id"]
+    images_dir = Path(app.config["IMAGES_DIR"])
+    assert (images_dir / f"{image_id}.{ext}").exists()
+
+    deleted = client.post(
+        "/admin/keys", data={"action": "delete", "key_id": str(key_id)}
+    )
+
+    assert deleted.status_code == 302
+    assert db.get_stored_image(image_id) is None
+    assert not (images_dir / f"{image_id}.{ext}").exists()
+    assert client.get(f"/img/{image_id}").status_code == 404
+
+
+def test_admin_key_form_saves_image_settings(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+
+    created = client.post(
+        "/admin/keys/new",
+        data={
+            "name": "img-key",
+            "image_urls": "1",
+            "image_retention_days": "7",
+        },
+    )
+
+    assert created.status_code == 302
+    row = db._row("SELECT * FROM api_keys WHERE name = 'img-key'")
+    assert row["image_response_mode"] == "url"
+    assert row["image_retention_days"] == 7
+
+    # Unticking the box on edit returns the key to base64 mode.
+    key_id = row["id"]
+    edited = client.post(
+        f"/admin/keys/{key_id}/edit",
+        data={"name": "img-key", "image_retention_days": "7"},
+    )
+    assert edited.status_code == 302
+    row = db.get_api_key(key_id)
+    assert row["image_response_mode"] == "b64"
+
+
+def test_admin_key_form_rejects_bogus_retention(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+
+    client.post(
+        "/admin/keys/new",
+        data={"name": "weird", "image_urls": "1", "image_retention_days": "soon"},
+    )
+
+    row = db._row("SELECT * FROM api_keys WHERE name = 'weird'")
+    assert row["image_retention_days"] == 0

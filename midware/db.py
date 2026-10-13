@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     max_requests_day       INTEGER NOT NULL DEFAULT 0,
     limit_requests_week    INTEGER NOT NULL DEFAULT 0,
     max_requests_week      INTEGER NOT NULL DEFAULT 0,
+    image_response_mode TEXT    NOT NULL DEFAULT 'b64',
+    image_retention_days INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -227,6 +229,16 @@ CREATE TABLE IF NOT EXISTS premodel_rate_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_premodel_rate_usage_start ON premodel_rate_usage(window_start);
+
+CREATE TABLE IF NOT EXISTS stored_images (
+    id         TEXT    PRIMARY KEY,
+    api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    ext        TEXT    NOT NULL DEFAULT 'png',
+    created_at TEXT    NOT NULL,
+    expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stored_images_expires ON stored_images(expires_at);
 """
 
 
@@ -280,6 +292,10 @@ LIMIT_VALUE_FIELDS = tuple(
     [f"max_tokens_{window}" for window in TOKEN_LIMIT_WINDOWS]
     + [f"max_requests_{window}" for window in REQUEST_LIMIT_WINDOWS]
 )
+
+# Per-key image response shapes: inline base64 (the OpenAI default) or a
+# MidWare-hosted /img/ URL with the bytes stored on disk.
+IMAGE_RESPONSE_MODES = ("b64", "url")
 
 
 class _RateLimitHit(Exception):
@@ -467,6 +483,8 @@ class Database:
                     "max_requests_day": "INTEGER NOT NULL DEFAULT 0",
                     "limit_requests_week": "INTEGER NOT NULL DEFAULT 0",
                     "max_requests_week": "INTEGER NOT NULL DEFAULT 0",
+                    "image_response_mode": "TEXT NOT NULL DEFAULT 'b64'",
+                    "image_retention_days": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
 
@@ -1068,6 +1086,8 @@ class Database:
         "allowed_route_ids",
         "restrict_models",
         "allowed_model_ids",
+        "image_response_mode",
+        "image_retention_days",
         *LIMIT_FLAG_FIELDS,
         *LIMIT_VALUE_FIELDS,
     )
@@ -1105,8 +1125,12 @@ class Database:
         max_requests_day: int = 0,
         limit_requests_week: bool = False,
         max_requests_week: int = 0,
+        image_response_mode: str = "b64",
+        image_retention_days: int = 0,
     ) -> str:
         token = self.generate_token()
+        if image_response_mode not in IMAGE_RESPONSE_MODES:
+            image_response_mode = "b64"
         with self.write() as conn:
             conn.execute(
                 """
@@ -1118,9 +1142,10 @@ class Database:
                     limit_tokens_day, max_tokens_day, limit_tokens_week, max_tokens_week,
                     limit_requests_enabled, limit_requests_minute, max_requests_minute,
                     limit_requests_hour, max_requests_hour, limit_requests_day,
-                    max_requests_day, limit_requests_week, max_requests_week
+                    max_requests_day, limit_requests_week, max_requests_week,
+                    image_response_mode, image_retention_days
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -1151,6 +1176,8 @@ class Database:
                     max(0, int(max_requests_day)),
                     int(bool(limit_requests_week)),
                     max(0, int(max_requests_week)),
+                    image_response_mode,
+                    max(0, int(image_retention_days)),
                 ),
             )
         return token
@@ -1198,6 +1225,14 @@ class Database:
             updates["allowed_model_ids"] = dump_model_list(updates["allowed_model_ids"])
         if "cors_allow_origin" in updates:
             updates["cors_allow_origin"] = str(updates["cors_allow_origin"]).strip()
+        if "image_response_mode" in updates:
+            if updates["image_response_mode"] not in IMAGE_RESPONSE_MODES:
+                updates["image_response_mode"] = "b64"
+        if "image_retention_days" in updates:
+            try:
+                updates["image_retention_days"] = max(0, int(updates["image_retention_days"]))
+            except (TypeError, ValueError):
+                updates["image_retention_days"] = 0
         assignments = ", ".join(f"{key} = ?" for key in updates)
         with self.write() as conn:
             conn.execute(f"UPDATE api_keys SET {assignments} WHERE id = ?", (*updates.values(), key_id))
@@ -1224,9 +1259,19 @@ class Database:
             """
         )
 
-    def delete_api_key(self, key_id: int) -> None:
+    def delete_api_key(self, key_id: int) -> list[sqlite3.Row]:
+        """Delete a key, returning its stored-image rows so files can be unlinked.
+
+        The row deletion cascades into ``stored_images``; the caller (admin
+        key delete) owns the on-disk cleanup because the filesystem is not
+        reachable from here.
+        """
         with self.write() as conn:
+            rows = conn.execute(
+                "SELECT id, ext FROM stored_images WHERE api_key_id = ?", (key_id,)
+            ).fetchall()
             conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+        return list(rows)
 
     def touch_api_key(self, key_id: int) -> None:
         with self.write() as conn:
@@ -1234,6 +1279,48 @@ class Database:
 
     def resolve_api_key(self, token: str | None) -> sqlite3.Row | None:
         return self.get_api_key_by_token(token or "")
+
+    # -- stored images --------------------------------------------------------
+
+    def create_stored_image(self, api_key_id: int, ext: str, retention_days: int) -> str:
+        """Register a stored image; returns its public id. ``retention_days`` 0 = forever."""
+        image_id = secrets.token_hex(16)
+        expires_at = None
+        if retention_days > 0:
+            expires_at = to_iso(utcnow() + timedelta(days=retention_days))
+        with self.write() as conn:
+            conn.execute(
+                "INSERT INTO stored_images (id, api_key_id, ext, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (image_id, api_key_id, ext, to_iso(utcnow()), expires_at),
+            )
+        return image_id
+
+    def get_stored_image(self, image_id: str) -> sqlite3.Row | None:
+        if not image_id:
+            return None
+        return self._row("SELECT * FROM stored_images WHERE id = ?", (image_id,))
+
+    def delete_stored_image(self, image_id: str) -> None:
+        with self.write() as conn:
+            conn.execute("DELETE FROM stored_images WHERE id = ?", (image_id,))
+
+    def prune_expired_stored_images(self) -> list[sqlite3.Row]:
+        """Delete and return rows whose expiry has passed (files unlinked by caller)."""
+        now = to_iso(utcnow())
+        with self.write() as conn:
+            rows = conn.execute(
+                "SELECT id, ext FROM stored_images "
+                "WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (now,),
+            ).fetchall()
+            if rows:
+                conn.execute(
+                    "DELETE FROM stored_images "
+                    "WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                    (now,),
+                )
+        return list(rows)
 
     # -- rate limits ---------------------------------------------------------
 

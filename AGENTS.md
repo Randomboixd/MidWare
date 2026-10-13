@@ -52,6 +52,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/workflow.py` | Premodel workflows: `normalize_workflow` validation, `WorkflowScope` variable expansion, `run_workflow` sub-call chain (Origin → API Request nodes → Final Request). |
 | `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url` (used by proxy + workflow; keeps `workflow.py` out of an import cycle with the blueprint). |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`; `prompt_estimate` for prompt-only counting. |
+| `midware/images.py` | Server-side image storage for URL-mode keys: magic-byte sniffing, `store_image`/`load_image`/`sweep`, and the `b64_json` → `/img/` URL response rewrite. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
 | `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
@@ -92,7 +93,8 @@ this development environment, so Docker changes are verified by reading only.
   allowed_route_ids, restrict_models, allowed_model_ids, is_system,
   limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
   limit_requests_enabled, limit_requests_{minute,hour,day,week},
-  max_requests_{minute,hour,day,week}, created_at, last_used_at)` — `is_system`
+  max_requests_{minute,hour,day,week}, image_response_mode, image_retention_days,
+  created_at, last_used_at)` — `is_system`
   rows (the auto-created `MSQ Measurements` owner) are skipped by
   `list_api_keys`/`count_api_keys` but still name rows in the request log.
   `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
@@ -101,7 +103,9 @@ this development environment, so Docker changes are verified by reading only.
   because a model id alone is not unique across providers. The rate-limit columns
   are all `INTEGER NOT NULL DEFAULT 0`: `limit_*_enabled` is the master switch,
   `limit_*_<window>` ticks a child window, and `max_*_<window>` is its cap (`0` =
-  unlimited for that window).
+  unlimited for that window). `image_response_mode` is `b64` (default, inline
+  base64 passthrough) or `url` (server-stored, see `images.py`);
+  `image_retention_days` is `0` = keep forever.
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, provider, created_at)`
   — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter`,
   `''` when hand-configured); it is what later proves which service's balance
@@ -130,6 +134,12 @@ this development environment, so Docker changes are verified by reading only.
   PK(premodel_id, kind, window, window_start))` — per-premodel rate-limit counters,
   a twin of `rate_usage`; both are driven by the shared `_rate_usage_*` helpers in
   `db.py` (keyed by `Database._RATE_TABLES`).
+- `stored_images(id PK, api_key_id FK CASCADE, ext, created_at, expires_at)` —
+  one server-stored image for a URL-mode key. `expires_at` `NULL` = keep forever
+  (`image_retention_days` `0`); files live in `IMAGES_DIR` (defaults next to the
+  database file) as `<id>.<ext>` and are removed lazily — on serve when expired,
+  on key delete (`delete_api_key` returns the rows, the admin route unlinks), and
+  by `images.sweep()` after every store.
 - `msq_recorders(id, name, route_id FK SET NULL, model, system_prompt, user_prompt,
   interval_seconds, enabled, penalize_symbols, slop_list, max_ttft_ms, max_total_ms,
   hardcore_json, collect_requests, ignore_thinking, created_at, updated_at, last_run_at,
@@ -212,6 +222,22 @@ Do not break these; several have regression tests.
   refuses non-chat base models (`premodels.is_non_chat_model`, substring markers —
   "embed", "dall-e", "gpt-image", "flux", …) so an image/embedding model can never
   back a premodel. `tests/test_image_embed.py` locks all of this.
+  **Per-key URL mode** (`image_response_mode`): a key set to `url` gets its
+  `b64_json` items replaced by MidWare-hosted `GET /img/<id>` URLs — the bytes
+  are written to `IMAGES_DIR`, registered in `stored_images` with the key's
+  `image_retention_days` expiry (`0` = forever), and the rewritten (small) body
+  is what both the client and the `requests` log see. The rewrite runs in
+  `_forward`'s non-streamed branch only for 2xx image-family responses; upstream
+  `url` items, chat/embedding responses, and error bodies pass through
+  untouched. `/img/<id>` is deliberately public (the 128-bit id is the
+  capability, like an upstream CDN URL), sniffs the file's magic bytes for its
+  content type, serves expired/unknown ids as 404 with lazy cleanup, sets a
+  week-long `Cache-Control`, and always sends `Access-Control-Allow-Origin: *`
+  (static wildcard — deliberately not per-key CORS, since possession of the URL
+  is the capability). There is no background worker: expiry happens on
+  serve, on key delete, and in the `images.sweep()` run after each store.
+  The key form's *Image responses* panel (checkbox + retention days) drives
+  `image_urls`/`image_retention_days` form fields.
 - **Per-key rate limits** (`proxy._rate_limit_check`): opt-in per key — the
   `limit_*_enabled` master switch must be on *and* a child window ticked *and* its
   `max_*` above `0`. The check runs in `_forward` after the route/model permission
@@ -615,7 +641,7 @@ Do not break these; several have regression tests.
   **body bytes** (`content=`), because `_persist` reads the raw upstream body —
   a `json_body=`-only stub looks like "no usage".
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `420 passed` — **update this number whenever the test count changes.**
+  `432 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

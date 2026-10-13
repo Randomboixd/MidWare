@@ -21,6 +21,8 @@
   var limitTokensPanel = document.getElementById("limit-tokens-panel");
   var limitRequests = document.getElementById("limit-requests");
   var limitRequestsPanel = document.getElementById("limit-requests-panel");
+  var imageUrls = document.getElementById("image-urls");
+  var imageUrlsPanel = document.getElementById("image-urls-panel");
 
   var routeBoxes = Array.prototype.slice.call(
     form.querySelectorAll('input[name="allowed_route_ids"]')
@@ -76,6 +78,9 @@
     if (limitRequestsPanel && limitRequests) {
       limitRequestsPanel.hidden = !limitRequests.checked;
     }
+    if (imageUrlsPanel && imageUrls) {
+      imageUrlsPanel.hidden = !imageUrls.checked;
+    }
   }
 
   if (toggle && panel) {
@@ -119,6 +124,9 @@
   }
   if (limitRequests) {
     limitRequests.addEventListener("change", syncLimitPanels);
+  }
+  if (imageUrls) {
+    imageUrls.addEventListener("change", syncLimitPanels);
   }
 
   syncPremodels();

@@ -6,6 +6,7 @@
    or form.get('restrict_providers', False)
    or form.get('limit_tokens_enabled', False)
    or form.get('limit_requests_enabled', False)
+   or form.get('image_response_mode', 'b64') == 'url'
    or form.get('cors_allow_origin', '*') != '*' %}
 
 {% block content %}
@@ -167,6 +168,26 @@
         </label>
         {% endfor %}
       </div>
+    </div>
+
+    <h3>Image responses</h3>
+    <label>
+      <input type="checkbox" name="image_urls" id="image-urls" value="1"
+             {% if form.get('image_response_mode', 'b64') == 'url' %}checked{% endif %}>
+      Return image URLs instead of base64
+    </label>
+    <div id="image-urls-panel" hidden>
+      <small>Image generations for this key are stored on the MidWare server and
+        returned as <code>/img/…</code> URLs instead of inline base64. Only
+        applies to <code>/v1/images/*</code> responses that contain
+        <code>b64_json</code> items; upstream URLs pass through untouched.</small>
+      <label>
+        Keep stored images for (days)
+        <input type="number" name="image_retention_days" min="0" max="36500" step="1"
+               placeholder="Forever"
+               value="{{ form.get('image_retention_days') or '' }}">
+        <small>0 or empty keeps images forever.</small>
+      </label>
     </div>
   </section>
 </article>

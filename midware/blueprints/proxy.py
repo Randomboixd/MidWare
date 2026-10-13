@@ -13,7 +13,7 @@ import time
 from typing import Iterator
 
 import httpx
-from flask import Blueprint, Response, current_app, g, request, stream_with_context
+from flask import Blueprint, Response, abort, current_app, g, request, stream_with_context
 
 from ..auth import authenticate, get_db
 from ..cors import check_origin
@@ -26,6 +26,7 @@ from ..db import (
     rate_window_end,
     utcnow,
 )
+from ..images import IMAGE_CONTENT_TYPES, load_image, rewrite_image_body
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage, prompt_estimate
 from ..upstream import HOP_BY_HOP, split_target, upstream_url
@@ -872,6 +873,18 @@ def _forward(ctx: dict, path: str) -> Response:
         upstream.close()
         if workflow_reasoning and upstream.status_code < 400:
             body = _merge_reasoning_body(body, workflow_reasoning)
+        if (
+            upstream.status_code < 400
+            and _endpoint_family(path) == "image"
+            and str(ctx["api_key"]["image_response_mode"] or "b64") == "url"
+        ):
+            # URL-mode keys get their images stored server-side; the rewritten
+            # (much smaller) body is what both the client and the log see.
+            body = rewrite_image_body(
+                body,
+                ctx["api_key"]["id"],
+                int(ctx["api_key"]["image_retention_days"] or 0),
+            )
         latency_ms = int((time.perf_counter() - started) * 1000)
         persist(
             model=model,
@@ -933,6 +946,29 @@ def _forward(ctx: dict, path: str) -> Response:
         headers=dict(response_headers),
         content_type=content_type,
         direct_passthrough=True,
+    )
+
+
+@bp.route("/img/<image_id>", methods=["GET"])
+def serve_image(image_id: str):
+    """Serve an image stored for a URL-mode key.
+
+    Public by design: the unguessable id is the capability, mirroring how
+    upstream providers hand out CDN URLs. Expired or unknown ids are 404s.
+    """
+    result = load_image(image_id)
+    if result is None:
+        abort(404)
+    data, ext = result
+    return Response(
+        data,
+        content_type=IMAGE_CONTENT_TYPES.get(ext, "image/png"),
+        headers={
+            "Cache-Control": "public, max-age=604800",
+            # Static wildcard, not per-key CORS: the id is the capability, so
+            # letting any origin fetch the bytes leaks nothing extra.
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 

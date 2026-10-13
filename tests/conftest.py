@@ -27,13 +27,14 @@ class _ProbeClient:
         return _Response()
 
 
-def _make_app(*, admin_auth: bool):
+def _make_app(*, admin_auth: bool, images_dir: str):
     application = create_app(
         database_path=":memory:",
         config_overrides={
             "TESTING": True,
             "MAX_CAPTURE_BYTES": 64 * 1024,
             "ADMIN_AUTH_ENABLED": admin_auth,
+            "IMAGES_DIR": images_dir,
         },
     )
     application.extensions["midware_http"] = _ProbeClient()
@@ -41,15 +42,15 @@ def _make_app(*, admin_auth: bool):
 
 
 @pytest.fixture()
-def app():
+def app(tmp_path):
     # The bulk of the suite exercises other behaviour, so the login is off by
     # default; tests/test_admin_auth.py builds an auth-enabled app explicitly.
-    return _make_app(admin_auth=False)
+    return _make_app(admin_auth=False, images_dir=str(tmp_path / "images"))
 
 
 @pytest.fixture()
-def secured_app():
-    return _make_app(admin_auth=True)
+def secured_app(tmp_path):
+    return _make_app(admin_auth=True, images_dir=str(tmp_path / "images"))
 
 
 @pytest.fixture()

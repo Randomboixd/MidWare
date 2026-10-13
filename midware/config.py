@@ -31,6 +31,10 @@ def _env_bool(name: str, default: bool) -> bool:
 # SQLite database file. Use ":memory:" for an ephemeral database.
 DATABASE = os.environ.get("MIDWARE_DB") or str(BASE_DIR / "midware.db")
 
+# Where keys with image_response_mode="url" store generated images. Defaults
+# next to the database file so the Docker /data volume holds both.
+IMAGES_DIR = os.environ.get("MIDWARE_IMAGES_DIR") or str(Path(DATABASE).parent / "images")
+
 SECRET_KEY = os.environ.get("MIDWARE_SECRET_KEY", "midware-dev-secret-change-me")
 
 # Control-panel login. The password set here (if any) overrides the one stored in
