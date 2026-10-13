@@ -63,6 +63,37 @@ def normalize_prefix(raw: Any) -> str | None:
 # Sampling parameters a premodel can inject when the caller did not set them.
 SAMPLING_KEYS = ("temperature", "top_p", "max_tokens")
 
+# Substrings that mark a model id as image-generation or embedding rather than
+# chat. Premodels are chat prompt overlays, so their base model must be a chat
+# model; the admin form refuses anything matching these (the runtime rule —
+# refusing a premodel prefix on /v1/images/* and /v1/embeddings — is in
+# proxy.py, and is what actually enforces it for hand-edited databases).
+NON_CHAT_MODEL_MARKERS = (
+    "embed",
+    "dall-e",
+    "dalle",
+    "gpt-image",
+    "imagen",
+    "diffusion",
+    "sdxl",
+    "stable-image",
+    "midjourney",
+    "cogview",
+    "wanx",
+    "kolors",
+    "seedream",
+    "recraft",
+    "ideogram",
+    "qwen-image",
+    "flux",
+)
+
+
+def is_non_chat_model(model: Any) -> bool:
+    """True when a model id looks like an image-generation or embedding model."""
+    lowered = str(model or "").lower()
+    return any(marker in lowered for marker in NON_CHAT_MODEL_MARKERS)
+
 
 def slugify(value: str) -> str:
     """Lowercase, dash-separated slug safe to type after ``<p>-``."""

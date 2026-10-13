@@ -302,14 +302,20 @@
           syntaxHighlighting: m[5].syntaxHighlighting,
           tags: m[6].tags
         };
+      }).catch(function (error) {
+        // Allow a retry on the next script box instead of disabling the editor
+        // for the rest of the page session after one transient CDN failure.
+        cmLoadPromise = null;
+        throw error;
       });
     }
     return cmLoadPromise;
   }
 
-  // Mirrors the sandbox probe (tests/test_workflows_js.py + _probe_builtins.py):
-  // everything listed as present exists in the mini-racer isolate; the ABSENT
-  // list is offered with an info tooltip so nobody wastes time on URL/fetch.
+  // Mirrors the sandbox globals probe (test_workflows_js.py
+  // test_js_sandbox_globals_match_probe): everything listed as present exists
+  // in the mini-racer isolate; the ABSENT list is offered with an info tooltip
+  // so nobody wastes time on URL/fetch.
   var JS_KEYWORD_OPTIONS = [
     "async", "await", "break", "case", "catch", "class", "const", "continue",
     "default", "delete", "do", "else", "export", "extends", "finally", "for",
@@ -355,6 +361,10 @@
     JS_KEYWORDS[opt.label] = true;
   });
 
+  function regexEscape(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   function isApiRequestInstance(doc, name) {
     // Collect class names that extend APIRequest, then variables assigned
     // from `new <those classes>(…)`. Covers `const g = new GemmaRequest()`
@@ -369,7 +379,7 @@
       return false;
     }
     var newRe = new RegExp(
-      "\\b(?:const|let|var)?\\s*" + name + "\\s*=\\s*new\\s+([A-Za-z_$][\\w$]*)\\s*\\(",
+      "\\b(?:const|let|var)?\\s*" + regexEscape(name) + "\\s*=\\s*new\\s+([A-Za-z_$][\\w$]*)\\s*\\(",
       "g"
     );
     while ((m = newRe.exec(doc)) !== null) {
@@ -380,30 +390,383 @@
     return false;
   }
 
-  function isChatResponseVar(doc, name) {
-    // `const resp = await x.create(…)` / `await midware.chat(…)` → the
-    // variable holds the full OpenAI-style response object. `.ask(…)` returns
-    // a plain string, so it is deliberately excluded.
+  function isApiImageInstance(doc, name) {
+    // Mirror of isApiRequestInstance for the image-generation base class.
+    var classes = {};
+    var classRe = /\bclass\s+([A-Za-z_$][\w$]*)\s+extends\s+APIImageRequest\b/g;
+    var m;
+    while ((m = classRe.exec(doc)) !== null) {
+      classes[m[1]] = true;
+    }
+    if (!Object.keys(classes).length) {
+      return false;
+    }
+    var newRe = new RegExp(
+      "\\b(?:const|let|var)?\\s*" + regexEscape(name) + "\\s*=\\s*new\\s+([A-Za-z_$][\\w$]*)\\s*\\(",
+      "g"
+    );
+    while ((m = newRe.exec(doc)) !== null) {
+      if (classes[m[1]]) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function classExtends(doc, cls) {
+    var m = new RegExp(
+      "\\bclass\\s+" + regexEscape(cls) + "\\s+extends\\s+([A-Za-z_$][\\w$]*)\\b"
+    ).exec(doc);
+    return m ? m[1] : null;
+  }
+
+  // The class behind a `.create(…)`-style receiver: `new X(…)` itself, or a
+  // variable assigned from `new X(…)`.
+  function instanceClass(doc, expr) {
+    var m = /^\s*new\s+([A-Za-z_$][\w$]*)\s*\(/.exec(expr);
+    if (m) { return m[1]; }
+    if (!/^\s*[A-Za-z_$][\w$]*\s*$/.test(expr)) { return null; }
+    var id = expr.replace(/^\s+|\s+$/g, "");
+    m = new RegExp(
+      "\\b(?:const|let|var)?\\s*" + regexEscape(id) + "\\s*=\\s*new\\s+([A-Za-z_$][\\w$]*)\\s*\\("
+    ).exec(doc);
+    return m ? m[1] : null;
+  }
+
+  function isImageReceiver(doc, expr) {
+    var cls = instanceClass(doc, expr);
+    if (!cls) { return false; }
+    return cls === "APIImageRequest" || classExtends(doc, cls) === "APIImageRequest";
+  }
+
+  function isImageCall(doc, before) {
+    // The call whose "(" sits at the end of `before` — the last match wins.
+    var re = /(new\s+[\w$]+\s*\([^)]*\)|[\w$.]+)\.(?:create|chat|ask|fetch)\s*\(/g;
+    var m, last = null;
+    while ((m = re.exec(before)) !== null) { last = m; }
+    return last ? isImageReceiver(doc, last[1]) : false;
+  }
+
+  function thisInstanceOptions(doc) {
+    // `this.` inside a script that only defines image subclasses completes
+    // image members; mixed or plain scripts keep the chat members.
+    if (/\bextends\s+APIImageRequest\b/.test(doc) && !/\bextends\s+APIRequest\b/.test(doc)) {
+      return API_IMAGE_REQUEST_OPTIONS;
+    }
+    return API_REQUEST_OPTIONS;
+  }
+
+  function isImageResponseVar(doc, name) {
+    // `const r = await img.create(…)` where img is an APIImageRequest instance.
+    // Checked before isChatResponseVar, whose looser pattern also matches this.
     var re = new RegExp(
-      "\\b(?:const|let|var)?\\s*" + name +
-        "\\s*=\\s*await\\s+[\\w$.]+\\.(?:create|chat)\\s*\\(",
+      "\\b(?:const|let|var)?\\s*" + regexEscape(name) +
+        "\\s*=\\s*await\\s+(new\\s+[\\w$]+\\s*\\([^)]*\\)|[\\w$.]+)\\.create\\s*\\(",
+      "g"
+    );
+    var m;
+    while ((m = re.exec(doc)) !== null) {
+      if (isImageReceiver(doc, m[1])) { return true; }
+    }
+    return false;
+  }
+
+  function isChatResponseVar(doc, name) {
+    // `const resp = await x.create(…)` / `await midware.chat(…)` / even
+    // `await new R().create(…)` → the variable holds the full OpenAI-style
+    // response object. `.ask(…)` returns a plain string, so it is excluded.
+    var re = new RegExp(
+      "\\b(?:const|let|var)?\\s*" + regexEscape(name) +
+        "\\s*=\\s*await\\s+(?:new\\s+[\\w$]+\\s*\\([^)]*\\)|[\\w$.]+)\\.(?:create|chat)\\s*\\(",
       "g"
     );
     return re.test(doc);
   }
 
-  function isInsideMessagesArray(textBeforeBrace) {
-    // True when the innermost unclosed "[" before the cursor belongs to a
-    // messages: [ … ] array. Handles the first message object and later ones.
-    var idx = textBeforeBrace.lastIndexOf("[");
-    if (idx === -1) {
-      return false;
+  function isFetchResponseVar(doc, name) {
+    // `const r = await m.fetch(…)` → {status, ok, body, headers}.
+    var re = new RegExp(
+      "\\b(?:const|let|var)?\\s*" + regexEscape(name) +
+        "\\s*=\\s*await\\s+[\\w$.]+\\.fetch\\s*\\(",
+      "g"
+    );
+    return re.test(doc);
+  }
+
+  // Walks text before the cursor, skipping strings/comments, and finds the
+  // innermost unclosed "{" with enough context to classify it. The stack also
+  // records, per object brace, the offset just past its last top-level comma
+  // so we can tell a key position from a value position even after nested
+  // arrays/objects (e.g. chat({ messages: [{…}], <here> })).
+  function scanObjectContext(text) {
+    var stack = [];
+    var stringDelim = null;
+    var escaped = false;
+    var inLineComment = false;
+    var inBlockComment = false;
+    var i = 0;
+    var n = text.length;
+    while (i < n) {
+      var ch = text[i];
+      if (inLineComment) {
+        if (ch === "\n") { inLineComment = false; }
+        i++; continue;
+      }
+      if (inBlockComment) {
+        if (ch === "*" && text[i + 1] === "/") { inBlockComment = false; i += 2; continue; }
+        i++; continue;
+      }
+      if (stringDelim) {
+        if (escaped) { escaped = false; i++; continue; }
+        if (ch === "\\") { escaped = true; i++; continue; }
+        if (ch === stringDelim) { stringDelim = null; }
+        i++; continue;
+      }
+      if (ch === "/" && text[i + 1] === "/") { inLineComment = true; i += 2; continue; }
+      if (ch === "/" && text[i + 1] === "*") { inBlockComment = true; i += 2; continue; }
+      if (ch === "\"" || ch === "'" || ch === "`") { stringDelim = ch; i++; continue; }
+      if (ch === "(" || ch === "[") { stack.push({ ch: ch, idx: i }); i++; continue; }
+      if (ch === "{") {
+        stack.push({ ch: ch, idx: i, keyStart: i + 1 });
+        i++; continue;
+      }
+      if (ch === ")" || ch === "]" || ch === "}") {
+        stack.pop();
+        i++; continue;
+      }
+      if (ch === "," && stack.length && stack[stack.length - 1].ch === "{") {
+        // A comma directly inside an object starts a new key slot.
+        stack[stack.length - 1].keyStart = i + 1;
+      }
+      i++;
     }
-    // A "]" after the "[" means that array is already closed.
-    if (textBeforeBrace.indexOf("]", idx) !== -1) {
-      return false;
+    if (!stack.length) { return null; }
+    var top = stack[stack.length - 1];
+    if (top.ch !== "{") { return null; }
+    var below = stack.length >= 2 ? stack[stack.length - 2] : null;
+    var insideMessages = Boolean(
+      below && below.ch === "[" && /messages\s*:\s*$/.test(text.slice(0, below.idx))
+    );
+    return {
+      before: text.slice(0, top.idx),
+      tail: text.slice(top.keyStart),
+      insideMessages: insideMessages
+    };
+  }
+
+  // Classifies the innermost open object literal so we know which key set to
+  // offer: chat params, image params, fetch opts, or a chat message's
+  // {role, content}.
+  function objectKeyOptionsFor(context, doc) {
+    if (context.insideMessages) { return "message"; }
+    var before = context.before;
+    if (/\.(?:create|chat)\s*\(\s*$/.test(before)) {
+      return isImageCall(doc, before) ? "image" : "chat";
     }
-    return /messages\s*:\s*$/.test(textBeforeBrace.slice(0, idx));
+    if (/\.(?:ask|fetch)\s*\([^()]*,\s*$/.test(before)) {
+      // ask(x, {…}) → param object (chat or image per the receiver);
+      // fetch(url, {…}) → fetch opts.
+      if (/\.fetch\s*\([^()]*,\s*$/.test(before)) { return "fetch"; }
+      return isImageCall(doc, before) ? "imageAsk" : "chatAsk";
+    }
+    return null;
+  }
+
+  // Pulls the full member chain (e.g. "resp.choices[0].message") plus the
+  // partial identifier typed after the final dot, walking back over balanced
+  // brackets. Returns null when the cursor is not after a dot.
+  function extractMemberChain(textBefore) {
+    var i = textBefore.length;
+    while (i > 0 && /[\w$]/.test(textBefore[i - 1])) { i--; }
+    var partial = textBefore.slice(i);
+    var j = i;
+    while (j > 0 && /\s/.test(textBefore[j - 1])) { j--; }
+    if (j === 0 || textBefore[j - 1] !== ".") { return null; }
+    j--;
+    var depth = 0;
+    var k = j;
+    while (k > 0) {
+      var ch = textBefore[k - 1];
+      if (ch === "]") { depth++; k--; continue; }
+      if (ch === "[") { depth--; k--; continue; }
+      if (depth > 0) { k--; continue; }
+      if (/[\w$.]/.test(ch)) { k--; continue; }
+      break;
+    }
+    var chain = textBefore.slice(k, j).replace(/^\s+|\s+$/g, "");
+    if (!chain || !/^[A-Za-z_$]/.test(chain)) { return null; }
+    return { chain: chain, partial: partial };
+  }
+
+  // Option sets shared by the completion source. Kept at module scope so the
+  // chain resolver (also module scope) can reference them.
+  var MW_OPTIONS = [
+    { label: "messages", type: "property", detail: "caller conversation", info: "Array of {role, content} messages from the client's request." },
+    { label: "vars", type: "property", detail: "earlier variables", info: "Variables published by earlier nodes (and this node so far)." },
+    { label: "systemRequest", type: "property", detail: "original request", info: "JSON string: {method, path, headers minus credentials}." },
+    { label: "set", type: "method", detail: "(key, value)", info: "Publish {{ <node-name>.key }} for later nodes and the Final Request." },
+    { label: "setMessages", type: "method", detail: "(array)", info: "Rewrite the conversation context for later nodes and the final forward." },
+    { label: "fetch", type: "method", detail: "await (url, opts)", info: "HTTP(S) only, 10s timeout, 1MB cap. Requires Allow network. Returns {status, ok, body, headers}." },
+    { label: "chat", type: "method", detail: "await ({messages, model, ...})", info: "Server-side chat through this node's connection. Usage folds into the request row. Does NOT require Allow network." }
+  ];
+  var API_REQUEST_OPTIONS = [
+    { label: "model", type: "property", detail: "default model for create/ask" },
+    { label: "temperature", type: "property", detail: "sampling temperature" },
+    { label: "max_tokens", type: "property", detail: "completion budget" },
+    { label: "create", type: "method", detail: "await (params)", info: "Returns the full OpenAI-style response object — see resp.choices / resp.usage below." },
+    { label: "ask", type: "method", detail: "await (text, params)", info: "Sends one user message; returns just the assistant's reply as a string." }
+  ];
+  var API_IMAGE_REQUEST_OPTIONS = [
+    { label: "model", type: "property", detail: "default model for create/ask" },
+    { label: "size", type: "property", detail: "e.g. \"1024x1024\"" },
+    { label: "n", type: "number", detail: "how many images" },
+    { label: "quality", type: "property", detail: "\"low\" | \"medium\" | \"high\"" },
+    { label: "response_format", type: "property", detail: "\"url\" | \"b64_json\"" },
+    { label: "create", type: "method", detail: "await (params)", info: "Returns the full image response — see resp.data / resp.usage below." },
+    { label: "ask", type: "method", detail: "await (prompt, params)", info: "Generates images from the prompt; returns the first image's url (or b64_json) as a string." }
+  ];
+  var CHAT_PARAM_OPTIONS = [
+    { label: "messages", type: "property", detail: "[{role, content}]", info: "Required. The conversation to send." },
+    { label: "model", type: "property", detail: "model id", info: "Falls back to the node's/default model if omitted." },
+    { label: "temperature", type: "number", detail: "0–2" },
+    { label: "top_p", type: "number", detail: "nucleus sampling" },
+    { label: "max_tokens", type: "number", detail: "completion budget" },
+    { label: "max_completion_tokens", type: "number", detail: "newer alias for max_tokens" },
+    { label: "stop", type: "property", detail: "string or array" },
+    { label: "presence_penalty", type: "number", detail: "-2–2" },
+    { label: "frequency_penalty", type: "number", detail: "-2–2" },
+    { label: "seed", type: "number", detail: "reproducibility" },
+    { label: "logit_bias", type: "property", detail: "{token_id: bias}" },
+    { label: "user", type: "string", detail: "end-user identifier" },
+    { label: "response_format", type: "property", detail: "{type: \"json_object\"}" },
+    { label: "tools", type: "property", detail: "function-calling tools" },
+    { label: "tool_choice", type: "property", detail: "\"auto\" | \"none\" | object" }
+  ];
+  var MESSAGE_OBJECT_OPTIONS = [
+    { label: "role", type: "property", detail: "\"system\" | \"user\" | \"assistant\"" },
+    { label: "content", type: "property", detail: "string or array", info: "The message text. For vision, an array like [{type:\"image_url\", image_url:{url}}]." }
+  ];
+  var IMAGE_PARAM_OPTIONS = [
+    { label: "prompt", type: "string", detail: "required", info: "What to render." },
+    { label: "model", type: "property", detail: "model id", info: "Falls back to the node's model if omitted." },
+    { label: "n", type: "number", detail: "how many images" },
+    { label: "size", type: "string", detail: "\"1024x1024\"" },
+    { label: "quality", type: "string", detail: "\"low\" | \"medium\" | \"high\"" },
+    { label: "response_format", type: "string", detail: "\"url\" | \"b64_json\"" },
+    { label: "style", type: "string", detail: "\"vivid\" | \"natural\"" },
+    { label: "background", type: "string", detail: "\"transparent\" | \"opaque\"" },
+    { label: "output_format", type: "string", detail: "\"png\" | \"jpeg\" | \"webp\"" },
+    { label: "seed", type: "number", detail: "reproducibility" },
+    { label: "user", type: "string", detail: "end-user identifier" }
+  ];
+  var CHAT_RESPONSE_OPTIONS = [
+    { label: "choices", type: "property", detail: "array", info: "One entry per choice. choices[0].message.content is the assistant's reply." },
+    { label: "choices[0].message", type: "property", detail: "{role, content}", info: "The assistant message. content is the reply text; reasoning_content may also be present on reasoning models." },
+    { label: "choices[0].message.content", type: "string", detail: "assistant reply text" },
+    { label: "choices[0].finish_reason", type: "string", detail: "\"stop\", \"length\", …" },
+    { label: "usage", type: "property", detail: "{prompt_tokens, completion_tokens, total_tokens}" },
+    { label: "usage.prompt_tokens", type: "number", detail: "input tokens" },
+    { label: "usage.completion_tokens", type: "number", detail: "output tokens" },
+    { label: "usage.total_tokens", type: "number", detail: "prompt + completion" },
+    { label: "id", type: "string", detail: "response id" },
+    { label: "model", type: "string", detail: "model that served the request" },
+    { label: "created", type: "number", detail: "unix timestamp" }
+  ];
+  var CHOICE_OPTIONS = [
+    { label: "index", type: "number", detail: "choice index" },
+    { label: "message", type: "property", detail: "{role, content}" },
+    { label: "finish_reason", type: "string", detail: "\"stop\", \"length\", …" },
+    { label: "logprobs", type: "property", detail: "logprobs object" }
+  ];
+  var MESSAGE_OPTIONS = [
+    { label: "role", type: "string", detail: "\"assistant\"" },
+    { label: "content", type: "string", detail: "assistant reply text" },
+    { label: "reasoning_content", type: "string", detail: "reasoning text (reasoning models)" }
+  ];
+  var USAGE_OPTIONS = [
+    { label: "prompt_tokens", type: "number", detail: "input tokens" },
+    { label: "completion_tokens", type: "number", detail: "output tokens" },
+    { label: "total_tokens", type: "number", detail: "prompt + completion" }
+  ];
+  var IMAGE_RESPONSE_OPTIONS = [
+    { label: "data", type: "property", detail: "array", info: "One entry per image: {url or b64_json, revised_prompt}." },
+    { label: "created", type: "number", detail: "unix timestamp" },
+    { label: "quality", type: "string", detail: "quality actually used" },
+    { label: "size", type: "string", detail: "size actually used" },
+    { label: "usage", type: "property", detail: "{input_tokens, output_tokens}" }
+  ];
+  var IMAGE_ITEM_OPTIONS = [
+    { label: "url", type: "string", detail: "temporary image URL" },
+    { label: "b64_json", type: "string", detail: "base64 image when response_format is b64_json" },
+    { label: "revised_prompt", type: "string", detail: "provider's rewritten prompt" }
+  ];
+  var IMAGE_USAGE_OPTIONS = [
+    { label: "input_tokens", type: "number", detail: "prompt tokens" },
+    { label: "output_tokens", type: "number", detail: "image tokens" },
+    { label: "prompt_tokens", type: "number", detail: "alias on some providers" },
+    { label: "completion_tokens", type: "number", detail: "alias on some providers" }
+  ];
+  var FETCH_RESPONSE_OPTIONS = [
+    { label: "status", type: "number", detail: "HTTP status code" },
+    { label: "ok", type: "boolean", detail: "2xx" },
+    { label: "body", type: "string", detail: "raw text (utf-8, truncated at 1 MB)" },
+    { label: "headers", type: "property", detail: "response headers" }
+  ];
+  var FETCH_OPTS_OPTIONS = [
+    { label: "method", type: "property", detail: "\"GET\", \"POST\", …", info: "Defaults to GET." },
+    { label: "headers", type: "property", detail: "{name: value}" },
+    { label: "body", type: "string", detail: "request body (string only)" }
+  ];
+  var CONSOLE_OPTIONS = [
+    { label: "log", type: "method", detail: "(...args)" },
+    { label: "error", type: "method", detail: "(...args)" },
+    { label: "warn", type: "method", detail: "(...args)" }
+  ];
+
+  // Resolves a member chain to the option set for its last segment, so
+  // resp.choices[0].message. completes message keys and midware.messages[0].
+  // completes message keys too.
+  function resolveChainOptions(doc, chain) {
+    var rootMatch = /^([A-Za-z_$][\w$]*)/.exec(chain);
+    if (!rootMatch) { return null; }
+    var root = rootMatch[1];
+    var rest = chain.slice(root.length);
+    if (isFetchResponseVar(doc, root)) {
+      return rest === "" ? FETCH_RESPONSE_OPTIONS : null;
+    }
+    if (isImageResponseVar(doc, root)) {
+      if (rest === "") { return IMAGE_RESPONSE_OPTIONS; }
+      if (/^\.data$/.test(rest)) { return null; }
+      if (/^\.data\[\d+\]$/.test(rest)) { return IMAGE_ITEM_OPTIONS; }
+      if (/^\.usage$/.test(rest)) { return IMAGE_USAGE_OPTIONS; }
+      return null;
+    }
+    if (isChatResponseVar(doc, root)) {
+      if (rest === "") { return CHAT_RESPONSE_OPTIONS; }
+      if (/^\.choices$/.test(rest)) { return null; }
+      if (/^\.choices\[\d+\]$/.test(rest)) { return CHOICE_OPTIONS; }
+      if (/^\.choices\[\d+\]\.message$/.test(rest)) { return MESSAGE_OPTIONS; }
+      if (/^\.usage$/.test(rest)) { return USAGE_OPTIONS; }
+      return null;
+    }
+    if (root === "midware") {
+      if (rest === "") { return MW_OPTIONS; }
+      if (/^\.messages\[\d+\]$/.test(rest)) { return MESSAGE_OBJECT_OPTIONS; }
+      return null;
+    }
+    if (root === "console") {
+      return rest === "" ? CONSOLE_OPTIONS : null;
+    }
+    if (root === "this") {
+      return rest === "" ? thisInstanceOptions(doc) : null;
+    }
+    if (isApiImageInstance(doc, root)) {
+      return rest === "" ? API_IMAGE_REQUEST_OPTIONS : null;
+    }
+    if (isApiRequestInstance(doc, root)) {
+      return rest === "" ? API_REQUEST_OPTIONS : null;
+    }
+    return null;
   }
 
   function makeJsCompletionSource(cm) {
@@ -425,135 +788,71 @@
         info: "create(params) and ask(text) use this.model / this.temperature / this.max_tokens."
       }
     );
-    var midwareOptions = [
-      { label: "messages", type: "property", detail: "caller conversation", info: "Array of {role, content} messages from the client's request." },
-      { label: "vars", type: "property", detail: "earlier variables", info: "Variables published by earlier nodes (and this node so far)." },
-      { label: "systemRequest", type: "property", detail: "original request", info: "JSON string: {method, path, headers minus credentials}." },
-      { label: "set", type: "method", detail: "(key, value)", info: "Publish {{ <node-name>.key }} for later nodes and the Final Request." },
-      { label: "setMessages", type: "method", detail: "(array)", info: "Rewrite the conversation context for later nodes and the final forward." },
-      { label: "fetch", type: "method", detail: "await (url, opts)", info: "HTTP(S) only, 10s timeout, 1MB cap. Requires Allow network. Returns {status, ok, body, headers}." },
-      { label: "chat", type: "method", detail: "await ({messages, model, ...})", info: "Server-side chat through this node's connection. Usage folds into the request row. Does NOT require Allow network." }
-    ];
-    var apiRequestOptions = [
-      { label: "model", type: "property", detail: "default model for create/ask" },
-      { label: "temperature", type: "property", detail: "sampling temperature" },
-      { label: "max_tokens", type: "property", detail: "completion budget" },
-      { label: "create", type: "method", detail: "await (params)", info: "Returns the full OpenAI-style response object — see resp.choices / resp.usage below." },
-      { label: "ask", type: "method", detail: "await (text, params)", info: "Sends one user message; returns just the assistant's reply as a string." }
-    ];
-    var chatParamOptions = [
-      { label: "messages", type: "property", detail: "[{role, content}]", info: "Required. The conversation to send." },
-      { label: "model", type: "property", detail: "model id", info: "Falls back to the node's/default model if omitted." },
-      { label: "temperature", type: "number", detail: "0–2" },
-      { label: "top_p", type: "number", detail: "nucleus sampling" },
-      { label: "max_tokens", type: "number", detail: "completion budget" },
-      { label: "stop", type: "property", detail: "string or array" },
-      { label: "presence_penalty", type: "number", detail: "-2–2" },
-      { label: "frequency_penalty", type: "number", detail: "-2–2" },
-      { label: "seed", type: "number", detail: "reproducibility" },
-      { label: "logit_bias", type: "property", detail: "{token_id: bias}" },
-      { label: "user", type: "string", detail: "end-user identifier" }
-    ];
-    var messageObjectOptions = [
-      { label: "role", type: "property", detail: "\"system\" | \"user\" | \"assistant\"" },
-      { label: "content", type: "property", detail: "string or array", info: "The message text. For vision, an array like [{type:\"image_url\", image_url:{url}}]." }
-    ];
-    var chatResponseOptions = [
-      { label: "choices", type: "property", detail: "array", info: "One entry per choice. choices[0].message.content is the assistant's reply." },
-      { label: "choices[0].message", type: "property", detail: "{role, content}", info: "The assistant message. content is the reply text; reasoning_content may also be present on reasoning models." },
-      { label: "choices[0].message.content", type: "string", detail: "assistant reply text" },
-      { label: "choices[0].finish_reason", type: "string", detail: "\"stop\", \"length\", …" },
-      { label: "usage", type: "property", detail: "{prompt_tokens, completion_tokens, total_tokens}" },
-      { label: "usage.prompt_tokens", type: "number", detail: "input tokens" },
-      { label: "usage.completion_tokens", type: "number", detail: "output tokens" },
-      { label: "usage.total_tokens", type: "number", detail: "prompt + completion" },
-      { label: "id", type: "string", detail: "response id" },
-      { label: "model", type: "string", detail: "model that served the request" },
-      { label: "created", type: "number", detail: "unix timestamp" }
-    ];
-    var fetchOptsOptions = [
-      { label: "method", type: "property", detail: "\"GET\", \"POST\", …", info: "Defaults to GET." },
-      { label: "headers", type: "property", detail: "{name: value}" },
-      { label: "body", type: "string", detail: "request body (string only)" }
-    ];
-    var consoleOptions = [
-      { label: "log", type: "method", detail: "(...args)" },
-      { label: "error", type: "method", detail: "(...args)" },
-      { label: "warn", type: "method", detail: "(...args)" }
-    ];
+    var apiImageRequestSnippet = cm.snippetCompletion(
+      "class ${Name} extends APIImageRequest {\n  constructor() {\n    super();\n    this.model = \"${model}\";\n  }\n}",
+      {
+        label: "class X extends APIImageRequest",
+        type: "class",
+        detail: "image subclass skeleton",
+        info: "create(params) returns the full image response; ask(prompt) returns the first image's url (or b64_json)."
+      }
+    );
     var topLevel = [
       runSnippet,
       apiRequestSnippet,
+      apiImageRequestSnippet,
       { label: "midware", type: "variable", detail: "sandbox bridge", info: "messages, vars, systemRequest, set, setMessages, fetch, chat." },
       { label: "APIRequest", type: "class", detail: "model-call base class", info: "Subclass it and use create/ask, or just await midware.chat(...)." },
+      { label: "APIImageRequest", type: "class", detail: "image-generation base class", info: "Subclass it and use create({prompt, ...}) / ask(prompt) to generate images through the connection." },
       { label: "console", type: "variable", detail: "log → node reasoning" }
     ].concat(JS_KEYWORD_OPTIONS, JS_SANDBOX_GLOBAL_OPTIONS, JS_ABSENT_API_OPTIONS);
+
+    function optionsFor(set, partial) {
+      var lower = partial.toLowerCase();
+      return {
+        options: set.filter(function (opt) {
+          return !partial || opt.label.toLowerCase().indexOf(lower) === 0;
+        })
+      };
+    }
 
     return function (context) {
       var pos = context.pos;
       var doc = context.state.doc.toString();
-      var textBefore = context.state.sliceDoc(Math.max(0, pos - 300), pos);
+      var textBefore = context.state.sliceDoc(Math.max(0, pos - 400), pos);
 
-      // Object-literal keys: find the innermost unclosed "{" and check what
-      // precedes it. Handles create({ / chat({ / ask(x, { / fetch(url, { and
-      // nested message objects inside messages: [{ … }].
-      var braceIdx = textBefore.lastIndexOf("{");
-      if (braceIdx !== -1 && !/[{}\[\]]/.test(textBefore.slice(braceIdx + 1))) {
-        var beforeBrace = textBefore.slice(0, braceIdx);
-        var objKeys = null;
-        if (/\.(create|chat)\s*\(\s*$/.test(beforeBrace)) {
-          objKeys = chatParamOptions;
-        } else if (/\.ask\s*\([^)]*,\s*$/.test(beforeBrace)) {
-          objKeys = chatParamOptions;
-        } else if (/\.fetch\s*\([^)]*,\s*$/.test(beforeBrace)) {
-          objKeys = fetchOptsOptions;
-        } else if (isInsideMessagesArray(beforeBrace)) {
-          // Inside the messages array → completing a message object {role, content}
-          objKeys = messageObjectOptions;
-        }
-        if (objKeys) {
-          var afterBrace = textBefore.slice(braceIdx + 1);
-          if (/^[\s]*$/.test(afterBrace) || /,[\s]*[\w$]*$/.test(afterBrace)) {
-            var partialKey = /[\w$]*$/.exec(afterBrace)[0];
-            return {
-              from: pos - partialKey.length,
-              options: objKeys.filter(function (opt) {
-                return !partialKey || opt.label.toLowerCase().indexOf(partialKey.toLowerCase()) === 0;
-              })
-            };
+      // Object-literal keys: the string/comment-aware scanner finds the
+      // innermost unclosed "{" and whether we sit at a key slot inside it.
+      var objectContext = scanObjectContext(textBefore);
+      if (objectContext) {
+        var kind = objectKeyOptionsFor(objectContext, doc);
+        if (kind && /^[\s]*[\w$]*$/.test(objectContext.tail)) {
+          var set = null;
+          if (kind === "message") { set = MESSAGE_OBJECT_OPTIONS; }
+          else if (kind === "chat" || kind === "chatAsk") { set = CHAT_PARAM_OPTIONS; }
+          else if (kind === "image" || kind === "imageAsk") { set = IMAGE_PARAM_OPTIONS; }
+          else if (kind === "fetch") { set = FETCH_OPTS_OPTIONS; }
+          if (set) {
+            var partialKey = /[\w$]*$/.exec(objectContext.tail)[0];
+            var result = optionsFor(set, partialKey);
+            result.from = pos - partialKey.length;
+            return result;
           }
         }
       }
 
-      var memberMatch = /([\w$]+)\.([\w$]*)$/.exec(textBefore);
-      if (memberMatch && !JS_KEYWORDS[memberMatch[1]]) {
-        var receiver = memberMatch[1];
-        var partial = memberMatch[2];
-        var members = null;
-        if (receiver === "midware") {
-          members = midwareOptions;
-        } else if (receiver === "console") {
-          members = consoleOptions;
-        } else if (receiver === "this") {
-          if (/extends\s+APIRequest\b/.test(doc)) {
-            members = apiRequestOptions;
-          }
-        } else if (isApiRequestInstance(doc, receiver)) {
-          members = apiRequestOptions;
-        } else if (isChatResponseVar(doc, receiver)) {
-          // const resp = await x.create(…) / await midware.chat(…)
-          members = chatResponseOptions;
-        }
+      // Member chains: resp.choices[0].message. → message keys, etc.
+      var chain = extractMemberChain(textBefore);
+      if (chain) {
+        var members = resolveChainOptions(doc, chain.chain);
         if (members) {
-          return {
-            from: pos - partial.length,
-            options: members.filter(function (opt) {
-              return !partial || opt.label.toLowerCase().indexOf(partial.toLowerCase()) === 0;
-            })
-          };
+          var chainResult = optionsFor(members, chain.partial);
+          chainResult.from = pos - chain.partial.length;
+          return chainResult;
         }
         return null;
       }
+
       var word = context.matchBefore(/[\w$]*/);
       if (!word && !context.explicit) {
         return null;
@@ -636,12 +935,40 @@
         color: "var(--pico-muted-color)",
         fontStyle: "normal",
         marginLeft: "0.5rem"
+      },
+      ".cm-panels": {
+        backgroundColor: "var(--pico-background-color)",
+        color: "var(--pico-color)"
+      },
+      ".cm-panel": {
+        color: "var(--pico-color)"
+      },
+      ".cm-panel.cm-search": {
+        backgroundColor: "var(--pico-background-color)",
+        color: "var(--pico-color)"
+      },
+      ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": {
+        color: "var(--pico-color)"
+      },
+      ".cm-searchMatch": {
+        backgroundColor: "color-mix(in srgb, var(--pico-secondary) 35%, transparent)"
+      },
+      ".cm-searchMatch-selected": {
+        backgroundColor: "color-mix(in srgb, var(--pico-primary) 40%, transparent)"
+      },
+      ".cm-matchingBracket": {
+        backgroundColor: "color-mix(in srgb, var(--pico-primary) 25%, transparent)",
+        outline: "1px solid var(--pico-primary)"
+      },
+      ".cm-nonmatchingBracket": {
+        color: "var(--pico-primary-hover)",
+        outline: "1px solid var(--pico-primary-hover)"
       }
     });
     return [theme, cm.syntaxHighlighting(highlight)];
   }
 
-  function scriptEditor(node) {
+  function scriptEditor(node, collapsed) {
     var onInput = function (value) {
       node.prompt = value;
       sync();
@@ -650,6 +977,22 @@
     fallback.className = "wf-script";
     var wrap = el("div", { className: "wf-cm" });
     wrap.appendChild(fallback);
+
+    function degrade(message) {
+      console.warn("MidWare: " + message + ", keeping textarea.");
+      if (!wrap.querySelector(".wf-cm-note")) {
+        wrap.appendChild(el("small", {
+          className: "wf-cm-note",
+          text: "Plain editor (CodeMirror unavailable)."
+        }));
+      }
+    }
+
+    // A collapsed card pays nothing: skip the import/mount entirely. Expanding
+    // re-renders the card and mounts the editor then.
+    if (collapsed) {
+      return wrap;
+    }
 
     loadCodeMirror().then(function (cm) {
       // The card may have been redrawn (collapsed/moved/deleted) while the
@@ -686,10 +1029,10 @@
         fallback.remove();
         wrap._cmView = view;
       } catch (error) {
-        console.warn("MidWare: CodeMirror mount failed, keeping textarea.", error);
+        degrade("CodeMirror mount failed");
       }
-    }).catch(function (error) {
-      console.warn("MidWare: CodeMirror unavailable, keeping textarea.", error);
+    }).catch(function () {
+      degrade("CodeMirror unavailable");
     });
 
     return wrap;
@@ -775,7 +1118,10 @@
       // selects, buttons and the CodeMirror surface keep their normal mouse
       // behaviour (typing / selection / gutter drag).
       var blocked = event.target && event.target.closest &&
-        event.target.closest("input, textarea, select, button, label, .cm-content, .cm-gutters");
+        event.target.closest(
+          "input, textarea, select, button, label, " +
+          ".cm-content, .cm-gutters, .cm-editor, .cm-scroller, .cm-tooltip, .cm-panels"
+        );
       card.setAttribute("draggable", blocked ? "false" : "true");
     });
     card.addEventListener("dragstart", function (event) {
@@ -1116,7 +1462,7 @@
         })
       ];
     } else if (node.type === "javascript") {
-      var scriptBox = scriptEditor(node);
+      var scriptBox = scriptEditor(node, node.collapsed);
       var jsTimeout = textInput(node.timeout_seconds == null ? 5 : node.timeout_seconds, function (value) {
         var parsed = parseInt(value, 10);
         node.timeout_seconds = isNaN(parsed) || parsed < 1 ? 5 : Math.min(parsed, 30);
@@ -1140,7 +1486,7 @@
         ]),
         el("p", {
           className: "wf-card-note",
-          text: "midware.messages (the caller's conversation), midware.vars (earlier variables), midware.systemRequest. Use midware.set(k, v) to publish {{ " + (node.name || "node") + ".<k> }}, midware.setMessages(arr) to rewrite the context, await midware.fetch(url, opts) for HTTP, and await midware.chat({messages, model}) (or the APIRequest class) to ask a model through the connection above. The return value and console.log go to the node's reasoning."
+          text: "midware.messages (the caller's conversation), midware.vars (earlier variables), midware.systemRequest. Use midware.set(k, v) to publish {{ " + (node.name || "node") + ".<k> }}, midware.setMessages(arr) to rewrite the context, await midware.fetch(url, opts) for HTTP, and await midware.chat({messages, model}) (or the APIRequest class) to ask a model through the connection above. The APIImageRequest class generates images the same way — create({prompt, ...}) or ask(prompt) returns their url. The return value and console.log go to the node's reasoning."
         }),
         el("p", {
           className: "wf-card-note",
@@ -1583,7 +1929,103 @@
     }
   }
 
+  // --- UNSTABLE BETA gate ---------------------------------------------------
+  // First time someone flips the switch, ask once with the rough-waters
+  // modal. "I'm feeling lucky" acknowledges forever (localStorage);
+  // "no, go back" (or the backdrop) just closes — the switch stays off and
+  // the modal will ask again next time they try.
+  var BETA_ACK_KEY = "mw_premodel_workflows_beta";
+  var betaModal = null;
+
+  function betaAcknowledged() {
+    try {
+      return window.localStorage.getItem(BETA_ACK_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function closeBetaModal() {
+    if (betaModal) {
+      betaModal.hidden = true;
+    }
+  }
+
+  function acceptBeta() {
+    try {
+      window.localStorage.setItem(BETA_ACK_KEY, "1");
+    } catch (e) {
+      // private mode etc. — worst case it asks again next time
+    }
+    closeBetaModal();
+    checkbox.checked = true;
+    updatePanels();
+  }
+
+  function openBetaModal() {
+    if (!betaModal) {
+      betaModal = el("div", { className: "wf-modal", hidden: "hidden" });
+      betaModal.addEventListener("click", function (event) {
+        if (event.target === betaModal) {
+          closeBetaModal();
+        }
+      });
+      betaModal.appendChild(el("div", { className: "wf-modal-panel" }, [
+        el("div", { className: "wf-modal-header" }, [
+          el("strong", { text: "Premodel Workflows are in pretty much rough waters." })
+        ]),
+        el("p", { text: "And this crazy man wants you to TEST them!" }),
+        el("p", {
+          text: "Premodel workflows are a different approach to Premodels. Instead of " +
+                "being able to modify only the system prompt, workflows allows you to " +
+                "modify the CONTEXT!"
+        }),
+        el("p", {
+          text: "Workflows are not complete. They never will be. They are also heavily " +
+                "underdocumented as of now."
+        }),
+        el("p", {
+          text: "Most control will be provided via the JavaScript Node. Though we " +
+                "expose some controls on the block side of workflows."
+        }),
+        el("p", {
+          text: "if you need to alter context or do crazy workflows, use javascript " +
+                "nodes. If you want something simple, use Workflow Nodes."
+        }),
+        el("p", {
+          text: "Also... by clicking \"I'm feeling lucky\" you're acknowledging that " +
+                "premodel workflows are insanely unstable and could cause some silly " +
+                "problems! Or even an RCE!"
+        }),
+        el("p", { text: "Good luck, friend." }),
+        el("div", { className: "wf-actions" }, [
+          el("button", {
+            type: "button",
+            className: "secondary outline",
+            text: "no, go back",
+            onclick: function () {
+              closeBetaModal();
+            }
+          }),
+          el("button", {
+            type: "button",
+            text: "I'm feeling lucky",
+            onclick: acceptBeta
+          })
+        ])
+      ]));
+      document.body.appendChild(betaModal);
+    }
+    betaModal.hidden = false;
+  }
+
   checkbox.addEventListener("change", function () {
+    if (checkbox.checked && !betaAcknowledged()) {
+      checkbox.checked = false;
+      updatePanels();
+      openBetaModal();
+      return;
+    }
     updatePanels();
   });
   loadGraph();

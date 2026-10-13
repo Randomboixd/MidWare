@@ -650,6 +650,12 @@ details.signin > summary {
   min-height: 10rem;
 }
 
+.wf-cm-note {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--pico-muted-color);
+}
+
 .wf-card-body {
   display: flex;
   flex-direction: column;

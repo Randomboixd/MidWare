@@ -17,6 +17,8 @@ import json
 import re
 from typing import Any
 
+from .usage import parse_multipart_fields
+
 # Message fields that hold the visible answer. ``content`` is by far the most
 # common; ``refusal`` is OpenAI's safety escape hatch and is worth surfacing.
 TEXT_FIELDS = ("content", "text", "output_text", "refusal")
@@ -263,6 +265,26 @@ def _parse_json(raw: Any) -> Any:
         return None
 
 
+def _data_items_text(items: list[Any]) -> str:
+    """Render an images/embeddings ``data`` array as assistant-visible text."""
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        embedding = item.get("embedding")
+        if isinstance(embedding, list):
+            lines.append(
+                f"[embedding #{item.get('index', len(lines))}: {len(embedding)} dimensions]"
+            )
+        elif isinstance(item.get("url"), str) and item["url"]:
+            lines.append(item["url"])
+        elif isinstance(item.get("b64_json"), str) and item["b64_json"]:
+            lines.append(f"[image] base64, {len(item['b64_json'])} characters")
+        elif isinstance(item.get("revised_prompt"), str):
+            lines.append(item["revised_prompt"])
+    return "\n".join(lines)
+
+
 def _append_reasoning(target: dict[str, Any], field: str, value: Any) -> None:
     """Append a reasoning delta without double-counting mirrored fields.
 
@@ -410,6 +432,11 @@ def _raw_present(*bodies: Any) -> bool:
 def build_conversation(request_body: Any, response_body: Any) -> dict[str, Any]:
     """Normalize a captured request/response pair into display blocks."""
     request_payload = _parse_json(request_body)
+    if request_payload is None:
+        # Image edits post multipart/form-data; their text fields are the only
+        # part worth showing (uploaded files stay in the raw view).
+        fields = parse_multipart_fields(request_body)
+        request_payload = fields or None
     response_payload = _parse_json(response_body)
 
     messages: list[dict[str, Any]] = []
@@ -424,6 +451,12 @@ def build_conversation(request_body: Any, response_body: Any) -> dict[str, Any]:
         if not messages and request_payload.get("input") is not None:
             messages.append(_from_message(request_payload.get("input"), counter, "request", "user"))
             counter += 1
+        prompt = request_payload.get("prompt")
+        if not messages and isinstance(prompt, str) and prompt:
+            messages.append(
+                _from_message({"role": "user", "content": prompt}, counter, "request", "user")
+            )
+            counter += 1
 
     if isinstance(response_payload, dict):
         choices = response_payload.get("choices")
@@ -435,6 +468,15 @@ def build_conversation(request_body: Any, response_body: Any) -> dict[str, Any]:
         elif isinstance(response_payload.get("content"), list):
             messages.append(_from_message(response_payload, counter, "response", "assistant"))
             counter += 1
+        elif isinstance(response_payload.get("data"), list):
+            text = _data_items_text(response_payload["data"])
+            if text:
+                messages.append(
+                    _from_message(
+                        {"role": "assistant", "content": text}, counter, "response", "assistant"
+                    )
+                )
+                counter += 1
     elif isinstance(response_payload, list):
         # Anthropic non-streamed responses are a list of content parts.
         messages.append(_from_message({"role": "assistant", "content": response_payload}, counter, "response", "assistant"))
@@ -464,7 +506,22 @@ def _meta(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     meta: dict[str, Any] = {}
-    for key in ("model", "object", "temperature", "max_tokens", "max_completion_tokens", "top_p", "stream"):
+    for key in (
+        "model",
+        "object",
+        "temperature",
+        "max_tokens",
+        "max_completion_tokens",
+        "top_p",
+        "stream",
+        "n",
+        "size",
+        "quality",
+        "style",
+        "response_format",
+        "background",
+        "output_format",
+    ):
         if key in payload:
             meta[key] = payload[key]
     usage = payload.get("usage")

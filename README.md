@@ -66,6 +66,7 @@ This allows the same MidWare instance to expose models from multiple providers w
 
 * OpenAI-compatible `/v1/chat/completions`
 * OpenAI-compatible `/v1/models`
+* Image generation and embeddings (`/v1/images/*`, `/v1/embeddings`)
 * Multiple upstream routes
 * Per-key model and route permissions
 * Rate limits and token limits
@@ -104,6 +105,8 @@ There are currently three merge modes:
 * **Merge** — MidWare attempts to combine them.
 
 This is useful when you want a client to see a simple model while keeping the actual configuration server-side.
+
+Premodels are chat-only: their base model must be a chat model (the admin form rejects image-generation and embedding ids), and a `<p>-…` prefix on `/v1/images/*` or `/v1/embeddings` is rejected with `403 premodel_chat_only`.
 
 ## Workflows
 
@@ -167,16 +170,24 @@ the **Add node** picker):
     midware.set("answer", answer);
   }
   ```
-  `create(params)` merges your constructor defaults (`this.model`,
-  `this.temperature`, `this.max_tokens`) with per-call params and returns the
-  full response; `ask(text)` is one-shot sugar. The script box is a
-  **CodeMirror 6** editor (lazy-loaded from a CDN) that autocompletes the
-  sandbox's real surface — `midware.*`, `console.*`, `this.*` inside an
-  `APIRequest` subclass, plus the globals that actually exist in the isolate —
-  and falls back to a plain textarea if the editor cannot load, so saving
-  always works. Runs in a V8 isolate with a
-  16 MB memory cap, no filesystem, no access to MidWare secrets, and a 1–30 s
-  timeout (default 5); errors surface as `502 workflow_node_failed`.
+   `create(params)` merges your constructor defaults (`this.model`,
+   `this.temperature`, `this.max_tokens`) with per-call params and returns the
+   full response; `ask(text)` is one-shot sugar. A sibling
+   **`APIImageRequest`** class does the same for image generation:
+   `create({prompt, model, size, …})` returns the full image response and
+   `ask(prompt)` returns the first image's `url` (or `b64_json`), forwarded
+   server-side to `…/v1/images/generations` — there is no `midware.image()`,
+   the class is the only way in, and the premodel's chat model is never used as
+   an image default (premodels are chat-only). The script box is a
+   **CodeMirror 6** editor (lazy-loaded from a CDN) that autocompletes the
+   sandbox's real surface — `midware.*`, `console.*`, `this.*` inside an
+   `APIRequest` subclass, keys inside `chat({…})` / `messages: [{…}]` /
+   response literals, member chains like `resp.choices[0].message.`, plus the
+   globals that actually exist in the isolate — and falls back to a plain
+   textarea if the editor cannot load, so saving
+   always works. Runs in a V8 isolate with a
+   16 MB memory cap, no filesystem, no access to MidWare secrets, and a 1–30 s
+   timeout (default 5); errors surface as `502 workflow_node_failed`.
   `mini-racer` ships in `requirements.txt`, so no extra install is needed.
   Because the script is code rather than a template, saving skips it during
   type checking (like Expect JSON, any dotted path under the node's name is

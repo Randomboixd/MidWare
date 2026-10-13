@@ -23,6 +23,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from .usage import parse_multipart_fields
+
 # Rough characters-per-token ratios per model family. These are only used when
 # tiktoken is unavailable or the model is not an OpenAI one.
 _CHARS_PER_TOKEN = 3.6
@@ -174,6 +176,16 @@ def prompt_text(request_body: Any) -> str:
         try:
             payload = json.loads(payload)
         except (ValueError, TypeError):
+            fields = parse_multipart_fields(payload)
+            if fields:
+                # Multipart (image edits) carries the prompt as a form field;
+                # the raw body also holds uploaded image bytes, which must
+                # never be counted as tokens.
+                return "\n".join(
+                    fields[key] for key in ("prompt", "input", "system") if fields.get(key)
+                )
+            if "Content-Disposition: form-data" in payload:
+                return ""
             return payload
     if not isinstance(payload, dict):
         return ""
@@ -188,6 +200,8 @@ def prompt_text(request_body: Any) -> str:
     if payload.get("input") is not None and not messages:
         value = payload["input"]
         parts.append(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+    if isinstance(payload.get("prompt"), str):
+        parts.append(payload["prompt"])
     system = payload.get("system")
     if isinstance(system, str):
         parts.append(system)
@@ -276,3 +290,17 @@ def estimate_usage(request_body: Any, response_body: Any, model: str | None = No
         total_tokens=prompt_tokens + completion_tokens,
         source=source or "estimated",
     )
+
+
+def prompt_estimate(request_body: Any, model: str | None = None) -> Estimate:
+    """Count the request side only, tagged like any other local estimate.
+
+    Image generations answer with URLs or base64 blobs and embeddings with
+    float vectors — neither is output text, so only the prompt/input side is
+    ever worth counting locally.
+    """
+    text = prompt_text(request_body)
+    if not text:
+        return Estimate(0, 0, 0, "none")
+    tokens, source = count_text(text, model)
+    return Estimate(tokens, 0, tokens, source)

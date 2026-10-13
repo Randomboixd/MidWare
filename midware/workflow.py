@@ -85,21 +85,25 @@ STRIPPED_REQUEST_HEADERS = HOP_BY_HOP | {"authorization", "x-api-key"}
 # JSON string because mini-racer only converts primitives and JS handles on
 # calls; midware.fetch is a blocking Python callable surfaced as an async JS
 # function (wrap_py_function is async-only), so scripts may `await` it. The
-# head defines console/midware/APIRequest at top level (user code is
-# concatenated between head and tail, so their `run` and any APIRequest
-# subclasses close over the same scope), and Python-side failures are returned
-# as {"error": ...} JSON — exceptions raised inside the bridge come back masked
-# as "Error running Python function".
+# head defines console/midware/APIRequest/APIImageRequest at top level (user
+# code is concatenated between head and tail, so their `run` and any APIRequest
+# or APIImageRequest subclasses close over the same scope), and Python-side
+# failures are returned as {"error": ...} JSON — exceptions raised inside the
+# bridge come back masked as "Error running Python function".
 _JS_BOOTSTRAP_HEAD = """
 var __mw_out = { vars: {}, log: [] };
 var console = {
   log: (...a) => __mw_out.log.push(
-    a.map(x => typeof x === "string" ? x : JSON.stringify(x)).join(" ")
+    a.map(x => {
+      if (typeof x === "string") { return x; }
+      try { return JSON.stringify(x); } catch (e) { return String(x); }
+    }).join(" ")
   ),
 };
 console.warn = console.log;
 console.error = console.log;
 let __mw_chat = null;
+let __mw_image = null;
 class APIRequest {
   constructor() {
     this.model = "";
@@ -125,7 +129,34 @@ class APIRequest {
     return (msg && msg.content) || "";
   }
 }
-async function __mw_main(mwDataJson, fetchFn, chatFn) {
+class APIImageRequest {
+  constructor() {
+    this.model = "";
+    this.size = null;
+    this.n = null;
+    this.quality = null;
+    this.response_format = null;
+  }
+  async create(params) {
+    if (!__mw_image) { throw new Error("image generation is not available in this node"); }
+    const body = Object.assign({}, params || {});
+    const model = body.model || this.model;
+    if (model) { body.model = model; }
+    for (const key of ["size", "n", "quality", "response_format"]) {
+      if (body[key] == null && this[key] != null) { body[key] = this[key]; }
+    }
+    return __mw_image(body);
+  }
+  async ask(text, params) {
+    const resp = await this.create(Object.assign({}, params || {}, {
+      prompt: String(text),
+    }));
+    const item = resp && Array.isArray(resp.data) ? resp.data[0] : null;
+    if (!item) { return ""; }
+    return item.url || item.b64_json || "";
+  }
+}
+async function __mw_main(mwDataJson, fetchFn, chatFn, imageFn) {
   const mwData = JSON.parse(mwDataJson);
   let msgs = mwData.messages;
   __mw_out.vars = {};
@@ -135,9 +166,16 @@ async function __mw_main(mwDataJson, fetchFn, chatFn) {
     if (r && r.error) { throw new Error(r.error); }
     return r;
   });
+  __mw_image = imageFn ? (params) => imageFn(JSON.stringify(params || {})).then(s => {
+    const r = JSON.parse(s);
+    if (r && r.error) { throw new Error(r.error); }
+    return r;
+  }) : null;
   const midware = {
     get messages() { return msgs; },
-    get vars() { return mwData.vars; },
+    // Earlier nodes' vars merged with this node's own set()s so far, so a
+    // script can read back what it just published.
+    get vars() { return Object.assign({}, mwData.vars, __mw_out.vars); },
     get systemRequest() { return mwData.systemRequest; },
     setMessages(m) {
       if (!Array.isArray(m)) throw new Error("setMessages expects an array");
@@ -168,13 +206,29 @@ class WorkflowError(ValueError):
 
 
 class WorkflowNodeError(Exception):
-    """A sub-call failed; ``node_name`` identifies the offending node."""
+    """A sub-call failed; ``node_name`` identifies the offending node.
 
-    def __init__(self, node_name: str, detail: str, status_code: int | None = None):
+    ``detail`` is the full server-side message (persisted on the request row);
+    ``public_detail`` is what may be returned to the API client — transport
+    exception class names and HTTP status codes are scrubbed so a key holder
+    cannot fingerprint the upstream stack. ``usage`` carries any sub-call token
+    usage already spent before the failure so rate limits still settle.
+    """
+
+    def __init__(
+        self,
+        node_name: str,
+        detail: str,
+        status_code: int | None = None,
+        public_detail: str | None = None,
+        usage: dict[str, int] | None = None,
+    ):
         super().__init__(detail)
         self.node_name = node_name
         self.detail = detail
         self.status_code = status_code
+        self.public_detail = public_detail if public_detail is not None else detail
+        self.usage = usage
 
 
 class WorkflowResult:
@@ -358,7 +412,8 @@ def _normalize_node(raw: Any, index: int, seen: set[str]) -> dict[str, Any]:
         if not timeout or timeout < 1:
             timeout = JS_NODE_TIMEOUT_DEFAULT
         node["timeout_seconds"] = min(timeout, JS_NODE_TIMEOUT_MAX)
-        # Optional connection + default model for midware.chat / APIRequest.create().
+        # Optional connection + default model for midware.chat / APIRequest /
+        # APIImageRequest.
         route_id = _as_int(raw.get("route_id"))
         if raw.get("route_id") not in (None, "") and route_id is None:
             raise WorkflowError(f"Node '{name}' has an invalid connection.")
@@ -1173,6 +1228,22 @@ def _js_polish(value: Any) -> Any:
     return value
 
 
+# Transport exception class names (ConnectError, ReadTimeout, …) and upstream
+# HTTP status codes are scrubbed from the client-facing node error so a key
+# holder cannot fingerprint the upstream stack; the full detail stays on the
+# request row for the admin.
+_HTTP_STATUS_RE = re.compile(r"HTTP \d{3}")
+_EXCEPTION_NAME_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Timeout)\b"
+)
+
+
+def _public_error_detail(detail: str) -> str:
+    scrubbed = _HTTP_STATUS_RE.sub("an HTTP error", detail)
+    scrubbed = _EXCEPTION_NAME_RE.sub("an error", scrubbed)
+    return re.sub(r"\s+", " ", scrubbed).strip()
+
+
 def _make_js_fetch(http: httpx.Client, allow_network: bool):
     """Blocking ``midware.fetch`` bridge (async only to satisfy wrap_py_function)."""
 
@@ -1234,12 +1305,16 @@ _CHAT_PARAM_KEYS = (
     "temperature",
     "top_p",
     "max_tokens",
+    "max_completion_tokens",
     "stop",
     "presence_penalty",
     "frequency_penalty",
     "seed",
     "logit_bias",
     "user",
+    "response_format",
+    "tools",
+    "tool_choice",
 )
 
 
@@ -1273,18 +1348,27 @@ def _make_js_chat(
             return refuse(
                 "This JavaScript node has no connection; pick one to call a model."
             )
+        raw_model = params.get("model")
+        if raw_model is not None and not isinstance(raw_model, str):
+            return refuse("model must be a string.")
         model = (
-            str(params.get("model") or "").strip()
+            (raw_model or "").strip()
             or node.get("model")
-            or (premodel.get("model") or "").strip()
+            or (premodel["model"] or "").strip()
         )
         if not model:
             return refuse("No model set for this chat call.")
         messages = params.get("messages")
         if not isinstance(messages, list) or not messages:
             return refuse("chat needs a non-empty messages array.")
-        if not all(isinstance(message, dict) for message in messages):
-            return refuse("every chat message must be an object.")
+        for message in messages:
+            if not isinstance(message, dict):
+                return refuse("every chat message must be an object.")
+            if not isinstance(message.get("role"), str) or not message["role"]:
+                return refuse("every chat message needs a string role.")
+            content = message.get("content")
+            if not isinstance(content, (str, list)):
+                return refuse("chat message content must be a string or an array.")
 
         payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
         for key in _CHAT_PARAM_KEYS:
@@ -1306,16 +1390,111 @@ def _make_js_chat(
             data = response.json()
         except (ValueError, TypeError):
             return refuse("chat request did not return JSON.")
-        if isinstance(data, dict):
-            node_usage = data.get("usage")
-            if isinstance(node_usage, dict):
-                usage["prompt"] += max(0, _as_int(node_usage.get("prompt_tokens")) or 0)
-                usage["completion"] += max(
-                    0, _as_int(node_usage.get("completion_tokens")) or 0
-                )
+        if not isinstance(data, dict):
+            # A list/number response has no choices to read; surface it as an
+            # error rather than letting ask() silently return "".
+            return refuse("chat request returned an unexpected JSON shape.")
+        node_usage = data.get("usage")
+        if isinstance(node_usage, dict):
+            usage["prompt"] += max(0, _as_int(node_usage.get("prompt_tokens")) or 0)
+            usage["completion"] += max(
+                0, _as_int(node_usage.get("completion_tokens")) or 0
+            )
         return json.dumps(data, ensure_ascii=False)
 
     return js_chat
+
+
+# Carried from an APIImageRequest/midware image payload into the upstream
+# body; model and prompt are handled explicitly like chat's model/messages.
+_IMAGE_PARAM_KEYS = (
+    "n",
+    "size",
+    "quality",
+    "response_format",
+    "style",
+    "background",
+    "output_format",
+    "output_compression",
+    "moderation",
+    "seed",
+    "user",
+)
+
+
+def _make_js_image(
+    http: httpx.Client,
+    node: dict[str, Any],
+    route: Any,
+    usage: dict[str, int],
+):
+    """Server-side image bridge for ``APIImageRequest.create``.
+
+    Same contract as the chat bridge. The premodel's model is deliberately not
+    a fallback: premodels are chat-only, so using one would ship a chat model id
+    to the image endpoint; the model comes from the call or the node instead.
+    """
+
+    async def js_image(params_json: str) -> str:
+
+        def refuse(message: str) -> str:
+            return json.dumps({"error": message})
+
+        try:
+            params = json.loads(params_json) if params_json else {}
+        except (ValueError, TypeError):
+            return refuse("image params must be valid JSON.")
+        if not isinstance(params, dict):
+            return refuse("image params must be an object.")
+        if route is None:
+            return refuse(
+                "This JavaScript node has no connection; pick one to generate images."
+            )
+        raw_model = params.get("model")
+        if raw_model is not None and not isinstance(raw_model, str):
+            return refuse("model must be a string.")
+        model = (raw_model or "").strip() or node.get("model")
+        if not model:
+            return refuse("No model set for this image request.")
+        prompt = params.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            return refuse("image generation needs a non-empty prompt.")
+
+        payload: dict[str, Any] = {"model": model, "prompt": prompt}
+        for key in _IMAGE_PARAM_KEYS:
+            if key in params and params[key] is not None:
+                payload[key] = params[key]
+
+        try:
+            response = http.post(
+                upstream_url(route, "images/generations"),
+                json=payload,
+                headers=_node_headers(route),
+                timeout=float(node.get("timeout_seconds") or JS_NODE_TIMEOUT_DEFAULT),
+            )
+        except httpx.HTTPError as exc:
+            return refuse(f"image request failed: {type(exc).__name__}")
+        if response.status_code >= 400:
+            return refuse(f"image request returned HTTP {response.status_code}.")
+        try:
+            data = response.json()
+        except (ValueError, TypeError):
+            return refuse("image request did not return JSON.")
+        if not isinstance(data, dict):
+            return refuse("image request returned an unexpected JSON shape.")
+        node_usage = data.get("usage")
+        if isinstance(node_usage, dict):
+            prompt_tokens = node_usage.get("input_tokens")
+            if prompt_tokens is None:
+                prompt_tokens = node_usage.get("prompt_tokens")
+            completion_tokens = node_usage.get("output_tokens")
+            if completion_tokens is None:
+                completion_tokens = node_usage.get("completion_tokens")
+            usage["prompt"] += max(0, _as_int(prompt_tokens) or 0)
+            usage["completion"] += max(0, _as_int(completion_tokens) or 0)
+        return json.dumps(data, ensure_ascii=False)
+
+    return js_image
 
 
 def _run_javascript(
@@ -1346,6 +1525,7 @@ def _run_javascript(
     outcome: dict[str, Any] = {}
     js_fetch = _make_js_fetch(http, bool(node.get("allow_network")))
     js_chat = _make_js_chat(http, node, route, premodel, usage)
+    js_image = _make_js_image(http, node, route, usage)
     # mini-racer's context managers can consume exceptions raised in the body,
     # so nothing may escape the `with` blocks unrecorded.
     try:
@@ -1353,31 +1533,37 @@ def _run_javascript(
             mr.set_hard_memory_limit(JS_MEMORY_LIMIT_BYTES)
             with _bind_py_function(mr, js_fetch) as fetch_fn, _bind_py_function(
                 mr, js_chat
-            ) as chat_fn:
+            ) as chat_fn, _bind_py_function(mr, js_image) as image_fn:
+                phase = "compile"
                 try:
                     main = mr.eval(script, timeout_sec=5)
-                    out = main(mw_data, fetch_fn, chat_fn, timeout_sec=timeout)
+                    phase = "run"
+                    out = main(mw_data, fetch_fn, chat_fn, image_fn, timeout_sec=timeout)
                     if hasattr(out, "get"):
                         out = out.get(timeout=timeout + 1)
                     outcome["data"] = json.loads(out) if isinstance(out, str) else None
                 except BaseException as exc:
                     outcome["error"] = exc
+                    outcome["phase"] = phase
     except BaseException as exc:
         outcome.setdefault("error", exc)
 
     error = outcome.get("error")
     if error is not None:
-        detail = (str(error).strip() or type(error).__name__).splitlines()[0]
+        detail = (str(error).strip() or type(error).__name__).splitlines()[0][:300]
         kind = type(error).__name__
-        if isinstance(error, WorkflowError):
-            raise error
         if kind == "JSTimeoutException":
+            # Compile has its own fixed 5 s budget; only the run phase uses
+            # the node's configured timeout.
+            budget = 5 if outcome.get("phase") == "compile" else timeout
             raise WorkflowNodeError(
-                node["name"], f"JavaScript timed out ({timeout}s)."
+                node["name"], f"JavaScript timed out ({budget}s)."
             )
-        if kind == "JSPromiseError":
-            raise WorkflowNodeError(node["name"], f"JavaScript failed: {detail[:300]}")
-        raise WorkflowNodeError(node["name"], f"JavaScript failed: {detail[:300]}")
+        raise WorkflowNodeError(
+            node["name"],
+            f"JavaScript failed: {detail}",
+            public_detail=f"JavaScript failed: {_public_error_detail(detail)}",
+        )
 
     data = outcome.get("data")
     if not isinstance(data, dict):
@@ -1446,47 +1632,55 @@ def run_workflow(
     images = extract_image_urls(caller_messages)
     reasoning_entries: list[tuple[str, str]] = []
 
-    for node in workflow["nodes"]:
-        if node["type"] == "context":
-            reasoning = _run_context(node, scope, caller_messages)
-            reasoning_entries.append((node["name"], reasoning))
-            continue
-        if node["type"] == "javascript":
-            # Optional connection for midware.chat / APIRequest; a node that only
-            # computes needs none, so a missing route is not an error here.
+    try:
+        for node in workflow["nodes"]:
+            if node["type"] == "context":
+                reasoning = _run_context(node, scope, caller_messages)
+                reasoning_entries.append((node["name"], reasoning))
+                continue
+            if node["type"] == "javascript":
+                # Optional connection for midware.chat / APIRequest /
+                # APIImageRequest; a node that only computes needs none, so a
+                # missing route is not an error here.
+                route = None
+                if node["route_id"]:
+                    route = route_lookup(node["route_id"])
+                if route is None and premodel["route_id"]:
+                    route = route_lookup(premodel["route_id"])
+                reasoning, new_messages = _run_javascript(
+                    node, scope, caller_messages, request_context, http, route, premodel, usage
+                )
+                if reasoning:
+                    reasoning_entries.append((node["name"], reasoning))
+                if new_messages is not None:
+                    # Same semantics as the captioner's strip: a rewritten context
+                    # is what the Final Request splices and later nodes see.
+                    caller_messages = new_messages
+                    scope.set("core_context", json.dumps(caller_messages, ensure_ascii=False))
+                    images = extract_image_urls(caller_messages)
+                continue
             route = None
-            if node["route_id"]:
-                route = route_lookup(node["route_id"])
-            if route is None and premodel["route_id"]:
-                route = route_lookup(premodel["route_id"])
-            reasoning, new_messages = _run_javascript(
-                node, scope, caller_messages, request_context, http, route, premodel, usage
-            )
+            if node["type"] in REQUEST_NODE_TYPES:
+                route = route_lookup(node["route_id"]) if node["route_id"] else None
+                if route is None and premodel["route_id"]:
+                    route = route_lookup(premodel["route_id"])
+                if route is None:
+                    raise WorkflowNodeError(node["name"], "The node's connection no longer exists.")
+            reasoning = _run_node(http, node, route, premodel, scope, usage, images)
             if reasoning:
                 reasoning_entries.append((node["name"], reasoning))
-            if new_messages is not None:
-                # Same semantics as the captioner's strip: a rewritten context
-                # is what the Final Request splices and later nodes see.
-                caller_messages = new_messages
+            if node["type"] == "image_captioner" and images and node.get("strip_images"):
+                # Opt-in per node: the captioner consumed the images, so core context
+                # (and the final splice) must not carry them upstream a second time.
+                caller_messages = strip_images(caller_messages)
                 scope.set("core_context", json.dumps(caller_messages, ensure_ascii=False))
                 images = extract_image_urls(caller_messages)
-            continue
-        route = None
-        if node["type"] in REQUEST_NODE_TYPES:
-            route = route_lookup(node["route_id"]) if node["route_id"] else None
-            if route is None and premodel["route_id"]:
-                route = route_lookup(premodel["route_id"])
-            if route is None:
-                raise WorkflowNodeError(node["name"], "The node's connection no longer exists.")
-        reasoning = _run_node(http, node, route, premodel, scope, usage, images)
-        if reasoning:
-            reasoning_entries.append((node["name"], reasoning))
-        if node["type"] == "image_captioner" and images and node.get("strip_images"):
-            # Opt-in per node: the captioner consumed the images, so core context
-            # (and the final splice) must not carry them upstream a second time.
-            caller_messages = strip_images(caller_messages)
-            scope.set("core_context", json.dumps(caller_messages, ensure_ascii=False))
-            images = extract_image_urls(caller_messages)
+    except WorkflowNodeError as exc:
+        # Sub-call tokens already spent are real; carry them so rate limits
+        # settle even though the request errored (the row itself stays at zero).
+        if exc.usage is None:
+            exc.usage = dict(usage)
+        raise
 
     result_reasoning = ""
     if workflow.get("reasoning"):

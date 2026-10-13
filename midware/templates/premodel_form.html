@@ -133,7 +133,7 @@
   <label>
     <input type="checkbox" name="use_workflow" id="use-workflow" value="1"
            {% if form.get('use_workflow') %}checked{% endif %}>
-    Use Workflows
+    Use Workflows <span class="pill warn">(UNSTABLE BETA!)</span>
   </label>
   <small>Replace the prompt preset with a chain of AI sub-calls: an Origin publishes the
     inbound request as variables, API Request nodes call other models (optionally extracting

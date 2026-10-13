@@ -43,15 +43,15 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/db.py` | All persistence. Raw `sqlite3`, hand-written SQL, per-thread connections, schema + `_migrate()`. |
 | `midware/auth.py` | Client token extraction (`Authorization: Bearer` / `x-api-key`) + `authenticate()`; `get_db()` helper. |
 | `midware/adminauth.py` | HTTP Basic login for the human-facing pages: salted hashing, the admin guard/`admin_required`, `messages_locked()`, env-var override. |
-| `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); `truncate`, `strip_ansi`, `model_from_request_body`. |
-| `midware/conversation.py` | Normalize request/response bodies (JSON or streamed) into display blocks for the viewer. |
+| `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); multipart text fields (`parse_multipart_fields`); `truncate`, `strip_ansi`, `model_from_request_body`. |
+| `midware/conversation.py` | Normalize request/response bodies (JSON, multipart or streamed) into display blocks for the viewer, including image/embedding `data` arrays. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
 | `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
 | `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
 | `midware/premodels.py` | Premodel overlays: slugging, configurable prefix parsing (`prefix_regex`/`normalize_prefix`), SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/workflow.py` | Premodel workflows: `normalize_workflow` validation, `WorkflowScope` variable expansion, `run_workflow` sub-call chain (Origin → API Request nodes → Final Request). |
 | `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url` (used by proxy + workflow; keeps `workflow.py` out of an import cycle with the blueprint). |
-| `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`. |
+| `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`; `prompt_estimate` for prompt-only counting. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
 | `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
@@ -75,6 +75,10 @@ this development environment, so Docker changes are verified by reading only.
    resolves the route, strips the prefix, and rebuilds the upstream URL. Premodel
    resolution happens first (`<p>-slug` → route/model rewrite, or in workflow mode
    the chain runs **after** the rate-limit claims and before the final forward).
+   A `multipart/form-data` body (image edits) is read once via `get_data()` and
+   routed through a stand-in `{"model": …}` dict built from the form field; it is
+   forwarded byte-for-byte unless routing rewrote the model, in which case it is
+   re-serialized with a fresh boundary (`_rebuild_multipart`).
 5. The response is streamed back while being tee'd into a bytearray capped at
    `MAX_CAPTURE_BYTES` (8 MiB default).
 6. `_persist()` writes the request row and prunes the per-key log to
@@ -193,6 +197,21 @@ Do not break these; several have regression tests.
   `requests`, so hitting `request_log_limit` cannot freeze a counter. `model_usage`
   and `host_usage` still read `requests` and therefore describe only the retained
   window. `purge_requests` clears the log and leaves the ledger alone.
+- **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
+  `/v1/embeddings`): already-forwarded endpoints made first-class by
+  `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
+  When a non-chat family's upstream `usage` is missing or all-zero, the local
+  fallback is `tokens.prompt_estimate` (prompt side only — URLs, base64 blobs and
+  float vectors are never counted, and multipart bodies count their form fields,
+  not the uploaded image bytes via `usage.parse_multipart_fields`). The viewer
+  renders a `prompt` request block and a `data` response block (`_data_items_text`
+  → URL / `[image] base64, N characters` / `[embedding #i: N dimensions]`), and
+  `_meta` carries `n`/`size`/`quality`/… . **Premodels are chat-only**: a
+  `<p>-slug` on a non-chat endpoint is a hard `403 premodel_chat_only`, a premodel
+  prefix on a multipart body is `400 premodel_body_not_json`, and the admin form
+  refuses non-chat base models (`premodels.is_non_chat_model`, substring markers —
+  "embed", "dall-e", "gpt-image", "flux", …) so an image/embedding model can never
+  back a premodel. `tests/test_image_embed.py` locks all of this.
 - **Per-key rate limits** (`proxy._rate_limit_check`): opt-in per key — the
   `limit_*_enabled` master switch must be on *and* a child window ticked *and* its
   `max_*` above `0`. The check runs in `_forward` after the route/model permission
@@ -346,19 +365,28 @@ Do not break these; several have regression tests.
   and `_load_mini_racer` still raises a clear `WorkflowNodeError` if somehow
   missing). The script
   must define `function run(midware)` (may be async) with access to
-  `midware.messages`, `midware.vars`, `midware.systemRequest`,
+  `midware.messages`, `midware.vars` (a snapshot of earlier nodes' vars merged
+  with this node's `set()`s so far), `midware.systemRequest`,
   `midware.set(k, v)` (→ `<node>.k`), `midware.setMessages(array)` (rewrites
   context exactly like the captioner strip — re-publishes `core_context` and
-  refreshes `images`), `console.log`, `await midware.fetch(url, opts)`
+  refreshes `images`), `console.log` (circular-safe: the stringify is wrapped
+  so a cycle degrades to "[Unserializable]" instead of failing the node),
+  `await midware.fetch(url, opts)`
   (returns `{status, ok, body, headers}`; http(s) only, 10 s timeout, 1 MB body
   cap, gated by the per-node `allow_network` checkbox, default off) and
   `await midware.chat({messages, model, ...})` — a **server-side** chat call
   through the node's connection (`_make_js_chat`). Unlike `midware.fetch`, chat
   does **not** require `allow_network`: like an API Request node it is MidWare
   routing (the route's host + upstream key never reach the sandbox), the model
-  falls back `params.model` → node `model` → premodel model, well-known sampling
-  knobs (`temperature`, `top_p`, `max_tokens`, …, `_CHAT_PARAM_KEYS`) pass
-  through, and usage folds into the request's totals. A `route_id`/`model` may
+  falls back `params.model` (must be a string when given) → node `model` →
+  premodel model, well-known sampling knobs
+  (`temperature`, `top_p`, `max_tokens`, `max_completion_tokens`,
+  `response_format`, `tools`, `tool_choice`, …, `_CHAT_PARAM_KEYS`) pass
+  through, and usage folds into the request's totals — **multiple chat calls in
+  one node accumulate**. The `messages` array is validated before sending: every
+  entry must be an object with a non-empty string `role` and a string-or-array
+  `content`; a non-dict JSON response (a bare list/number) is refused rather
+  than silently returning `""` from `ask()`. A `route_id`/`model` may
   be set on the node (the editor shows Connection + Model); with neither a node
   nor premodel route, `midware.chat` fails with a clear "no connection" error.
   A built-in **`APIRequest`** class (defined at top level, so scripts can
@@ -366,12 +394,25 @@ Do not break these; several have regression tests.
   bridge into an OpenAI-like API: `create(params)` merges constructor defaults
   (`this.model`, `this.temperature`, `this.max_tokens`) with per-call params and
   returns the full parsed response; `ask(text, params)` is sugar that sends a
-  single user message and returns the assistant text. The script
+  single user message and returns the assistant text. A sibling
+  **`APIImageRequest`** class mirrors it for image generation: `create(params)`
+  POSTs `.../v1/images/generations` through the node's connection
+  (`_make_js_image`, model falls back `params.model` → node `model` — never the
+  premodel's, which is chat-only — and image knobs like `size`/`n`/`quality`
+  pass through via `_IMAGE_PARAM_KEYS`), `ask(prompt, params)` returns the first
+  image's `url` (or `b64_json`); usage (`input_tokens`/`output_tokens` aliases
+  included) folds like chat usage, and there is deliberately **no**
+  `midware.image()` — the class is the only way in. The script
   body is stored in the node's `prompt` field (required, ≤
   `WORKFLOW_MAX_CONTENT`), `timeout_seconds` clamps 1–30 (default 5), and V8 is
   capped at 16 MB with no filesystem and no access to MidWare secrets. The
   sandbox swallows no errors: a throw, a missing `run`, a timeout or a rejected
   fetch all surface as `WorkflowNodeError` → `502 workflow_node_failed`.
+  `WorkflowNodeError` carries an optional `public_detail` the client sees
+  instead of the raw detail — `_public_error_detail` scrubs `HTTP \d{3}` to
+  "an HTTP error" and exception class names (`*Error`/`*Exception`/`*Timeout`)
+  to "an error", so upstream status codes and Python internals stay in the DB
+  row (`error` column) but never leak to the caller.
   Two bridge quirks shaped the design (regression-locked): everything crossing
   Python↔JS must be a JSON string (mini-racer only converts primitives/handles
   on calls), and Python exceptions raised inside `wrap_py_function` come back
@@ -422,7 +463,12 @@ Do not break these; several have regression tests.
   `502 workflow_node_failed` (`workflow_invalid` when the stored blob cannot load)
   and never forwards. Sub-call token usage is **folded into the single request
   row** and premodel/key token limits settle on the folded total; error rows stay
-  at zero tokens. The optional **reasoning switch** (`"reasoning": true` on the
+  at zero tokens. A node failure still settles the rate-limit counters on the
+  sub-call tokens already spent: `run_workflow` attaches the partial `usage` to
+  the exception (`exc.usage`), the proxy passes it to `_persist` as
+  `rate_tokens`, and `_persist` uses `max(0, rate_tokens)` for the counter writes
+  while the row itself records 0 tokens (locked by
+  `test_js_partial_usage_settles_rate_limit_on_failure`). The optional **reasoning switch** (`"reasoning": true` on the
   graph, checkbox in the editor) collects any sub-call reasoning (via
   `conversation._collect_reasoning`) and prefixes it to the reasoning the client
   receives, one logged block per node in the form
@@ -454,19 +500,36 @@ Do not break these; several have regression tests.
   without it the mount throws "Unrecognized extension value"); the textarea
   stays the source of truth until the editor mounts, then is removed. Any
   import failure, mount throw, or mid-import redraw (`!fallback.isConnected`)
-  keeps the textarea and logs `console.warn` — the editor is optional and
-  never blocks save. Completions come from `makeJsCompletionSource`
+  keeps the textarea, logs `console.warn`, and calls `degrade()` so the card
+  shows a one-line "Plain editor (CodeMirror unavailable)" note — the editor
+  is optional and never blocks save (a failed import resets `cmLoadPromise`,
+  so the next render retries). A **collapsed** JS card renders the plain
+  textarea without importing anything (`scriptEditor(node, collapsed)`), so
+  opening a stack costs no CDN round-trips. Completions come from
+  `makeJsCompletionSource`
   fed through `jsSupport.language.data.of` (NOT a second
-  `autocompletion()` call — `basicSetup` already wires one): member-aware
-  for `midware.*` / `console.*` / `this.*` (the last only when the script
-  contains `extends APIRequest`), plus snippets for `run` and an
+  `autocompletion()` call — `basicSetup` already wires one). The source
+  resolves in three steps before falling back to top-level identifiers:
+  **object-literal context** (`scanObjectContext` — string/comment-aware, a
+  key position offers chat-param keys inside `chat({…}`, message keys inside
+  `messages: [{…}`, and chat/fetch response keys after `:`; `regexEscape`
+  keeps regex-based anchors safe), **member chains** (`extractMemberChain` +
+  `resolveChainOptions` — `resp.choices[0].message.` → message keys,
+  `.usage.` → usage keys, `r.` on a fetch/APIRequest response → its keys,
+  `mw.`/`midware.` → the bridge methods, `this.` → `APIRequest` members), then
+  top-level names: member-aware for `midware.*` / `console.*` / `this.*` (the
+  last only when the script contains `extends APIRequest`), plus snippets for
+  `run` and an
   `APIRequest` subclass, sandbox-accurate globals from the mini-racer probe,
   and the ABSENT APIs (`URL`, `TextEncoder`, `fetch`, …) offered with an
   "Not available in this sandbox" info tooltip. Theme and syntax colours
   come from Pico CSS variables (`picoEditorTheme`), so light/dark follow
-  the site. `makeDraggable` drops the card's `draggable` flag on mousedown
+  the site — including the search panel (`cm-panels`/`cm-search`),
+  matching/non-matching bracket marks, and search-match highlights.
+  `makeDraggable` drops the card's `draggable` flag on mousedown
   over any
-  `input, textarea, select, button, label, .cm-content, .cm-gutters` — a
+  `input, textarea, select, button, label, .cm-content, .cm-gutters` (plus
+  `.cm-editor`/`.cm-scroller`/`.cm-tooltip`/`.cm-panels`) — a
   draggable ancestor would
   otherwise swallow mouse carets inside the prompt textareas / CM surface
   (keyboard focus
@@ -542,9 +605,17 @@ Do not break these; several have regression tests.
   `importorskip("py_mini_racer")` — the whole file skips when the optional
   engine is not installed (it is now in `requirements.txt`, but the skip keeps
   a stripped install working); keep engine-missing behaviour covered by
-  `test_js_missing_engine_reports_node_error`.
+  `test_js_missing_engine_reports_node_error`, and keep the documented sandbox
+  surface honest via `test_js_sandbox_globals_match_probe` (a `typeof` sweep of
+  every present/absent global — update the lists together with the
+  `midware.*` docs above).
+- Image generation / embedding coverage lives in `tests/test_image_embed.py`
+  (endpoint families, multipart edits, premodel chat-only, viewer blocks); its
+  `image_response` / `embedding_response` helpers build `StubResponse`s with
+  **body bytes** (`content=`), because `_persist` reads the raw upstream body —
+  a `json_body=`-only stub looks like "no usage".
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `382 passed` — **update this number whenever the test count changes.**
+  `420 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

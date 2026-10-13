@@ -302,6 +302,36 @@ def model_from_request_body(raw: bytes | str | None) -> str | None:
     return None
 
 
+# A multipart part without a ``filename`` is a plain text field; file parts
+# (image uploads) never match because ``name="x"`` is followed by
+# ``; filename=...`` there. Matched on bytes so binary values carrying NULs can
+# be dropped, and stop at the next boundary so a value cannot swallow the rest
+# of the body.
+_MULTIPART_FIELD_RE = re.compile(
+    rb'Content-Disposition:\s*form-data;\s*name="([^"\r\n]+)"\r?\n\r?\n(.*?)\r?\n(?=--)',
+    re.DOTALL,
+)
+
+
+def parse_multipart_fields(raw: bytes | str | None) -> dict[str, str]:
+    """Text fields of a ``multipart/form-data`` body, for display and estimates.
+
+    Uploaded files are skipped: their bytes belong in the forwarded body, not
+    in a token count or a conversation block.
+    """
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", "replace")
+    fields: dict[str, str] = {}
+    for match in _MULTIPART_FIELD_RE.finditer(raw):
+        name, value = match.group(1), match.group(2)
+        if b"\x00" in value:
+            continue
+        fields[name.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return fields
+
+
 def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
 

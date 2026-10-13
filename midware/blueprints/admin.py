@@ -26,6 +26,7 @@ from ..premodels import (
     MERGE_MODES,
     PROMPT_MODES,
     SAMPLING_KEYS,
+    is_non_chat_model,
     normalize_preset,
     normalize_prefix,
     normalize_slug,
@@ -726,6 +727,11 @@ def _read_premodel_form(db, existing):
         errors.append("Choose a connection.")
     if not model:
         errors.append("Choose or type a model.")
+    elif is_non_chat_model(model):
+        errors.append(
+            "That looks like an image-generation or embedding model. "
+            "Premodels are chat-only, so the base model must be a chat model."
+        )
     if not use_workflow and prompt_mode == "sillytavern" and not preset_json:
         errors.append("Upload a SillyTavern preset with at least one prompt.")
     if workflow_error:

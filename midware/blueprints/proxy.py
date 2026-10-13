@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 from typing import Iterator
 
@@ -26,7 +27,7 @@ from ..db import (
     utcnow,
 )
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
-from ..tokens import estimate_usage
+from ..tokens import estimate_usage, prompt_estimate
 from ..upstream import HOP_BY_HOP, split_target, upstream_url
 from ..usage import (
     model_from_request_body,
@@ -41,6 +42,7 @@ from ..workflow import WorkflowError, WorkflowNodeError, load_workflow, run_work
 bp = Blueprint("proxy", __name__)
 
 HOST_PREFIX_RE = re.compile(r"^\s*\[(?P<name>[^\]#]+)?(?:#(?P<id>\d+))?\]\s*")
+IMAGE_PATH_RE = re.compile(r"^images/(?:generations|edits|variations)$")
 
 _DEFAULT_CAPTURE_LIMIT = 8 * 1024 * 1024
 
@@ -309,6 +311,82 @@ def _stream_requested(payload: dict | None) -> bool:
     return False
 
 
+def _endpoint_family(path: str) -> str:
+    """Which OpenAI API family a proxied path belongs to: chat/image/embedding."""
+    cleaned = (path or "").strip("/").lower()
+    if IMAGE_PATH_RE.match(cleaned):
+        return "image"
+    if cleaned == "embeddings":
+        return "embedding"
+    return "chat"
+
+
+def _local_estimate(request_body, response_body, model: str | None, family: str):
+    """Local token fallback when the upstream sent no usable ``usage``.
+
+    Image generations answer with URLs/base64 blobs and embeddings with float
+    vectors, so only their request side is ever counted — and for multipart
+    image edits the raw body also holds uploaded image bytes that would make a
+    whole-body estimate meaningless.
+    """
+    if family != "chat":
+        return prompt_estimate(request_body, model)
+    return estimate_usage(request_body, response_body, model)
+
+
+def _multipart_model_body() -> dict | None:
+    """Stand-in body exposing the multipart ``model`` field to the router."""
+    try:
+        model = request.form.get("model")
+    except Exception:  # malformed or oversized form: nothing to route on
+        return None
+    return {"model": model} if isinstance(model, str) and model else None
+
+
+def _disposition_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
+
+
+def _rebuild_multipart(model: str) -> tuple[bytes, str]:
+    """Re-serialize the parsed multipart body with ``model`` substituted.
+
+    Only reached when routing rewrote the model field (a ``[Host]`` prefix);
+    every other part — including the uploaded image — is copied through.
+    Returns ``(body, content_type)`` with a fresh boundary.
+    """
+    boundary = secrets.token_hex(16)
+    chunks: list[bytes] = []
+    saw_model = False
+    for name, value in request.form.items(multi=True):
+        if name == "model":
+            name, value, saw_model = "model", model, True
+        chunks.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{_disposition_value(name)}"\r\n'
+                f"\r\n{value}\r\n"
+            ).encode("utf-8", "replace")
+        )
+    if not saw_model and model:
+        chunks.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
+            ).encode("utf-8")
+        )
+    for name, storage in request.files.items(multi=True):
+        header = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{_disposition_value(name)}"; '
+            f'filename="{_disposition_value(storage.filename or name)}"\r\n'
+            f"Content-Type: {storage.content_type or 'application/octet-stream'}\r\n"
+            f"\r\n"
+        ).encode("utf-8")
+        chunks.append(header + storage.read() + b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
 def _models_catalogue(ctx: dict) -> Response:
     """Serve MidWare's own model list instead of proxying the upstream's.
 
@@ -410,6 +488,7 @@ def _persist(
     model_raw: str | None = None,
     host_prefix: str | None = None,
     workflow_usage: dict | None = None,
+    rate_tokens: int | None = None,
 ) -> None:
     db = get_db()
     api_key = ctx["api_key"]
@@ -432,6 +511,7 @@ def _persist(
         usage = usage_from_response(response_body)
 
     token_source = "upstream"
+    family = _endpoint_family(path)
     if status_code >= 400:
         # Error bodies carry no completion; never fabricate usage from them.
         prompt = completion = total = 0
@@ -442,7 +522,7 @@ def _persist(
         completion = usage.completion_tokens
         total = usage.total_tokens
         if prompt == 0 and completion == 0 and total == 0:
-            estimate = estimate_usage(request_body, response_body, model)
+            estimate = _local_estimate(request_body, response_body, model, family)
             if estimate.total_tokens:
                 prompt, completion, total = (
                     estimate.prompt_tokens,
@@ -453,7 +533,7 @@ def _persist(
             else:
                 token_source = "none"
     else:
-        estimate = estimate_usage(request_body, response_body, model)
+        estimate = _local_estimate(request_body, response_body, model, family)
         if estimate.total_tokens:
             prompt, completion, total = (
                 estimate.prompt_tokens,
@@ -481,12 +561,17 @@ def _persist(
         completion += max(0, int(workflow_usage.get("completion") or 0))
         total = prompt + completion
 
+    # Error rows keep zero tokens (never fabricate usage), but sub-call spend
+    # already happened — settle the rate counters with it so a failing chain
+    # cannot be retried in a tight loop for free.
+    settle_tokens = total if rate_tokens is None else max(0, int(rate_tokens))
+
     token_windows = _enabled_token_windows(api_key)
     if token_windows:
         db.rate_usage_add(
             api_key["id"],
             "tokens",
-            {window: total for window in token_windows},
+            {window: settle_tokens for window in token_windows},
         )
 
     premodel = ctx.get("premodel")
@@ -496,7 +581,7 @@ def _persist(
             db.premodel_rate_usage_add(
                 premodel["id"],
                 "tokens",
-                {window: total for window in token_windows},
+                {window: settle_tokens for window in token_windows},
             )
 
     db.record_request(
@@ -529,12 +614,18 @@ def _forward(ctx: dict, path: str) -> Response:
     limits = _key_limits(ctx["api_key"])
 
     raw_body = request.get_data() or b""
-    try:
-        parsed_body = json.loads(raw_body) if raw_body else None
-    except (ValueError, TypeError):
-        parsed_body = None
-
-    model_raw = model_from_request_body(raw_body)
+    is_multipart = request.mimetype == "multipart/form-data"
+    if is_multipart:
+        # Image edits post multipart/form-data where ``model`` is a form field;
+        # a stand-in body lets the prefix/allowlist logic run against it.
+        parsed_body = _multipart_model_body()
+        model_raw = parsed_body.get("model") if isinstance(parsed_body, dict) else None
+    else:
+        try:
+            parsed_body = json.loads(raw_body) if raw_body else None
+        except (ValueError, TypeError):
+            parsed_body = None
+        model_raw = model_from_request_body(raw_body)
     model = model_raw
     host_prefix = None
     rewritten = False
@@ -557,6 +648,21 @@ def _forward(ctx: dict, path: str) -> Response:
             return _permission_error(
                 f"Premodel '{prefix}{premodel_slug}' is not allowed for this API key.",
                 "premodel_not_allowed",
+            )
+        if _endpoint_family(path) != "chat":
+            # Premodels are chat prompt overlays; an image or embedding call
+            # addressing one is a routing mistake, never a silent pass-through.
+            return _permission_error(
+                f"Premodel '{prefix}{premodel_slug}' only applies to chat completions; "
+                f"/v1/{path.strip('/')} is an image or embedding endpoint.",
+                "premodel_chat_only",
+            )
+        if is_multipart:
+            return _json_error(
+                f"Premodel '{prefix}{premodel_slug}' needs a JSON request body.",
+                400,
+                "premodel_body_not_json",
+                "midware_routing_error",
             )
         target = db.get_route(premodel["route_id"]) if premodel["route_id"] else None
         if target is not None:
@@ -619,14 +725,23 @@ def _forward(ctx: dict, path: str) -> Response:
             "model_not_allowed",
         )
 
+    multipart_content_type = None
     if rewritten and isinstance(parsed_body, dict):
-        raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+        if is_multipart:
+            raw_body, multipart_content_type = _rebuild_multipart(
+                str(parsed_body.get("model") or "")
+            )
+        else:
+            raw_body = json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
 
     base_url, prefix = split_target(route)
     upstream_path = f"{prefix}/{(path or '').lstrip('/')}"
 
     streamed = _stream_requested(parsed_body)
     headers = _prepare_headers(route, force_sse=streamed)
+    if multipart_content_type:
+        # The client's header carries the old boundary; the rebuilt body does not.
+        headers["Content-Type"] = multipart_content_type
 
     url = f"{base_url}/{upstream_path.lstrip('/')}"
     if request.query_string:
@@ -702,6 +817,7 @@ def _forward(ctx: dict, path: str) -> Response:
             )
         except WorkflowNodeError as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
+            partial = exc.usage or {}
             persist(
                 model=model,
                 status_code=502,
@@ -709,9 +825,11 @@ def _forward(ctx: dict, path: str) -> Response:
                 streamed=False,
                 response_body=None,
                 error=f"workflow[{exc.node_name}]: {exc.detail}",
+                rate_tokens=max(0, int(partial.get("prompt") or 0))
+                + max(0, int(partial.get("completion") or 0)),
             )
             return _json_error(
-                f"Workflow node '{exc.node_name}' failed: {exc.detail}",
+                f"Workflow node '{exc.node_name}' failed: {exc.public_detail}",
                 502,
                 "workflow_node_failed",
                 "midware_workflow_error",
