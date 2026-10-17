@@ -884,6 +884,7 @@ def _forward(ctx: dict, path: str) -> Response:
                 body,
                 ctx["api_key"]["id"],
                 int(ctx["api_key"]["image_retention_days"] or 0),
+                force_https=bool(ctx["api_key"]["image_url_https"]),
             )
         latency_ms = int((time.perf_counter() - started) * 1000)
         persist(

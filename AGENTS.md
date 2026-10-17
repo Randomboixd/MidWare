@@ -94,7 +94,7 @@ this development environment, so Docker changes are verified by reading only.
   limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
   limit_requests_enabled, limit_requests_{minute,hour,day,week},
   max_requests_{minute,hour,day,week}, image_response_mode, image_retention_days,
-  created_at, last_used_at)` — `is_system`
+  image_url_https, created_at, last_used_at)` — `is_system`
   rows (the auto-created `MSQ Measurements` owner) are skipped by
   `list_api_keys`/`count_api_keys` but still name rows in the request log.
   `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
@@ -105,7 +105,8 @@ this development environment, so Docker changes are verified by reading only.
   `limit_*_<window>` ticks a child window, and `max_*_<window>` is its cap (`0` =
   unlimited for that window). `image_response_mode` is `b64` (default, inline
   base64 passthrough) or `url` (server-stored, see `images.py`);
-  `image_retention_days` is `0` = keep forever.
+  `image_retention_days` is `0` = keep forever; `image_url_https` advertises
+  stored image URLs as `https://` (TLS terminating in front of MidWare).
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, provider, created_at)`
   — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter`,
   `''` when hand-configured); it is what later proves which service's balance
@@ -236,8 +237,10 @@ Do not break these; several have regression tests.
   (static wildcard — deliberately not per-key CORS, since possession of the URL
   is the capability). There is no background worker: expiry happens on
   serve, on key delete, and in the `images.sweep()` run after each store.
-  The key form's *Image responses* panel (checkbox + retention days) drives
-  `image_urls`/`image_retention_days` form fields.
+  The key form's *Image responses* panel (checkbox + retention days + a *Send a
+  HTTPS based URL* switch) drives the `image_urls`/`image_retention_days`/
+  `image_https` form fields; `image_url_https` rewrites `http://` to `https://`
+  in the advertised URL only.
 - **Per-key rate limits** (`proxy._rate_limit_check`): opt-in per key — the
   `limit_*_enabled` master switch must be on *and* a child window ticked *and* its
   `max_*` above `0`. The check runs in `_forward` after the route/model permission
@@ -641,7 +644,7 @@ Do not break these; several have regression tests.
   **body bytes** (`content=`), because `_persist` reads the raw upstream body —
   a `json_body=`-only stub looks like "no usage".
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `432 passed` — **update this number whenever the test count changes.**
+  `433 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

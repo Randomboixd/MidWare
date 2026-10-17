@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     max_requests_week      INTEGER NOT NULL DEFAULT 0,
     image_response_mode TEXT    NOT NULL DEFAULT 'b64',
     image_retention_days INTEGER NOT NULL DEFAULT 0,
+    image_url_https     INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -485,6 +486,7 @@ class Database:
                     "max_requests_week": "INTEGER NOT NULL DEFAULT 0",
                     "image_response_mode": "TEXT NOT NULL DEFAULT 'b64'",
                     "image_retention_days": "INTEGER NOT NULL DEFAULT 0",
+                    "image_url_https": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
 
@@ -1088,6 +1090,7 @@ class Database:
         "allowed_model_ids",
         "image_response_mode",
         "image_retention_days",
+        "image_url_https",
         *LIMIT_FLAG_FIELDS,
         *LIMIT_VALUE_FIELDS,
     )
@@ -1127,6 +1130,7 @@ class Database:
         max_requests_week: int = 0,
         image_response_mode: str = "b64",
         image_retention_days: int = 0,
+        image_url_https: bool = False,
     ) -> str:
         token = self.generate_token()
         if image_response_mode not in IMAGE_RESPONSE_MODES:
@@ -1143,9 +1147,9 @@ class Database:
                     limit_requests_enabled, limit_requests_minute, max_requests_minute,
                     limit_requests_hour, max_requests_hour, limit_requests_day,
                     max_requests_day, limit_requests_week, max_requests_week,
-                    image_response_mode, image_retention_days
+                    image_response_mode, image_retention_days, image_url_https
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -1178,6 +1182,7 @@ class Database:
                     max(0, int(max_requests_week)),
                     image_response_mode,
                     max(0, int(image_retention_days)),
+                    int(bool(image_url_https)),
                 ),
             )
         return token
@@ -1206,7 +1211,13 @@ class Database:
         updates = {key: value for key, value in fields.items() if key in self._API_KEY_FIELDS}
         if not updates:
             return
-        for flag in ("allow_premodels", "restrict_premodels", "restrict_providers", "restrict_models"):
+        for flag in (
+            "allow_premodels",
+            "restrict_premodels",
+            "restrict_providers",
+            "restrict_models",
+            "image_url_https",
+        ):
             if flag in updates:
                 updates[flag] = int(bool(updates[flag]))
         for flag in LIMIT_FLAG_FIELDS:

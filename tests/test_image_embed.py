@@ -534,6 +534,24 @@ def test_image_default_key_still_gets_base64(configured):
     assert stub.sent
 
 
+def test_image_url_mode_https_switch(configured):
+    app, _ = configured
+    db = app.extensions["midware_db"]
+    url_token = db.create_api_key(
+        "https-mode", image_response_mode="url", image_url_https=True
+    )
+    install_stub(app, b64_image_response())
+    client = app.test_client()
+
+    response = _generate(client, url_token)
+
+    item = response.get_json()["data"][0]
+    assert item["url"].startswith("https://localhost/img/")
+    image_id = item["url"].rsplit("/", 1)[1]
+    # Only the advertised scheme changed; the bytes still serve the same.
+    assert client.get(f"/img/{image_id}").data == PNG
+
+
 def test_image_url_mode_upstream_url_passes_through(configured):
     app, _ = configured
     db = app.extensions["midware_db"]
@@ -696,6 +714,7 @@ def test_admin_key_form_saves_image_settings(configured):
             "name": "img-key",
             "image_urls": "1",
             "image_retention_days": "7",
+            "image_https": "1",
         },
     )
 
@@ -703,8 +722,9 @@ def test_admin_key_form_saves_image_settings(configured):
     row = db._row("SELECT * FROM api_keys WHERE name = 'img-key'")
     assert row["image_response_mode"] == "url"
     assert row["image_retention_days"] == 7
+    assert row["image_url_https"] == 1
 
-    # Unticking the box on edit returns the key to base64 mode.
+    # Unticking the boxes on edit returns the key to base64 mode, http URLs.
     key_id = row["id"]
     edited = client.post(
         f"/admin/keys/{key_id}/edit",
@@ -713,6 +733,7 @@ def test_admin_key_form_saves_image_settings(configured):
     assert edited.status_code == 302
     row = db.get_api_key(key_id)
     assert row["image_response_mode"] == "b64"
+    assert row["image_url_https"] == 0
 
 
 def test_admin_key_form_rejects_bogus_retention(configured):

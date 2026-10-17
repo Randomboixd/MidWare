@@ -69,6 +69,7 @@ This allows the same MidWare instance to expose models from multiple providers w
 * Image generation and embeddings (`/v1/images/*`, `/v1/embeddings`)
 * Per-key image response mode: inline base64, or stored on the server and
   returned as `/img/…` URLs with configurable retention (forever by default)
+  and an optional HTTPS URL switch
 * Multiple upstream routes
 * Per-key model and route permissions
 * Rate limits and token limits

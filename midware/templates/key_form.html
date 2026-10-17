@@ -188,6 +188,13 @@
                value="{{ form.get('image_retention_days') or '' }}">
         <small>0 or empty keeps images forever.</small>
       </label>
+      <label>
+        <input type="checkbox" name="image_https" value="1"
+               {% if form.get('image_url_https') %}checked{% endif %}>
+        Send a HTTPS based URL
+        <small>Advertises the stored image URLs as <code>https://</code> — for
+          when TLS terminates in front of MidWare.</small>
+      </label>
     </div>
   </section>
 </article>

@@ -104,11 +104,14 @@ def load_image(image_id: str) -> tuple[bytes, str] | None:
     return data, row["ext"]
 
 
-def rewrite_image_body(body: bytes, api_key_id: int, retention_days: int) -> bytes:
+def rewrite_image_body(
+    body: bytes, api_key_id: int, retention_days: int, force_https: bool = False
+) -> bytes:
     """Replace every ``b64_json`` item in an image response with a stored URL.
 
     Items that already carry a URL (or undecodable base64) are left alone; a
-    body with nothing to rewrite is returned unchanged.
+    body with nothing to rewrite is returned unchanged. ``force_https`` flips
+    the advertised scheme for keys behind a TLS-terminating proxy.
     """
     if not body:
         return body
@@ -132,8 +135,11 @@ def rewrite_image_body(body: bytes, api_key_id: int, retention_days: int) -> byt
         image_id = store_image(api_key_id, data, retention_days)
         if image_id is None:
             continue
+        url = url_for("proxy.serve_image", image_id=image_id, _external=True)
+        if force_https and url.startswith("http://"):
+            url = "https://" + url[len("http://") :]
         item.pop("b64_json", None)
-        item["url"] = url_for("proxy.serve_image", image_id=image_id, _external=True)
+        item["url"] = url
         changed = True
     if not changed:
         return body
