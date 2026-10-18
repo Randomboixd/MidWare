@@ -94,7 +94,8 @@ this development environment, so Docker changes are verified by reading only.
   limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
   limit_requests_enabled, limit_requests_{minute,hour,day,week},
   max_requests_{minute,hour,day,week}, image_response_mode, image_retention_days,
-  image_url_https, created_at, last_used_at)` — `is_system`
+  image_url_https, log_requests, log_message_contents, created_at, last_used_at)` —
+  `is_system`
   rows (the auto-created `MSQ Measurements` owner) are skipped by
   `list_api_keys`/`count_api_keys` but still name rows in the request log.
   `allowed_premodel_ids`/`allowed_route_ids` hold a JSON array of integer ids
@@ -107,6 +108,8 @@ this development environment, so Docker changes are verified by reading only.
   base64 passthrough) or `url` (server-stored, see `images.py`);
   `image_retention_days` is `0` = keep forever; `image_url_https` advertises
   stored image URLs as `https://` (TLS terminating in front of MidWare).
+  `log_requests`/`log_message_contents` (`INTEGER NOT NULL DEFAULT 1`) are the
+  per-key logging switches (see "Per-key logging" below).
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, provider, created_at)`
   — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter`,
   `''` when hand-configured); it is what later proves which service's balance
@@ -208,6 +211,17 @@ Do not break these; several have regression tests.
   `requests`, so hitting `request_log_limit` cannot freeze a counter. `model_usage`
   and `host_usage` still read `requests` and therefore describe only the retained
   window. `purge_requests` clears the log and leaves the ledger alone.
+- **Per-key logging** (`log_requests` / `log_message_contents`, `_persist`): each
+  key carries a master **Log requests** switch and a child **Log message contents**
+  switch, both on by default and edited in the key form's *Logging settings*
+  section. The child is disabled/unchecked in the UI while the master is off, and
+  `_read_key_form` forces `log_message_contents` off whenever `log_requests` is
+  off, so the nested invariant holds even on a forged submit. At request time
+  `_persist` still settles rate-limit counters and bumps `usage_daily`, so
+  accounting never stops; `log_requests` off only skips the `requests` row, and
+  `log_message_contents` off stores `request_body`/`response_body` as `NULL` while
+  keeping the row's metadata (model, status, tokens, latency, error). Locks in
+  `tests/test_logging_settings.py`.
 - **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
   `/v1/embeddings`): already-forwarded endpoints made first-class by
   `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
@@ -643,8 +657,11 @@ Do not break these; several have regression tests.
   `image_response` / `embedding_response` helpers build `StubResponse`s with
   **body bytes** (`content=`), because `_persist` reads the raw upstream body —
   a `json_body=`-only stub looks like "no usage".
+- Per-key request/message logging coverage lives in
+  `tests/test_logging_settings.py` (skipped-row accounting, metadata-only rows,
+  form round-trip); the DB-level switches are in `tests/test_db.py`.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `433 passed` — **update this number whenever the test count changes.**
+  `441 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

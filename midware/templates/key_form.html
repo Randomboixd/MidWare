@@ -7,6 +7,8 @@
    or form.get('limit_tokens_enabled', False)
    or form.get('limit_requests_enabled', False)
    or form.get('image_response_mode', 'b64') == 'url'
+   or not form.get('log_requests', True)
+   or not form.get('log_message_contents', True)
    or form.get('cors_allow_origin', '*') != '*' %}
 
 {% block content %}
@@ -194,6 +196,26 @@
         Send a HTTPS based URL
         <small>Advertises the stored image URLs as <code>https://</code> — for
           when TLS terminates in front of MidWare.</small>
+      </label>
+    </div>
+
+    <h3>Logging settings</h3>
+    <label>
+      <input type="checkbox" name="log_requests" id="log-requests" value="1"
+             {% if form.get('log_requests', True) %}checked{% endif %}>
+      Log requests
+      <small>Record this key's traffic in the request log. When off, requests are
+        still counted for usage totals and rate limits, but no request rows (and
+        no message contents) are kept.</small>
+    </label>
+    <div id="log-contents-panel" {% if not form.get('log_requests', True) %}hidden{% endif %}>
+      <label>
+        <input type="checkbox" name="log_message_contents" id="log-message-contents" value="1"
+               {% if form.get('log_message_contents', True) %}checked{% endif %}>
+        Log message contents
+        <small>Store prompts and responses with each logged request. When off,
+          rows keep only metadata (model, status, tokens, latency). Needs
+          <em>Log requests</em> to be on.</small>
       </label>
     </div>
   </section>

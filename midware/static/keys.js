@@ -23,6 +23,9 @@
   var limitRequestsPanel = document.getElementById("limit-requests-panel");
   var imageUrls = document.getElementById("image-urls");
   var imageUrlsPanel = document.getElementById("image-urls-panel");
+  var logRequests = document.getElementById("log-requests");
+  var logMessageContents = document.getElementById("log-message-contents");
+  var logContentsPanel = document.getElementById("log-contents-panel");
 
   var routeBoxes = Array.prototype.slice.call(
     form.querySelectorAll('input[name="allowed_route_ids"]')
@@ -83,6 +86,22 @@
     }
   }
 
+  // Message contents are a child of request logging: without the master switch
+  // there is nothing to attach contents to, so the child is disabled and cleared.
+  function syncLogging() {
+    if (!logRequests || !logContentsPanel) {
+      return;
+    }
+    var enabled = logRequests.checked;
+    logContentsPanel.hidden = !enabled;
+    if (logMessageContents) {
+      logMessageContents.disabled = !enabled;
+      if (!enabled) {
+        logMessageContents.checked = false;
+      }
+    }
+  }
+
   if (toggle && panel) {
     toggle.addEventListener("click", function () {
       panel.hidden = false;
@@ -128,6 +147,9 @@
   if (imageUrls) {
     imageUrls.addEventListener("change", syncLimitPanels);
   }
+  if (logRequests) {
+    logRequests.addEventListener("change", syncLogging);
+  }
 
   syncPremodels();
   if (providerPanel && restrictProviders) {
@@ -135,4 +157,5 @@
   }
   syncModels();
   syncLimitPanels();
+  syncLogging();
 })();

@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     image_response_mode TEXT    NOT NULL DEFAULT 'b64',
     image_retention_days INTEGER NOT NULL DEFAULT 0,
     image_url_https     INTEGER NOT NULL DEFAULT 0,
+    log_requests        INTEGER NOT NULL DEFAULT 1,
+    log_message_contents INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -487,6 +489,8 @@ class Database:
                     "image_response_mode": "TEXT NOT NULL DEFAULT 'b64'",
                     "image_retention_days": "INTEGER NOT NULL DEFAULT 0",
                     "image_url_https": "INTEGER NOT NULL DEFAULT 0",
+                    "log_requests": "INTEGER NOT NULL DEFAULT 1",
+                    "log_message_contents": "INTEGER NOT NULL DEFAULT 1",
                 },
             )
 
@@ -1091,6 +1095,8 @@ class Database:
         "image_response_mode",
         "image_retention_days",
         "image_url_https",
+        "log_requests",
+        "log_message_contents",
         *LIMIT_FLAG_FIELDS,
         *LIMIT_VALUE_FIELDS,
     )
@@ -1131,6 +1137,8 @@ class Database:
         image_response_mode: str = "b64",
         image_retention_days: int = 0,
         image_url_https: bool = False,
+        log_requests: bool = True,
+        log_message_contents: bool = True,
     ) -> str:
         token = self.generate_token()
         if image_response_mode not in IMAGE_RESPONSE_MODES:
@@ -1147,9 +1155,11 @@ class Database:
                     limit_requests_enabled, limit_requests_minute, max_requests_minute,
                     limit_requests_hour, max_requests_hour, limit_requests_day,
                     max_requests_day, limit_requests_week, max_requests_week,
-                    image_response_mode, image_retention_days, image_url_https
+                    image_response_mode, image_retention_days, image_url_https,
+                    log_requests, log_message_contents
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?)
                 """,
                 (
                     name,
@@ -1183,6 +1193,8 @@ class Database:
                     image_response_mode,
                     max(0, int(image_retention_days)),
                     int(bool(image_url_https)),
+                    int(bool(log_requests)),
+                    int(bool(log_message_contents)),
                 ),
             )
         return token
@@ -1217,6 +1229,8 @@ class Database:
             "restrict_providers",
             "restrict_models",
             "image_url_https",
+            "log_requests",
+            "log_message_contents",
         ):
             if flag in updates:
                 updates[flag] = int(bool(updates[flag]))
@@ -1500,40 +1514,45 @@ class Database:
         response_body: str | None = None,
         model_raw: str | None = None,
         host_prefix: str | None = None,
+        log_request: bool = True,
+        log_messages: bool = True,
     ) -> int:
         now = utcnow()
         with self.write() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO requests (
-                    created_at, request_path, method, model, model_raw, host_prefix,
-                    status_code, latency_ms, streamed, prompt_tokens, completion_tokens,
-                    total_tokens, token_source, upstream_request_id, error, request_body,
-                    response_body, route_id, api_key_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    to_iso(now),
-                    request_path,
-                    method,
-                    model,
-                    model_raw,
-                    host_prefix,
-                    int(status_code),
-                    int(latency_ms),
-                    int(bool(streamed)),
-                    int(prompt_tokens),
-                    int(completion_tokens),
-                    int(total_tokens),
-                    token_source or "upstream",
-                    upstream_request_id,
-                    error,
-                    request_body,
-                    response_body,
-                    route_id,
-                    api_key_id,
-                ),
-            )
+            request_id = 0
+            if log_request:
+                cur = conn.execute(
+                    """
+                    INSERT INTO requests (
+                        created_at, request_path, method, model, model_raw, host_prefix,
+                        status_code, latency_ms, streamed, prompt_tokens, completion_tokens,
+                        total_tokens, token_source, upstream_request_id, error, request_body,
+                        response_body, route_id, api_key_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        to_iso(now),
+                        request_path,
+                        method,
+                        model,
+                        model_raw,
+                        host_prefix,
+                        int(status_code),
+                        int(latency_ms),
+                        int(bool(streamed)),
+                        int(prompt_tokens),
+                        int(completion_tokens),
+                        int(total_tokens),
+                        token_source or "upstream",
+                        upstream_request_id,
+                        error,
+                        request_body if log_messages else None,
+                        response_body if log_messages else None,
+                        route_id,
+                        api_key_id,
+                    ),
+                )
+                request_id = int(cur.lastrowid)
             self._bump_usage(
                 conn,
                 day=to_iso(now)[:10],
@@ -1544,7 +1563,7 @@ class Database:
                 total_tokens=total_tokens,
                 latency_ms=latency_ms,
             )
-            return int(cur.lastrowid)
+            return request_id
 
     @staticmethod
     def _bump_usage(

@@ -481,6 +481,8 @@ def _key_form_from_row(row) -> dict:
         "image_response_mode": row["image_response_mode"] or "b64",
         "image_retention_days": int(row["image_retention_days"] or 0),
         "image_url_https": bool(row["image_url_https"]),
+        "log_requests": bool(row["log_requests"]),
+        "log_message_contents": bool(row["log_message_contents"]),
     }
     for flag in LIMIT_FLAG_FIELDS:
         form[flag] = bool(row[flag])
@@ -490,6 +492,9 @@ def _key_form_from_row(row) -> dict:
 
 
 def _read_key_form() -> tuple[dict, list[str]]:
+    # The child logging switch cannot outlive its master: turning request logging
+    # off also stops message capture, and that is the value we persist.
+    log_requests = _form_bool("log_requests")
     fields = {
         "name": (request.form.get("name") or "").strip(),
         "description": (request.form.get("description") or "").strip()[:DESCRIPTION_MAX],
@@ -504,6 +509,8 @@ def _read_key_form() -> tuple[dict, list[str]]:
         "image_response_mode": "url" if _form_bool("image_urls") else "b64",
         "image_retention_days": _form_int("image_retention_days", 0, maximum=36500),
         "image_url_https": _form_bool("image_https"),
+        "log_requests": log_requests,
+        "log_message_contents": log_requests and _form_bool("log_message_contents"),
     }
     # Children survive a master toggle in the form; enforcement is gated on the
     # master flag alone, so re-enabling restores the previous configuration.

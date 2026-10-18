@@ -275,3 +275,57 @@ def test_backfill_seeds_ledger_once(tmp_path):
     reopened.init_schema()
     assert reopened.usage_totals("day")["total_tokens"] == 30
     assert reopened.count_requests() == 1
+
+
+def test_logging_migration_adds_columns(tmp_path):
+    from midware.db import Database
+
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    db.init_schema()
+
+    key_cols = {row["name"] for row in db._rows("PRAGMA table_info(api_keys)")}
+    assert "log_requests" in key_cols
+    assert "log_message_contents" in key_cols
+
+    key = db.get_api_key_by_token(db.create_api_key("migrated"))
+    assert key["log_requests"] == 1
+    assert key["log_message_contents"] == 1
+
+
+def test_record_request_can_skip_row_and_contents():
+    db = make_db()
+    key = db.get_api_key_by_token(db.create_api_key("k"))
+
+    # Message contents off: a row is kept but the bodies are dropped.
+    db.record_request(
+        api_key_id=key["id"], route_id=None, method="POST", request_path="p",
+        model="m", status_code=200, latency_ms=1, streamed=False,
+        prompt_tokens=1, completion_tokens=2, total_tokens=3,
+        request_body='{"secret":true}', response_body='{"answer":true}',
+        log_messages=False,
+    )
+    row = db.list_requests(limit=1)[0]
+    assert row["request_body"] is None
+    assert row["response_body"] is None
+    assert row["total_tokens"] == 3
+
+    # Request logging off: no row, but the permanent ledger still grows.
+    db.record_request(
+        api_key_id=key["id"], route_id=None, method="POST", request_path="p",
+        model="m", status_code=200, latency_ms=1, streamed=False,
+        prompt_tokens=1, completion_tokens=2, total_tokens=3,
+        log_request=False,
+    )
+    assert db.count_requests() == 1
+    assert db.usage_totals("day")["requests"] == 2
+    assert db.usage_totals("day")["total_tokens"] == 6

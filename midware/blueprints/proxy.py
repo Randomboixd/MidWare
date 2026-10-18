@@ -585,6 +585,9 @@ def _persist(
                 {window: settle_tokens for window in token_windows},
             )
 
+    log_requests = bool(api_key["log_requests"])
+    log_messages = log_requests and bool(api_key["log_message_contents"])
+
     db.record_request(
         api_key_id=api_key["id"],
         route_id=route["id"],
@@ -604,6 +607,8 @@ def _persist(
         response_body=response_body,
         model_raw=model_raw,
         host_prefix=host_prefix,
+        log_request=log_requests,
+        log_messages=log_messages,
     )
     db.touch_api_key(api_key["id"])
     db.prune_requests(api_key["id"])
