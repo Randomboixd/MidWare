@@ -2,26 +2,30 @@
 {% block title %}Activity - MidWare{% endblock %}
 
 {% block content %}
-<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
-  <hgroup>
+<div class="mw-page-head">
+  <div>
     <h1>Activity</h1>
     <p>{{ heatmap.start }} → {{ heatmap.end }} · {{ heatmap.total_tokens | comma }} tokens over {{ heatmap.active_days }} active days</p>
-  </hgroup>
-  <form method="get" action="{{ url_for('dashboard.activity') }}">
-    <fieldset role="group">
-      <select name="key" onchange="this.form.submit()">
+  </div>
+  <form method="get" action="{{ url_for('dashboard.activity') }}" class="mw-filters">
+    <div class="field label border small">
+      <select name="key" id="activity-key" onchange="this.form.submit()">
         <option value="">All keys</option>
         {% for k in api_keys %}
           <option value="{{ k['id'] }}" {% if selected_key == k['id'] %}selected{% endif %}>{{ k['name'] }}</option>
         {% endfor %}
       </select>
-      <select name="route" onchange="this.form.submit()">
+      <label for="activity-key">Key</label>
+    </div>
+    <div class="field label border small">
+      <select name="route" id="activity-route" onchange="this.form.submit()">
         <option value="">All routes</option>
         {% for r in routes %}
           <option value="{{ r['id'] }}" {% if selected_route == r['id'] %}selected{% endif %}>{{ r['name'] }}</option>
         {% endfor %}
       </select>
-    </fieldset>
+      <label for="activity-route">Route</label>
+    </div>
   </form>
 </div>
 
@@ -38,24 +42,32 @@
 </div>
 <div class="heat-legend">
   <span>Peak day: {{ heatmap.peak | comma }} tokens</span>
+  <span style="margin-left:auto">Less</span>
+  <span class="swatch" style="background:#5c2e00"></span>
+  <span class="swatch" style="background:#8a4500"></span>
+  <span class="swatch" style="background:#c26a00"></span>
+  <span class="swatch" style="background:#ffa94d"></span>
+  <span>More</span>
 </div>
 
 <h2>Last 30 days</h2>
 {% if series %}
-<table class="compact">
-  <thead><tr><th>Date</th><th>Requests</th><th>Prompt</th><th>Completion</th><th>Total</th></tr></thead>
-  <tbody>
-    {% for day, entry in series %}
-    <tr>
-      <td>{{ day }}</td>
-      <td>{{ entry.requests }}</td>
-      <td>{{ entry.prompt_tokens | comma }}</td>
-      <td>{{ entry.completion_tokens | comma }}</td>
-      <td>{{ entry.total_tokens | comma }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="scroll">
+  <table class="compact border">
+    <thead><tr><th>Date</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Total</th></tr></thead>
+    <tbody>
+      {% for day, entry in series %}
+      <tr>
+        <td>{{ day }}</td>
+        <td class="num">{{ entry.requests }}</td>
+        <td class="num">{{ entry.prompt_tokens | comma }}</td>
+        <td class="num">{{ entry.completion_tokens | comma }}</td>
+        <td class="num">{{ entry.total_tokens | comma }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% else %}
 <p>No activity in the last 30 days.</p>
 {% endif %}

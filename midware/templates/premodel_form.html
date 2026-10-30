@@ -4,198 +4,225 @@
 {% set limits_open = form.get('limit_tokens_enabled', False) or form.get('limit_requests_enabled', False) %}
 
 {% block content %}
-<hgroup>
-  <h1>{{ 'Edit premodel' if premodel else 'New premodel' }}</h1>
-  <p>A preset bound to one connection and model. Clients call it with
-     <code>{{ premodel_prefix }}&lt;slug&gt;</code>.</p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>{{ 'Edit premodel' if premodel else 'New premodel' }}</h1>
+    <p>A preset bound to one connection and model. Clients call it with
+       <code>{{ premodel_prefix }}&lt;slug&gt;</code>.</p>
+  </div>
+</div>
 
-<article>
 <form method="post" id="premodel-form">
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Name
-      <input type="text" id="premodel-name" name="name" value="{{ form.get('name', '') }}" required>
-    </label>
-    <label>
-      Slug
-      <input type="text" id="premodel-slug" name="slug" value="{{ form.get('slug', '') }}" required>
-      <small>Sent as <code>{{ premodel_prefix }}&lt;slug&gt;</code>. Lowercase letters, digits and dashes.</small>
-    </label>
-  </div>
+  <section class="mw-form-section">
+    <h3 style="margin-top:0">Basics</h3>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="text" id="premodel-name" name="name" value="{{ form.get('name', '') }}" placeholder=" " required>
+        <label for="premodel-name">Name</label>
+      </div>
+      <div class="field label border">
+        <input type="text" id="premodel-slug" name="slug" value="{{ form.get('slug', '') }}" placeholder=" " required>
+        <label for="premodel-slug">Slug</label>
+      </div>
+    </div>
+    <small class="mw-hint">The slug is sent as <code>{{ premodel_prefix }}&lt;slug&gt;</code>. Lowercase letters, digits and dashes.</small>
 
-  <label>
-    Description
-    <textarea id="premodel-description" name="description" rows="2" maxlength="250"
-              placeholder="Short description">{{ form.get('description', '') }}</textarea>
-    <small><span id="description-count">0</span>/250 characters.</small>
-  </label>
+    <div class="field label border">
+      <textarea id="premodel-description" name="description" rows="2" maxlength="250"
+                placeholder=" ">{{ form.get('description', '') }}</textarea>
+      <label for="premodel-description">Description</label>
+    </div>
+    <small class="mw-hint"><span id="description-count">0</span>/250 characters.</small>
 
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Connection
-      <select name="route_id" id="premodel-route">
-        <option value="">— choose —</option>
-        {% for r in routes %}
-        <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      Model
-      <input type="text" id="premodel-model" name="model" list="premodel-models"
-             value="{{ form.get('model', '') }}" required>
-      <datalist id="premodel-models">
-        {% for m in models %}<option value="{{ m.model_id }}" data-route="{{ m.route_id }}"></option>{% endfor %}
-      </datalist>
-      <small>The model slug sent to the connection above.</small>
-    </label>
-  </div>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <select name="route_id" id="premodel-route">
+          <option value="">— choose —</option>
+          {% for r in routes %}
+          <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
+          {% endfor %}
+        </select>
+        <label for="premodel-route">Connection</label>
+      </div>
+      <div class="field label border">
+        <input type="text" id="premodel-model" name="model" list="premodel-models"
+               value="{{ form.get('model', '') }}" placeholder=" " required>
+        <label for="premodel-model">Model</label>
+        <datalist id="premodel-models">
+          {% for m in models %}<option value="{{ m.model_id }}" data-route="{{ m.route_id }}"></option>{% endfor %}
+        </datalist>
+      </div>
+    </div>
+    <small class="mw-hint">The model slug sent to the connection above.</small>
+  </section>
 
-  <fieldset>
+  <fieldset class="mw-form-section">
     <legend>Sampling overrides</legend>
-    <label>
-      <input type="checkbox" role="switch" name="params_enabled" id="params-enabled" value="1"
-             {% if form.get('params_enabled') %}checked{% endif %}>
-      Apply sampling values the caller did not set
-    </label>
+    <div class="mw-check-row">
+      <div class="mw-check-text">Apply sampling values the caller did not set</div>
+      <label class="switch">
+        <input type="checkbox" name="params_enabled" id="params-enabled" value="1" aria-label="Apply sampling values the caller did not set"
+               {% if form.get('params_enabled') %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
     <div id="params-panel" hidden>
-      <div class="grid-2" style="grid-template-columns: repeat(3, 1fr);">
-        <label>Temperature <input type="number" step="0.01" min="0" name="temperature" id="temperature"
-               value="{{ params.get('temperature', '') }}"></label>
-        <label>Top P <input type="number" step="0.01" min="0" max="1" name="top_p" id="top_p"
-               value="{{ params.get('top_p', '') }}"></label>
-        <label>Max tokens <input type="number" step="1" min="1" name="max_tokens" id="max_tokens"
-               value="{{ params.get('max_tokens', '') }}"></label>
+      <div class="mw-form-grid cols-3">
+        <div class="field label border">
+          <input type="number" step="0.01" min="0" name="temperature" id="temperature"
+                 value="{{ params.get('temperature', '') }}" placeholder=" ">
+          <label for="temperature">Temperature</label>
+        </div>
+        <div class="field label border">
+          <input type="number" step="0.01" min="0" max="1" name="top_p" id="top_p"
+                 value="{{ params.get('top_p', '') }}" placeholder=" ">
+          <label for="top_p">Top P</label>
+        </div>
+        <div class="field label border">
+          <input type="number" step="1" min="1" name="max_tokens" id="max_tokens"
+                 value="{{ params.get('max_tokens', '') }}" placeholder=" ">
+          <label for="max_tokens">Max tokens</label>
+        </div>
       </div>
     </div>
   </fieldset>
 
-  <button type="button" id="limits-toggle" class="secondary outline"
-          {% if limits_open %}hidden{% endif %}>Premodel limits</button>
+  <div class="mw-inline-actions">
+    <button type="button" id="limits-toggle" class="border" {% if limits_open %}hidden{% endif %}>Premodel limits</button>
+  </div>
 
-  <section id="limits-panel" {% if not limits_open %}hidden{% endif %}>
-    <fieldset>
-      <legend>Token limits</legend>
-      <label>
-        <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1"
+  <section id="limits-panel" class="mw-form-section" {% if not limits_open %}hidden{% endif %}>
+    <h3 style="margin-top:0">Token limits</h3>
+    <div class="mw-check-row">
+      <div class="mw-check-text">Set maximum tokens</div>
+      <label class="switch">
+        <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1" aria-label="Set maximum tokens"
                {% if form.get('limit_tokens_enabled') %}checked{% endif %}>
-        Set maximum tokens
+        <span></span>
       </label>
-      <div id="limit-tokens-panel" hidden>
-        <small>Once this premodel has spent the configured tokens inside a window, further
-          requests through it are rejected with a 429 until the window resets. Counted
-          separately from the calling key's limits. Untick a window (or leave its box
-          empty) to leave it unlimited.</small>
-        <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-          {% for window, label in (('hour', 'Per hour'), ('day', 'Per day'), ('week', 'Per week')) %}
-          <label>
+    </div>
+    <div id="limit-tokens-panel" hidden>
+      <small class="mw-hint">Once this premodel has spent the configured tokens inside a window,
+        further requests get a 429 until the window resets. Counted separately from the calling
+        key's limits. Untick a window (or leave its box empty) to leave it unlimited.</small>
+      <div class="mw-limit-grid">
+        {% for window, label in (('hour', 'Per hour'), ('day', 'Per day'), ('week', 'Per week')) %}
+        <div class="mw-limit-row">
+          <label class="checkbox">
             <input type="checkbox" name="limit_tokens_{{ window }}" value="1"
                    {% if form.get('limit_tokens_' ~ window) %}checked{% endif %}>
-            {{ label }}
-            <input type="number" name="max_tokens_{{ window }}" min="0" step="1"
-                   placeholder="Max tokens"
-                   value="{{ form.get('max_tokens_' ~ window) or '' }}">
+            <span>{{ label }}</span>
           </label>
-          {% endfor %}
+          <div class="field label border small">
+            <input type="number" name="max_tokens_{{ window }}" id="pm-max-tokens-{{ window }}" min="0" step="1"
+                   placeholder=" " value="{{ form.get('max_tokens_' ~ window) or '' }}">
+            <label for="pm-max-tokens-{{ window }}">Max tokens</label>
+          </div>
         </div>
+        {% endfor %}
       </div>
-    </fieldset>
+    </div>
 
-    <fieldset>
-      <legend>Request limits</legend>
-      <label>
-        <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1"
+    <h3>Request limits</h3>
+    <div class="mw-check-row">
+      <div class="mw-check-text">Set request limit</div>
+      <label class="switch">
+        <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1" aria-label="Set request limit"
                {% if form.get('limit_requests_enabled') %}checked{% endif %}>
-        Set request limit
+        <span></span>
       </label>
-      <div id="limit-requests-panel" hidden>
-        <small>Caps how many requests may be sent through this premodel inside a window;
-          the next request past the cap gets a 429. Counted separately from the calling
-          key's limits. Untick a window (or leave its box empty) to leave it unlimited.</small>
-        <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-          {% for window, label in (('minute', 'Per minute'), ('hour', 'Per hour'),
-                                   ('day', 'Per day'), ('week', 'Per week')) %}
-          <label>
+    </div>
+    <div id="limit-requests-panel" hidden>
+      <small class="mw-hint">Caps how many requests may be sent through this premodel inside a
+        window; the next request past the cap gets a 429. Counted separately from the calling
+        key's limits. Untick a window (or leave its box empty) to leave it unlimited.</small>
+      <div class="mw-limit-grid">
+        {% for window, label in (('minute', 'Per minute'), ('hour', 'Per hour'),
+                                 ('day', 'Per day'), ('week', 'Per week')) %}
+        <div class="mw-limit-row">
+          <label class="checkbox">
             <input type="checkbox" name="limit_requests_{{ window }}" value="1"
                    {% if form.get('limit_requests_' ~ window) %}checked{% endif %}>
-            {{ label }}
-            <input type="number" name="max_requests_{{ window }}" min="0" step="1"
-                   placeholder="Max requests"
-                   value="{{ form.get('max_requests_' ~ window) or '' }}">
+            <span>{{ label }}</span>
           </label>
-          {% endfor %}
+          <div class="field label border small">
+            <input type="number" name="max_requests_{{ window }}" id="pm-max-requests-{{ window }}" min="0" step="1"
+                   placeholder=" " value="{{ form.get('max_requests_' ~ window) or '' }}">
+            <label for="pm-max-requests-{{ window }}">Max requests</label>
+          </div>
         </div>
+        {% endfor %}
       </div>
-    </fieldset>
+    </div>
   </section>
 
-  <label>
-    <input type="checkbox" name="use_workflow" id="use-workflow" value="1"
-           {% if form.get('use_workflow') %}checked{% endif %}>
-    Use Workflows <span class="pill warn">(UNSTABLE BETA!)</span>
-  </label>
-  <small>Replace the prompt preset with a chain of AI sub-calls: an Origin publishes the
-    inbound request as variables, API Request nodes call other models (optionally extracting
-    JSON keys), and a Final Request builds the messages that are forwarded upstream.
-    Sub-calls are not limited by the calling key's model or provider restrictions.</small>
+  <section class="mw-form-section">
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Use Workflows <span class="pill warn">UNSTABLE BETA</span>
+        <span class="mw-hint">Replaces the prompt preset with a chain of AI sub-calls. Sub-calls are
+          not limited by the calling key's model or provider restrictions.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="use_workflow" id="use-workflow" value="1" aria-label="Use Workflows"
+               {% if form.get('use_workflow') %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
 
-  <section id="workflow-editor" {% if not form.get('use_workflow') %}hidden{% endif %}>
-    <input type="hidden" name="workflow_json" id="workflow-json"
-           value="{{ form.get('workflow_json', '') }}">
-    <div id="workflow-canvas" class="workflow-canvas"></div>
+    <section id="workflow-editor" {% if not form.get('use_workflow') %}hidden{% endif %}>
+      <input type="hidden" name="workflow_json" id="workflow-json"
+             value="{{ form.get('workflow_json', '') }}">
+      <div id="workflow-canvas" class="workflow-canvas"></div>
+    </section>
   </section>
 
   <div id="prompt-sections">
-  <fieldset>
+  <fieldset class="mw-form-section">
     <legend>Request merging</legend>
     {% set merge = form.get('merge_mode', 'append') %}
-    <label><input type="radio" name="merge_mode" value="append" {% if merge == 'append' %}checked{% endif %}>
-      Append</label>
-    <small>Keep everything; the caller's prompt follows the premodel's.</small>
-    <label><input type="radio" name="merge_mode" value="caller" {% if merge == 'caller' %}checked{% endif %}>
-      Caller wins</label>
-    <small>If the caller sent a system prompt, ignore the premodel's prompt.</small>
-    <label><input type="radio" name="merge_mode" value="premodel" {% if merge == 'premodel' %}checked{% endif %}>
-      Premodel wins</label>
-    <small>Delete the caller's system prompts and use the premodel's.</small>
+    <label class="radio"><input type="radio" name="merge_mode" value="append" {% if merge == 'append' %}checked{% endif %}><span>Append</span></label>
+    <small class="mw-hint">Keep everything; the caller's prompt follows the premodel's.</small>
+    <label class="radio"><input type="radio" name="merge_mode" value="caller" {% if merge == 'caller' %}checked{% endif %}><span>Caller wins</span></label>
+    <small class="mw-hint">If the caller sent a system prompt, ignore the premodel's prompt.</small>
+    <label class="radio"><input type="radio" name="merge_mode" value="premodel" {% if merge == 'premodel' %}checked{% endif %}><span>Premodel wins</span></label>
+    <small class="mw-hint">Delete the caller's system prompts and use the premodel's.</small>
   </fieldset>
 
-  <label>
+  <label class="checkbox">
     <input type="checkbox" name="accept_mwvars" value="1" {% if form.get('accept_mwvars') %}checked{% endif %}>
-    Accept MWVARS
+    <span>Accept MWVARS</span>
   </label>
-  <small>Allow callers to define <code>@name=value</code> macro variables, used as <code>{{ '{{ name }}' }}</code> or <code>@@name@@</code>.</small>
+  <small class="mw-hint">Allow callers to define <code>@name=value</code> macro variables, used as <code>{{ '{{ name }}' }}</code> or <code>@@name@@</code>.</small>
 
-  <fieldset>
+  <fieldset class="mw-form-section">
     <legend>Prompt source</legend>
     {% set mode = form.get('prompt_mode', 'simple') %}
-    <label><input type="radio" name="prompt_mode" value="simple" {% if mode == 'simple' %}checked{% endif %}> Simple system prompt</label>
-    <label><input type="radio" name="prompt_mode" value="sillytavern" {% if mode == 'sillytavern' %}checked{% endif %}> SillyTavern preset</label>
+    <label class="radio"><input type="radio" name="prompt_mode" value="simple" {% if mode == 'simple' %}checked{% endif %}><span>Simple system prompt</span></label>
+    <label class="radio"><input type="radio" name="prompt_mode" value="sillytavern" {% if mode == 'sillytavern' %}checked{% endif %}><span>SillyTavern preset</span></label>
   </fieldset>
 
-  <section id="simple-panel">
-    <label>
-      System prompt
-      <textarea name="system_prompt" rows="10" placeholder="You are...">{{ form.get('system_prompt', '') }}</textarea>
-    </label>
+  <section id="simple-panel" class="mw-form-section">
+    <div class="field label border">
+      <textarea name="system_prompt" id="premodel-system-prompt" rows="10" placeholder=" ">{{ form.get('system_prompt', '') }}</textarea>
+      <label for="premodel-system-prompt">System prompt</label>
+    </div>
   </section>
 
-  <section id="preset-panel" hidden>
-    <label>
-      Upload a SillyTavern preset (.json)
-      <input type="file" id="preset-file" accept=".json,application/json">
-      <small>Parsed in your browser. Toggle prompts below; the enabled set is saved.</small>
-    </label>
+  <section id="preset-panel" class="mw-form-section" hidden>
+    <label class="mw-hint" for="preset-file">Upload a SillyTavern preset (.json)</label>
+    <input type="file" id="preset-file" class="mw-file" accept=".json,application/json">
+    <small class="mw-hint">Parsed in your browser. Toggle prompts below; the enabled set is saved.</small>
     <input type="hidden" name="preset_json" id="preset-json" value="{{ form.get('preset_json', '') }}">
     <p id="preset-status"><small>No preset loaded.</small></p>
     <div id="preset-prompts" class="preset-prompts"></div>
   </section>
   </div>
-</article>
 
-  <button type="submit">Save premodel</button>
-  <a role="button" class="secondary outline" href="{{ url_for('admin.premodels') }}">Cancel</a>
+  <div class="mw-inline-actions">
+    <button type="submit">Save premodel</button>
+    <a class="button border" href="{{ url_for('admin.premodels') }}">Cancel</a>
+  </div>
 </form>
 {% endblock %}
 

@@ -57,6 +57,23 @@ def test_activity_and_requests_pages_render(configured_client):
     assert client.get("/requests").status_code == 200
 
 
+def test_pages_use_beercss_dark_theme(configured_client):
+    client, _ = configured_client
+    html = client.get("/").get_data(as_text=True)
+    assert "beercss@5.0.3" in html
+    assert "picocss" not in html
+    assert '<body class="dark">' in html
+
+
+def test_nav_marks_current_page(configured_client):
+    client, _ = configured_client
+    home = client.get("/").get_data(as_text=True)
+    assert 'class="mw-brand active"' in home
+
+    requests = client.get("/requests").get_data(as_text=True)
+    assert 'class="mw-nav-link active" href="/requests" aria-current="page"' in requests
+
+
 def test_request_detail_404_for_missing(configured_client):
     client, _ = configured_client
     assert client.get("/requests/999").status_code == 404

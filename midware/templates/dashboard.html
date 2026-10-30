@@ -2,31 +2,35 @@
 {% block title %}Dashboard - MidWare{% endblock %}
 
 {% block content %}
-<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
-  <hgroup>
+<div class="mw-page-head">
+  <div>
     <h1>Dashboard</h1>
     <p>Token accounting for your LLM traffic.</p>
-  </hgroup>
-  <form method="get" action="{{ url_for('dashboard.index') }}">
-    <fieldset role="group">
-      <select name="key" onchange="this.form.submit()">
+  </div>
+  <form method="get" action="{{ url_for('dashboard.index') }}" class="mw-filters">
+    <div class="field label border small">
+      <select name="key" id="dash-key" onchange="this.form.submit()">
         <option value="">All keys</option>
         {% for k in api_keys %}
           <option value="{{ k['id'] }}" {% if selected_key == k['id'] %}selected{% endif %}>{{ k['name'] }}</option>
         {% endfor %}
       </select>
-      <select name="route" onchange="this.form.submit()">
+      <label for="dash-key">Key</label>
+    </div>
+    <div class="field label border small">
+      <select name="route" id="dash-route" onchange="this.form.submit()">
         <option value="">All routes</option>
         {% for r in routes %}
           <option value="{{ r['id'] }}" {% if selected_route == r['id'] %}selected{% endif %}>{{ r['name'] }}</option>
         {% endfor %}
       </select>
-    </fieldset>
+      <label for="dash-route">Route</label>
+    </div>
   </form>
 </div>
 
 {% if not routes %}
-<article class="flash flash-error">
+<article class="flash flash-error" role="alert">
   No upstream route configured. <a href="{{ url_for('admin.setup') }}">Run setup</a> to start proxying.
 </article>
 {% endif %}
@@ -55,7 +59,7 @@
 </section>
 
 <section>
-  <h2>Last 52 weeks</h2>
+  <h2>Last 52 weeks <small><a href="{{ url_for('dashboard.activity') }}">Activity →</a></small></h2>
   <div class="heatmap-wrap">
     <div class="heatmap">
       {% for week in heatmap.weeks %}
@@ -73,10 +77,10 @@
   <div class="heat-legend">
     <span>{{ heatmap.active_days }} active days</span>
     <span style="margin-left:auto">Less</span>
-    <span class="swatch" style="background:#0e4429"></span>
-    <span class="swatch" style="background:#006d32"></span>
-    <span class="swatch" style="background:#26a641"></span>
-    <span class="swatch" style="background:#39d353"></span>
+    <span class="swatch" style="background:#5c2e00"></span>
+    <span class="swatch" style="background:#8a4500"></span>
+    <span class="swatch" style="background:#c26a00"></span>
+    <span class="swatch" style="background:#ffa94d"></span>
     <span>More</span>
   </div>
 </section>
@@ -85,28 +89,30 @@
   <section>
     <h2>Recent requests</h2>
     {% if recent %}
-    <table class="compact">
-      <thead>
-        <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th>Total</th><th>Latency</th></tr>
-      </thead>
-      <tbody>
-        {% for r in recent %}
-        <tr>
-          <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
-          <td class="mono">{{ r['model'] or '—' }}</td>
-          <td>{{ r['api_key_name'] or '—' }}</td>
-          <td>
-            <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">
-              {{ r['status_code'] }}
-            </span>
-            {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
-          </td>
-          <td>{{ r['total_tokens'] | tokens }}</td>
-          <td>{{ r['latency_ms'] | ms }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="scroll">
+      <table class="compact border">
+        <thead>
+          <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th class="num">Total</th><th class="num">Latency</th></tr>
+        </thead>
+        <tbody>
+          {% for r in recent %}
+          <tr>
+            <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
+            <td class="mono">{{ r['model'] or '—' }}</td>
+            <td>{{ r['api_key_name'] or '—' }}</td>
+            <td>
+              <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">
+                {{ r['status_code'] }}
+              </span>
+              {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
+            </td>
+            <td class="num">{{ r['total_tokens'] | tokens }}</td>
+            <td class="num">{{ r['latency_ms'] | ms }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     <p><a href="{{ url_for('dashboard.requests_page') }}">View all requests →</a></p>
     {% else %}
     <p>No requests recorded yet.</p>
@@ -116,36 +122,40 @@
   <section>
     <h2>Top hosts</h2>
     {% if hosts %}
-    <table class="compact">
-      <thead><tr><th>Host</th><th>Req</th><th>Tokens</th></tr></thead>
-      <tbody>
-        {% for h in hosts[:8] %}
-        <tr>
-          <td>{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
-          <td>{{ h.requests }}</td>
-          <td>{{ h.total_tokens | tokens }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="scroll">
+      <table class="compact border">
+        <thead><tr><th>Host</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
+        <tbody>
+          {% for h in hosts[:8] %}
+          <tr>
+            <td>{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
+            <td class="num">{{ h.requests }}</td>
+            <td class="num">{{ h.total_tokens | tokens }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% else %}
     <p>No host data yet.</p>
     {% endif %}
 
     <h2>Top models</h2>
     {% if models %}
-    <table class="compact">
-      <thead><tr><th>Model</th><th>Req</th><th>Tokens</th></tr></thead>
-      <tbody>
-        {% for m in models[:8] %}
-        <tr>
-          <td class="mono">{{ m.model }}</td>
-          <td>{{ m.requests }}</td>
-          <td>{{ m.total_tokens | tokens }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="scroll">
+      <table class="compact border">
+        <thead><tr><th>Model</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
+        <tbody>
+          {% for m in models[:8] %}
+          <tr>
+            <td class="mono">{{ m.model }}</td>
+            <td class="num">{{ m.requests }}</td>
+            <td class="num">{{ m.total_tokens | tokens }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% else %}
     <p>No model data yet.</p>
     {% endif %}
@@ -154,17 +164,19 @@
     {% if model_slugs %}
     <p><small>{{ model_slugs | length }} slug(s); copy one straight into your client.
        The default route's models have no prefix.</small></p>
-    <table class="compact">
-      <thead><tr><th>Route</th><th>Model</th></tr></thead>
-      <tbody>
-        {% for m in model_slugs[:12] %}
-        <tr>
-          <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
-          <td class="mono">{{ m.slug }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="scroll">
+      <table class="compact border">
+        <thead><tr><th>Route</th><th>Model</th></tr></thead>
+        <tbody>
+          {% for m in model_slugs[:12] %}
+          <tr>
+            <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
+            <td class="mono">{{ m.slug }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% if model_slugs | length > 12 %}
     <p><a href="{{ url_for('admin.routes') }}">See all {{ model_slugs | length }} models →</a></p>
     {% endif %}

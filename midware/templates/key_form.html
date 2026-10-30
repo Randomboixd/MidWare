@@ -12,60 +12,63 @@
    or form.get('cors_allow_origin', '*') != '*' %}
 
 {% block content %}
-<hgroup>
-  <h1>{{ 'Edit API key' if key else 'New API key' }}</h1>
-  <p>A client credential, optionally scoped to specific providers and premodels.</p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>{{ 'Edit API key' if key else 'New API key' }}</h1>
+    <p>A client credential, optionally scoped to specific providers and premodels.</p>
+  </div>
+</div>
 
 {% if key %}<p>Token: <span class="mono token">{{ key['token'] }}</span></p>{% endif %}
 
-<article>
 <form method="post" id="key-form">
-  <label>
-    Name
-    <input type="text" name="name" value="{{ form.get('name', '') }}" required>
-    <small>A short name for the application using this key.</small>
-  </label>
+  <section class="mw-form-section">
+    <h3 style="margin-top:0">Basics</h3>
+    <div class="field label border">
+      <input type="text" name="name" id="key-name" value="{{ form.get('name', '') }}" placeholder=" " required>
+      <label for="key-name">Name</label>
+    </div>
+    <small class="mw-hint">A short name for the application using this key.</small>
 
-  <label>
-    Description
-    <textarea name="description" rows="2" maxlength="250"
-              placeholder="Short description">{{ form.get('description', '') }}</textarea>
-    <small>Up to 250 characters.</small>
-  </label>
+    <div class="field label border">
+      <textarea name="description" id="key-description" rows="2" maxlength="250"
+                placeholder=" ">{{ form.get('description', '') }}</textarea>
+      <label for="key-description">Description</label>
+    </div>
+    <small class="mw-hint">Up to 250 characters.</small>
+  </section>
 
-  <button type="button" id="advanced-toggle" class="secondary outline"
-          {% if advanced_open %}hidden{% endif %}>Enable Advanced Settings</button>
+  <details class="mw-form-section" id="advanced-panel" {% if advanced_open %}open{% endif %}>
+    <summary>Advanced settings</summary>
 
-  <section id="advanced-panel" {% if not advanced_open %}hidden{% endif %}>
     <h3>Cross-origin access</h3>
-    <label>
-      Allowed CORS origin
-      <input type="text" name="cors_allow_origin" value="{{ form.get('cors_allow_origin', '*') }}"
-             placeholder="*" autocomplete="off">
-      <small><code>*</code> allows any origin. Otherwise a comma-separated allowlist
-        (e.g. <code>https://app.example.com</code>). Leave empty to block all browser origins.</small>
-    </label>
+    <div class="field label border">
+      <input type="text" name="cors_allow_origin" id="cors-allow-origin" value="{{ form.get('cors_allow_origin', '*') }}"
+             placeholder=" " autocomplete="off">
+      <label for="cors-allow-origin">Allowed CORS origin</label>
+    </div>
+    <small class="mw-hint"><code>*</code> allows any origin. Otherwise a comma-separated allowlist
+      (e.g. <code>https://app.example.com</code>). Leave empty to block all browser origins.</small>
 
     <h3>Premodels</h3>
-    <label>
+    <label class="checkbox">
       <input type="checkbox" name="allow_premodels" id="allow-premodels" value="1"
              {% if form.get('allow_premodels', True) %}checked{% endif %}>
-      Let this key call Premodels
+      <span>Let this key call Premodels</span>
     </label>
-    <label>
+    <label class="checkbox">
       <input type="checkbox" name="restrict_premodels" id="restrict-premodels" value="1"
              {% if form.get('restrict_premodels') %}checked{% endif %}>
-      Limit premodels this key can call
+      <span>Limit premodels this key can call</span>
     </label>
     <div id="premodel-panel" hidden>
       {% set allowed_pms = form.get('allowed_premodel_ids') %}
       {% if premodels %}
         {% for p in premodels %}
-        <label>
+        <label class="checkbox">
           <input type="checkbox" name="allowed_premodel_ids" value="{{ p['id'] }}"
                  {% if allowed_pms is none or p['id'] in allowed_pms %}checked{% endif %}>
-          <code>{{ premodel_prefix }}{{ p['slug'] }}</code> — {{ p['name'] }}
+          <span><code>{{ premodel_prefix }}{{ p['slug'] }}</code> — {{ p['name'] }}</span>
         </label>
         {% endfor %}
       {% else %}
@@ -74,19 +77,19 @@
     </div>
 
     <h3>Providers</h3>
-    <label>
+    <label class="checkbox">
       <input type="checkbox" name="restrict_providers" id="restrict-providers" value="1"
              {% if form.get('restrict_providers') %}checked{% endif %}>
-      Limit providers this key can call
+      <span>Limit providers this key can call</span>
     </label>
     <div id="provider-panel" hidden>
       {% set allowed_routes = form.get('allowed_route_ids') %}
       {% if routes %}
         {% for r in routes %}
-        <label>
+        <label class="checkbox">
           <input type="checkbox" name="allowed_route_ids" value="{{ r['id'] }}"
                  {% if allowed_routes is none or r['id'] in allowed_routes %}checked{% endif %}>
-          {{ r['name'] }}{% if r['is_active'] %} <span class="pill ok">default</span>{% endif %}
+          <span>{{ r['name'] }}{% if r['is_active'] %} <span class="pill ok">default</span>{% endif %}</span>
         </label>
         {% endfor %}
       {% else %}
@@ -95,27 +98,25 @@
     </div>
 
     <h3>Models</h3>
-    <label>
+    <label class="checkbox">
       <input type="checkbox" name="restrict_models" id="restrict-models" value="1"
              {% if form.get('restrict_models') %}checked{% endif %}>
-      Limit models this key can call
+      <span>Limit models this key can call</span>
     </label>
     <div id="model-panel" hidden>
-      <div role="group" style="margin-bottom:0.5rem">
-        <button type="button" id="models-enable-all" class="outline"
-                style="font-size:0.8rem;padding:0.25rem 0.6rem">Enable All</button>
-        <button type="button" id="models-disable-all" class="outline secondary"
-                style="font-size:0.8rem;padding:0.25rem 0.6rem">Disable All</button>
-      </div>
-      <small>Models from the providers enabled above. Hidden when a provider is unchecked.</small>
+      <nav class="mw-inline-actions">
+        <button type="button" id="models-enable-all" class="border small">Enable all</button>
+        <button type="button" id="models-disable-all" class="border small">Disable all</button>
+      </nav>
+      <small class="mw-hint">Models from the providers enabled above. Hidden when a provider is unchecked.</small>
       {% set allowed_models = form.get('allowed_model_ids') %}
       {% if models %}
         {% for m in models %}
         {% set model_key = (m.route_id | string) ~ ':' ~ m.model_id %}
-        <label data-model-route="{{ m.route_id }}">
+        <label class="checkbox" data-model-route="{{ m.route_id }}">
           <input type="checkbox" name="allowed_model_ids" value="{{ model_key }}"
                  {% if allowed_models is none or model_key in allowed_models %}checked{% endif %}>
-          <code>{{ m.slug }}</code>
+          <span><code>{{ m.slug }}</code></span>
         </label>
         {% endfor %}
       {% else %}
@@ -124,104 +125,136 @@
     </div>
 
     <h3>Token limits</h3>
-    <label>
-      <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1"
-             {% if form.get('limit_tokens_enabled') %}checked{% endif %}>
-      Set maximum tokens
-    </label>
+    <div class="mw-check-row">
+      <div class="mw-check-text">Set maximum tokens</div>
+      <label class="switch">
+        <input type="checkbox" name="limit_tokens_enabled" id="limit-tokens" value="1" aria-label="Set maximum tokens"
+               {% if form.get('limit_tokens_enabled') %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
     <div id="limit-tokens-panel" hidden>
-      <small>Once this key has spent the configured tokens inside a window, further
-        requests are rejected with a 429 until the window resets. Untick a window
-        (or leave its box empty) to leave it unlimited.</small>
-      <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+      <small class="mw-hint">Once the key has spent the configured tokens inside a window, further
+        requests get a 429 until the window resets. Untick a window (or leave its box empty) to
+        leave it unlimited.</small>
+      <div class="mw-limit-grid">
         {% for window, label in (('hour', 'Per hour'), ('day', 'Per day'), ('week', 'Per week')) %}
-        <label>
-          <input type="checkbox" name="limit_tokens_{{ window }}" value="1"
-                 {% if form.get('limit_tokens_' ~ window) %}checked{% endif %}>
-          {{ label }}
-          <input type="number" name="max_tokens_{{ window }}" min="0" step="1"
-                 placeholder="Max tokens"
-                 value="{{ form.get('max_tokens_' ~ window) or '' }}">
-        </label>
+        <div class="mw-limit-row">
+          <label class="checkbox">
+            <input type="checkbox" name="limit_tokens_{{ window }}" value="1"
+                   {% if form.get('limit_tokens_' ~ window) %}checked{% endif %}>
+            <span>{{ label }}</span>
+          </label>
+          <div class="field label border small">
+            <input type="number" name="max_tokens_{{ window }}" id="max-tokens-{{ window }}" min="0" step="1"
+                   placeholder=" " value="{{ form.get('max_tokens_' ~ window) or '' }}">
+            <label for="max-tokens-{{ window }}">Max tokens</label>
+          </div>
+        </div>
         {% endfor %}
       </div>
     </div>
 
     <h3>Request limits</h3>
-    <label>
-      <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1"
-             {% if form.get('limit_requests_enabled') %}checked{% endif %}>
-      Set request limit
-    </label>
+    <div class="mw-check-row">
+      <div class="mw-check-text">Set request limit</div>
+      <label class="switch">
+        <input type="checkbox" name="limit_requests_enabled" id="limit-requests" value="1" aria-label="Set request limit"
+               {% if form.get('limit_requests_enabled') %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
     <div id="limit-requests-panel" hidden>
-      <small>Caps how many requests this key may send inside a window; the next
-        request past the cap gets a 429. Untick a window (or leave its box
-        empty) to leave it unlimited.</small>
-      <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+      <small class="mw-hint">Caps how many requests this key may send inside a window; the next
+        request past the cap gets a 429. Untick a window (or leave its box empty) to leave it
+        unlimited.</small>
+      <div class="mw-limit-grid">
         {% for window, label in (('minute', 'Per minute'), ('hour', 'Per hour'),
                                  ('day', 'Per day'), ('week', 'Per week')) %}
-        <label>
-          <input type="checkbox" name="limit_requests_{{ window }}" value="1"
-                 {% if form.get('limit_requests_' ~ window) %}checked{% endif %}>
-          {{ label }}
-          <input type="number" name="max_requests_{{ window }}" min="0" step="1"
-                 placeholder="Max requests"
-                 value="{{ form.get('max_requests_' ~ window) or '' }}">
-        </label>
+        <div class="mw-limit-row">
+          <label class="checkbox">
+            <input type="checkbox" name="limit_requests_{{ window }}" value="1"
+                   {% if form.get('limit_requests_' ~ window) %}checked{% endif %}>
+            <span>{{ label }}</span>
+          </label>
+          <div class="field label border small">
+            <input type="number" name="max_requests_{{ window }}" id="max-requests-{{ window }}" min="0" step="1"
+                   placeholder=" " value="{{ form.get('max_requests_' ~ window) or '' }}">
+            <label for="max-requests-{{ window }}">Max requests</label>
+          </div>
+        </div>
         {% endfor %}
       </div>
     </div>
 
     <h3>Image responses</h3>
-    <label>
-      <input type="checkbox" name="image_urls" id="image-urls" value="1"
-             {% if form.get('image_response_mode', 'b64') == 'url' %}checked{% endif %}>
-      Return image URLs instead of base64
-    </label>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Return image URLs instead of base64
+        <span class="mw-hint">Only applies to <code>/v1/images/*</code> responses with
+          <code>b64_json</code> items. Upstream URLs pass through untouched.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="image_urls" id="image-urls" value="1" aria-label="Return image URLs instead of base64"
+               {% if form.get('image_response_mode', 'b64') == 'url' %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
     <div id="image-urls-panel" hidden>
-      <small>Image generations for this key are stored on the MidWare server and
-        returned as <code>/img/…</code> URLs instead of inline base64. Only
-        applies to <code>/v1/images/*</code> responses that contain
-        <code>b64_json</code> items; upstream URLs pass through untouched.</small>
-      <label>
-        Keep stored images for (days)
-        <input type="number" name="image_retention_days" min="0" max="36500" step="1"
-               placeholder="Forever"
-               value="{{ form.get('image_retention_days') or '' }}">
-        <small>0 or empty keeps images forever.</small>
-      </label>
-      <label>
-        <input type="checkbox" name="image_https" value="1"
-               {% if form.get('image_url_https') %}checked{% endif %}>
-        Send a HTTPS based URL
-        <small>Advertises the stored image URLs as <code>https://</code> — for
-          when TLS terminates in front of MidWare.</small>
-      </label>
+      <div class="field label border">
+        <input type="number" name="image_retention_days" id="image-retention-days" min="0" max="36500" step="1"
+               placeholder=" " value="{{ form.get('image_retention_days') or '' }}">
+        <label for="image-retention-days">Keep stored images for (days)</label>
+      </div>
+      <small class="mw-hint">0 or empty keeps images forever.</small>
+      <div class="mw-check-row">
+        <div class="mw-check-text">
+          Send a HTTPS based URL
+          <span class="mw-hint">Advertises stored image URLs as <code>https://</code> — for when
+            TLS terminates in front of MidWare.</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" name="image_https" value="1" aria-label="Send a HTTPS based URL"
+                 {% if form.get('image_url_https') %}checked{% endif %}>
+          <span></span>
+        </label>
+      </div>
     </div>
 
     <h3>Logging settings</h3>
-    <label>
-      <input type="checkbox" name="log_requests" id="log-requests" value="1"
-             {% if form.get('log_requests', True) %}checked{% endif %}>
-      Log requests
-      <small>Record this key's traffic in the request log. When off, requests are
-        still counted for usage totals and rate limits, but no request rows (and
-        no message contents) are kept.</small>
-    </label>
-    <div id="log-contents-panel" {% if not form.get('log_requests', True) %}hidden{% endif %}>
-      <label>
-        <input type="checkbox" name="log_message_contents" id="log-message-contents" value="1"
-               {% if form.get('log_message_contents', True) %}checked{% endif %}>
-        Log message contents
-        <small>Store prompts and responses with each logged request. When off,
-          rows keep only metadata (model, status, tokens, latency). Needs
-          <em>Log requests</em> to be on.</small>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Log requests
+        <span class="mw-hint">When off, requests are still counted for usage totals and rate
+          limits, but no request rows are kept.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="log_requests" id="log-requests" value="1" aria-label="Log requests"
+               {% if form.get('log_requests', True) %}checked{% endif %}>
+        <span></span>
       </label>
     </div>
-  </section>
-</article>
-  <button type="submit">Save key</button>
-  <a role="button" class="secondary outline" href="{{ url_for('admin.keys') }}">Cancel</a>
+    <div id="log-contents-panel" {% if not form.get('log_requests', True) %}hidden{% endif %}>
+      <div class="mw-check-row" style="margin-top:0.6rem">
+        <div class="mw-check-text">
+          Log message contents
+          <span class="mw-hint">Store prompts and responses with each logged request. When off,
+            rows keep only metadata (model, status, tokens, latency). Needs <em>Log requests</em>
+            to be on.</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" name="log_message_contents" id="log-message-contents" value="1" aria-label="Log message contents"
+                 {% if form.get('log_message_contents', True) %}checked{% endif %}>
+          <span></span>
+        </label>
+      </div>
+    </div>
+  </details>
+
+  <div class="mw-inline-actions">
+    <button type="submit">Save key</button>
+    <a class="button border" href="{{ url_for('admin.keys') }}">Cancel</a>
+  </div>
 </form>
 {% endblock %}
 

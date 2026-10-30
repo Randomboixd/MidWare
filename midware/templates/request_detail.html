@@ -2,53 +2,64 @@
 {% block title %}Request #{{ row['id'] }} - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>Request #{{ row['id'] }}</h1>
-  <p><a href="{{ url_for('dashboard.requests_page') }}">← Back to requests</a></p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>Request #{{ row['id'] }}</h1>
+    <p><a href="{{ url_for('dashboard.requests_page') }}">← Back to requests</a></p>
+  </div>
+</div>
 
 <section class="stat-grid">
-  <article class="stat-card"><header>Model</header><div class="value mono" style="font-size:1.1rem">{{ row['model'] or '—' }}</div>
-    <div class="sub">{% if row['model_raw'] and row['model_raw'] != row['model'] %}sent as <span class="mono">{{ row['model_raw'] }}</span>{% else %}&nbsp;{% endif %}</div>
+  <article class="stat-card">
+    <header>Total tokens</header>
+    <div class="value">{{ row['total_tokens'] | comma }}</div>
+    <div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %} · <span title="Estimated locally: the upstream sent no usage block">estimated</span>{% endif %}</div>
   </article>
-  <article class="stat-card"><header>Route</header><div class="value" style="font-size:1.1rem">{{ row['route_name'] or '—' }}</div>
-    <div class="sub">{% if row['host_prefix'] %}via [{{ row['host_prefix'] }}]{% else %}default route{% endif %}</div>
+  <article class="stat-card">
+    <header>Status</header>
+    <div class="value">{{ row['status_code'] }}</div>
+    <div class="sub">{{ row['latency_ms'] | ms }}{% if row['streamed'] %} · streamed{% endif %}</div>
   </article>
-  <article class="stat-card"><header>Total tokens</header><div class="value">{{ row['total_tokens'] | comma }}</div><div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %} · <span title="Estimated locally: the upstream sent no usage block">estimated</span>{% endif %}</div></article>
-  <article class="stat-card"><header>Status</header><div class="value">{{ row['status_code'] }}</div><div class="sub">{{ row['latency_ms'] | ms }}{% if row['streamed'] %} · streamed{% endif %}</div></article>
-  <article class="stat-card"><header>When</header><div class="value" style="font-size:1.1rem">{{ row['created_at'] | datetime }}</div><div class="sub">{{ row['created_at'] | relative }}</div></article>
+  <article class="stat-card">
+    <header>When</header>
+    <div class="value" style="font-size:1.1rem">{{ row['created_at'] | datetime }}</div>
+    <div class="sub">{{ row['created_at'] | relative }}</div>
+  </article>
 </section>
 
-<table class="compact">
-  <tbody>
-    <tr><th>API key</th><td>{{ row['api_key_name'] or '—' }}</td></tr>
-    <tr><th>Route</th><td>{{ row['route_name'] or '—' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
-    <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
-    <tr><th>Token source</th><td>
-      {% if row['token_source'] == 'upstream' %}reported by upstream
-      {% elif row['token_source'] == 'none' %}not available
-      {% else %}<span class="pill warn">estimate</span> counted locally (based on: {{ row['token_source'] }}) because the upstream sent no usage. This could be because of a streaming request</span>
-      {% endif %}
-    </td></tr>
-    <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or '—' }}</td></tr>
-    {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
-  </tbody>
-</table>
+<article class="stat-card">
+  <table class="compact">
+    <tbody>
+      <tr><th>Model</th><td class="mono">{{ row['model'] or '—' }}{% if row['model_raw'] and row['model_raw'] != row['model'] %} <small class="mono">(sent as {{ row['model_raw'] }})</small>{% endif %}</td></tr>
+      <tr><th>Route</th><td>{{ row['route_name'] or '—' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
+      <tr><th>API key</th><td>{{ row['api_key_name'] or '—' }}</td></tr>
+      <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
+      <tr><th>Token source</th><td>
+        {% if row['token_source'] == 'upstream' %}reported by upstream
+        {% elif row['token_source'] == 'none' %}not available
+        {% else %}<span class="pill warn">estimate</span> counted locally ({{ row['token_source'] }}); the upstream sent no usage block
+        {% endif %}
+      </td></tr>
+      <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or '—' }}</td></tr>
+      {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+</article>
 
 {% if messages_locked %}
-<h2>Messages <small>(request + response)</small></h2>
-{% if auth_message %}<article class="flash flash-error">{{ auth_message }}</article>{% endif %}
-<section class="conversation conversation-locked">
+<h2>Messages</h2>
+{% if auth_message %}<article class="flash flash-error" role="alert">{{ auth_message }}</article>{% endif %}
+<article class="mw-form-section">
   <p>Message history is protected. Sign in to view the full request and response.</p>
-  <p><a role="button" href="{{ url_for('dashboard.request_detail', request_id=row['id'], messages=1) }}">Sign in to view messages</a></p>
-</section>
+  <p><a class="button" href="{{ url_for('dashboard.request_detail', request_id=row['id'], messages=1) }}">Sign in to view messages</a></p>
+</article>
 {% else %}
-<h2>Messages <small>(request + response)</small></h2>
+<h2>Messages</h2>
 <section id="conversation" class="conversation" data-source="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">
   <div class="conversation-toolbar">
-    <button type="button" id="fetch-messages">Fetch</button>
-    <button type="button" id="expand-all" class="outline secondary">Expand all</button>
-    <button type="button" id="collapse-all" class="outline secondary">Collapse all</button>
+    <button type="button" id="fetch-messages" class="small">Fetch</button>
+    <button type="button" id="expand-all" class="border small">Expand all</button>
+    <button type="button" id="collapse-all" class="border small">Collapse all</button>
     <small id="conversation-status">
       {{ conversation.messages | length }} message{{ '' if conversation.messages | length == 1 else 's' }}
       {%- if conversation.messages %} · last user + assistant opened{% endif %}

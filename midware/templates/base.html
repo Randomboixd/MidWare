@@ -1,35 +1,38 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>{% block title %}MidWare{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  <header class="container">
-    <nav>
-      <ul>
-        <li><a href="{{ url_for('dashboard.index') }}"><strong>MidWare</strong></a></li>
-      </ul>
-      <ul>
-        <li><a href="{{ url_for('dashboard.requests_page') }}">Requests</a></li>
-        <li><a href="{{ url_for('msq.index') }}">MSQ</a></li>
-        <li><a href="{{ url_for('admin.keys') }}">Keys</a></li>
-        <li><a href="{{ url_for('admin.routes') }}">Routes</a></li>
-        <li><a href="{{ url_for('admin.premodels') }}">Premodels</a></li>
-        <li><a href="{{ url_for('admin.settings') }}">Settings</a></li>
-      </ul>
+<body class="dark">
+  {% set here = request.endpoint or '' %}
+  {% macro nav_link(label, endpoint, match) -%}
+    {%- set active = here == endpoint or (match and here.startswith(match)) -%}
+    <a class="mw-nav-link{{ ' active' if active }}" href="{{ url_for(endpoint) }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
+  {%- endmacro %}
+  <header class="mw-header">
+    <nav class="mw-nav responsive" aria-label="Main">
+      <a class="mw-brand{{ ' active' if here in ('dashboard.index', 'dashboard.activity') }}" href="{{ url_for('dashboard.index') }}"{% if here == 'dashboard.index' %} aria-current="page"{% endif %}>MidWare</a>
+      <span class="mw-nav-spacer"></span>
+      {{ nav_link('Requests', 'dashboard.requests_page', 'dashboard.request') }}
+      {{ nav_link('MSQ', 'msq.index', 'msq.') }}
+      {{ nav_link('Keys', 'admin.keys', 'admin.key') }}
+      {{ nav_link('Routes', 'admin.routes', 'admin.route') }}
+      {{ nav_link('Premodels', 'admin.premodels', 'admin.premodel') }}
+      {{ nav_link('Settings', 'admin.settings', none) }}
     </nav>
   </header>
 
-  <main class="container">
+  <main class="responsive">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         {% for category, message in messages %}
-          <article class="flash {{ 'flash-error' if category == 'error' else 'flash-success' }}">{{ message }}</article>
+          <article class="flash {{ 'flash-error' if category == 'error' else 'flash-success' }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</article>
         {% endfor %}
       {% endif %}
     {% endwith %}
@@ -37,7 +40,7 @@
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="container">
+  <footer class="mw-footer responsive">
     <small>ver {{ app_version }}</small>
   </footer>
   {% block scripts %}{% endblock %}

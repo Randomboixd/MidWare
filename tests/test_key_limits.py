@@ -16,7 +16,7 @@ def test_key_new_form_renders(configured_client):
     client, _ = configured_client
     page = client.get("/admin/keys/new")
     assert page.status_code == 200
-    assert b"Enable Advanced Settings" in page.data
+    assert b"Advanced settings" in page.data
 
 
 def test_key_create_stores_configuration(configured_client):

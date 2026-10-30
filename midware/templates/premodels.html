@@ -2,59 +2,62 @@
 {% block title %}Premodels - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>Premodels</h1>
-  <p>Model presets bound to a connection. Call one by sending its slug as the
-     model: <code>{{ premodel_prefix }}slug</code>.</p>
-</hgroup>
-
-<p><a role="button" href="{{ url_for('admin.premodel_new') }}">New Premodel</a></p>
+<div class="mw-page-head">
+  <div>
+    <h1>Premodels</h1>
+    <p>Model presets bound to a connection. Call one by sending its slug as the
+       model: <code>{{ premodel_prefix }}slug</code>.</p>
+  </div>
+  <a class="button" href="{{ url_for('admin.premodel_new') }}">New Premodel</a>
+</div>
 
 {% if premodels %}
-<table class="compact">
-  <thead>
-    <tr><th>Name</th><th>Description</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th></th></tr>
-  </thead>
-  <tbody>
-    {% for p in premodels %}
-    <tr>
-      <td><a href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">{{ p['name'] }}</a></td>
-      <td>{{ p['description'] or '—' }}</td>
-      <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
-      <td>{{ route_names.get(p['route_id'], '—') }}</td>
-      <td class="mono">{{ p['model'] }}</td>
-      <td>
-        {% if p['use_workflow'] %}<span class="pill">workflow</span>
-        {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
-      </td>
-      <td>
-        <a role="button" class="outline" style="padding:0.25rem 0.6rem;font-size:0.8rem"
-           href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
-        <form method="post" class="inline-form" onsubmit="return confirm('Delete premodel &quot;{{ p['name'] }}&quot;?')">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="premodel_id" value="{{ p['id'] }}">
-          <button type="submit" class="outline secondary" style="padding:0.25rem 0.6rem;font-size:0.8rem">Delete</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="scroll">
+  <table class="compact border">
+    <thead>
+      <tr><th>Name</th><th>Description</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in premodels %}
+      <tr>
+        <td><a href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">{{ p['name'] }}</a></td>
+        <td>{{ p['description'] or '—' }}</td>
+        <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
+        <td>{{ route_names.get(p['route_id'], '—') }}</td>
+        <td class="mono">{{ p['model'] }}</td>
+        <td>
+          {% if p['use_workflow'] %}<span class="pill">workflow</span>
+          {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          <a class="button border small" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
+          <form method="post" class="inline-form" onsubmit="return confirm('Delete premodel &quot;{{ p['name'] }}&quot;?')">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="premodel_id" value="{{ p['id'] }}">
+            <button type="submit" class="border small error-text">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% else %}
 <p>No premodels yet. <a href="{{ url_for('admin.premodel_new') }}">Create one</a>.</p>
 {% endif %}
 
-<h2>Calling a premodel</h2>
-<p>Send the slug as the whole <code>model</code> value. The trailing text after the
-slug overrides the premodel's model, and a <code>[Host]</code> prefix still wins for routing:</p>
-<pre class="mono">{
+<details class="mw-reference">
+  <summary>Calling a premodel</summary>
+  <p>Send the slug as the whole <code>model</code> value. Trailing text after the slug overrides
+     the premodel's model, and a <code>[Host]</code> prefix still wins for routing.</p>
+  <pre class="mono">{
   "model": "{{ premodel_prefix }}programming-model",
   "messages": [...]
 }</pre>
-<ul>
-  <li><code>{{ premodel_prefix }}slug</code> → the premodel's connection and model.</li>
-  <li>Unknown slug → <code>404 unknown_premodel</code>.</li>
-</ul>
-<h2>Use for premodels</h2>
-<p>Premodels are essentially custom models built on top of api models! You can use it for aliasing models, or perhaps making a model with a custom system prompt (Sillytavern Presets accepted too!)</p>
+  <ul>
+    <li><code>{{ premodel_prefix }}slug</code> → the premodel's connection and model.</li>
+    <li>Unknown slug → <code>404 unknown_premodel</code>.</li>
+  </ul>
+  <p>Premodels alias models, bind a system prompt, or accept a SillyTavern preset.</p>
+</details>
 {% endblock %}

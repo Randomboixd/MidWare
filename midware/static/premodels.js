@@ -116,7 +116,7 @@
 
     prompts.forEach(function (prompt, index) {
       var row = document.createElement("label");
-      row.className = "preset-prompt" + (prompt.content ? "" : " is-empty");
+      row.className = "checkbox preset-prompt" + (prompt.content ? "" : " is-empty");
       var box = document.createElement("input");
       box.type = "checkbox";
       box.checked = Boolean(prompt.enabled);

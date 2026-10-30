@@ -4,18 +4,18 @@
 {% block content %}
 {% include "_msq_warning.html" %}
 
-<div class="grid-2" style="grid-template-columns: 1fr auto; align-items: end;">
-  <hgroup>
+<div class="mw-page-head">
+  <div>
     <h1>Model Service Quality</h1>
     <p>Periodic probes that score how well a model is answering over time.</p>
-  </hgroup>
+  </div>
   <p style="margin:0">
-    <a role="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ Recorder</a>
+    <a class="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ Recorder</a>
   </p>
 </div>
 
 {% if not route_count %}
-<article class="flash flash-error">
+<article class="flash flash-error" role="alert">
   No upstream route configured. <a href="{{ url_for('admin.routes') }}">Add a route</a>
   before creating a recorder.
 </article>
@@ -76,13 +76,13 @@
       <small>Every {{ (r['interval_seconds'] / 60) | round(1) }} min ·
         last run {{ r['last_run_at'] | relative if r['last_run_at'] else 'never' }}</small>
       <div class="msq-buttons">
-        <a role="button" class="outline" href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}">Edit</a>
+        <a class="button border small" href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}">Edit</a>
         <form method="post" class="inline-form" action="{{ url_for('msq.recorder_run', recorder_id=r['id']) }}">
-          <button type="submit" class="outline">Run now</button>
+          <button type="submit" class="border small">Run now</button>
         </form>
         <form method="post" class="inline-form" action="{{ url_for('msq.recorder_delete', recorder_id=r['id']) }}"
               onsubmit="return confirm('Delete recorder &quot;{{ r['name'] }}&quot; and its history?')">
-          <button type="submit" class="outline secondary">Delete</button>
+          <button type="submit" class="border small error-text">Delete</button>
         </form>
       </div>
     </footer>
@@ -94,16 +94,17 @@
    tracking a model's quality.</p>
 {% endif %}
 
-<h2>How scoring works</h2>
-<p>Each probe scores 0-100, starting from 100 and subtracting for slow first tokens,
-slow totals, stray non-Latin symbols and configured slop words. Hover any point on a
-chart to see exactly what was deducted. A recorder stays <em>under examination</em>
-until it has 24 hours of history, then turns <strong>Working</strong> or
-<strong>Degraded</strong> from its recent average.</p>
-<p>Recorders with <strong>hardcore checks</strong> enabled can also turn
-<strong>Failing</strong> immediately: a truncated stream, malformed chunk, leaked
-template token, repetition loop or missed long-context needle is not a statistical
-question. Enable them per recorder under the form's Advanced section.</p>
+<details class="mw-reference">
+  <summary>How scoring works</summary>
+  <p>Each probe scores 0-100: it starts at 100 and subtracts for slow first tokens, slow totals,
+     stray non-Latin symbols and configured slop words. Hover a chart point to see the exact
+     deductions. A recorder stays <em>under examination</em> until it has 24 hours of history,
+     then turns <strong>Working</strong> or <strong>Degraded</strong> from its recent average.</p>
+  <p>Recorders with <strong>hardcore checks</strong> enabled can turn <strong>Failing</strong>
+     immediately: a truncated stream, malformed chunk, leaked template token, repetition loop or
+     missed long-context needle is not a statistical question. Enable them per recorder under
+     the form's Advanced section.</p>
+</details>
 {% endblock %}
 
 {% block scripts %}

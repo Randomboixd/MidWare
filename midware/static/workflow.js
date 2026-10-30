@@ -218,14 +218,28 @@
     return node;
   }
 
+  var fieldSeq = 0;
+
   function labelField(text, control, hint) {
-    var wrapper = el("label", {}, []);
-    wrapper.appendChild(document.createTextNode(text));
-    wrapper.appendChild(control);
-    if (hint) {
-      wrapper.appendChild(el("small", { text: hint }));
+    var holder = el("div", { className: "wf-field" });
+    var tag = control.tagName ? control.tagName.toLowerCase() : "";
+    if (tag === "input" || tag === "select" || tag === "textarea") {
+      var field = el("div", { className: "field label border" });
+      if (!control.id) {
+        fieldSeq += 1;
+        control.id = "wf-field-" + fieldSeq;
+      }
+      field.appendChild(control);
+      field.appendChild(el("label", { className: "active", for: control.id, text: text }));
+      holder.appendChild(field);
+    } else {
+      holder.appendChild(el("span", { className: "wf-field-label", text: text }));
+      holder.appendChild(control);
     }
-    return wrapper;
+    if (hint) {
+      holder.appendChild(el("small", { className: "mw-hint", text: hint }));
+    }
+    return holder;
   }
 
   function textInput(value, onInput, attrs) {
@@ -864,34 +878,34 @@
     };
   }
 
-  function picoEditorTheme(cm) {
-    // Colour tokens from Pico CSS variables so light/dark follow the site theme.
+  function beerEditorTheme(cm) {
+    // Colour tokens from BeerCSS variables so the editor follows the site theme.
     var highlight = cm.HighlightStyle.define([
-      { tag: cm.tags.comment, color: "var(--pico-muted-color)" },
-      { tag: cm.tags.keyword, color: "var(--pico-primary)" },
-      { tag: cm.tags.controlKeyword, color: "var(--pico-primary)" },
-      { tag: cm.tags.string, color: "var(--pico-secondary)" },
-      { tag: cm.tags.number, color: "var(--pico-secondary)" },
-      { tag: cm.tags.bool, color: "var(--pico-secondary)" },
-      { tag: cm.tags.null, color: "var(--pico-secondary)" },
-      { tag: cm.tags.function(cm.tags.variableName), color: "var(--pico-primary)" },
-      { tag: cm.tags.definition(cm.tags.variableName), color: "var(--pico-color)" },
-      { tag: cm.tags.propertyName, color: "var(--pico-color)" },
-      { tag: cm.tags.typeName, color: "var(--pico-secondary)" },
-      { tag: cm.tags.className, color: "var(--pico-secondary)" },
-      { tag: cm.tags.operator, color: "var(--pico-color)" },
-      { tag: cm.tags.punctuation, color: "var(--pico-muted-color)" }
+      { tag: cm.tags.comment, color: "var(--on-surface-variant)" },
+      { tag: cm.tags.keyword, color: "var(--primary)" },
+      { tag: cm.tags.controlKeyword, color: "var(--primary)" },
+      { tag: cm.tags.string, color: "var(--secondary)" },
+      { tag: cm.tags.number, color: "var(--secondary)" },
+      { tag: cm.tags.bool, color: "var(--secondary)" },
+      { tag: cm.tags.null, color: "var(--secondary)" },
+      { tag: cm.tags.function(cm.tags.variableName), color: "var(--primary)" },
+      { tag: cm.tags.definition(cm.tags.variableName), color: "var(--on-surface)" },
+      { tag: cm.tags.propertyName, color: "var(--on-surface)" },
+      { tag: cm.tags.typeName, color: "var(--secondary)" },
+      { tag: cm.tags.className, color: "var(--secondary)" },
+      { tag: cm.tags.operator, color: "var(--on-surface)" },
+      { tag: cm.tags.punctuation, color: "var(--on-surface-variant)" }
     ]);
     var theme = cm.EditorView.theme({
       "&": {
         height: "100%",
-        color: "var(--pico-color)",
-        backgroundColor: "var(--pico-background-color)"
+        color: "var(--on-surface)",
+        backgroundColor: "var(--surface)"
       },
       ".cm-content": {
         fontFamily: "ui-monospace, \"Cascadia Code\", Consolas, monospace",
         fontSize: "0.85rem",
-        caretColor: "var(--pico-color)",
+        caretColor: "var(--on-surface)",
         minHeight: "10rem"
       },
       ".cm-scroller": {
@@ -899,70 +913,70 @@
         lineHeight: "1.45"
       },
       ".cm-gutters": {
-        backgroundColor: "var(--pico-background-color)",
-        color: "var(--pico-muted-color)",
-        borderRight: "1px solid var(--pico-muted-border-color)"
+        backgroundColor: "var(--surface)",
+        color: "var(--on-surface-variant)",
+        borderRight: "1px solid var(--outline-variant)"
       },
       ".cm-activeLineGutter": {
-        backgroundColor: "color-mix(in srgb, var(--pico-muted-color) 8%, transparent)",
-        color: "var(--pico-color)"
+        backgroundColor: "color-mix(in srgb, var(--on-surface-variant) 8%, transparent)",
+        color: "var(--on-surface)"
       },
       ".cm-activeLine": {
-        backgroundColor: "color-mix(in srgb, var(--pico-muted-color) 8%, transparent)"
+        backgroundColor: "color-mix(in srgb, var(--on-surface-variant) 8%, transparent)"
       },
       "&.cm-focused": {
-        outline: "2px solid var(--pico-primary-focus)"
+        outline: "2px solid var(--primary)"
       },
       ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-        backgroundColor: "color-mix(in srgb, var(--pico-primary) 25%, transparent)"
+        backgroundColor: "color-mix(in srgb, var(--primary) 25%, transparent)"
       },
       ".cm-cursor": {
-        borderLeftColor: "var(--pico-color)"
+        borderLeftColor: "var(--on-surface)"
       },
       ".cm-tooltip": {
-        backgroundColor: "var(--pico-background-color)",
-        color: "var(--pico-color)",
-        border: "1px solid var(--pico-muted-border-color)"
+        backgroundColor: "var(--surface-container)",
+        color: "var(--on-surface)",
+        border: "1px solid var(--outline-variant)"
       },
       ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
-        backgroundColor: "color-mix(in srgb, var(--pico-primary) 20%, transparent)",
-        color: "var(--pico-color)"
+        backgroundColor: "color-mix(in srgb, var(--primary) 20%, transparent)",
+        color: "var(--on-surface)"
       },
       ".cm-completionIcon": {
-        color: "var(--pico-muted-color)"
+        color: "var(--on-surface-variant)"
       },
       ".cm-completionDetail": {
-        color: "var(--pico-muted-color)",
+        color: "var(--on-surface-variant)",
         fontStyle: "normal",
         marginLeft: "0.5rem"
       },
       ".cm-panels": {
-        backgroundColor: "var(--pico-background-color)",
-        color: "var(--pico-color)"
+        backgroundColor: "var(--surface-container)",
+        color: "var(--on-surface)"
       },
       ".cm-panel": {
-        color: "var(--pico-color)"
+        color: "var(--on-surface)"
       },
       ".cm-panel.cm-search": {
-        backgroundColor: "var(--pico-background-color)",
-        color: "var(--pico-color)"
+        backgroundColor: "var(--surface-container)",
+        color: "var(--on-surface)"
       },
       ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": {
-        color: "var(--pico-color)"
+        color: "var(--on-surface)"
       },
       ".cm-searchMatch": {
-        backgroundColor: "color-mix(in srgb, var(--pico-secondary) 35%, transparent)"
+        backgroundColor: "color-mix(in srgb, var(--secondary) 35%, transparent)"
       },
       ".cm-searchMatch-selected": {
-        backgroundColor: "color-mix(in srgb, var(--pico-primary) 40%, transparent)"
+        backgroundColor: "color-mix(in srgb, var(--primary) 40%, transparent)"
       },
       ".cm-matchingBracket": {
-        backgroundColor: "color-mix(in srgb, var(--pico-primary) 25%, transparent)",
-        outline: "1px solid var(--pico-primary)"
+        backgroundColor: "color-mix(in srgb, var(--primary) 25%, transparent)",
+        outline: "1px solid var(--primary)"
       },
       ".cm-nonmatchingBracket": {
-        color: "var(--pico-primary-hover)",
-        outline: "1px solid var(--pico-primary-hover)"
+        color: "var(--error)",
+        outline: "1px solid var(--error)"
       }
     });
     return [theme, cm.syntaxHighlighting(highlight)];
@@ -1016,7 +1030,7 @@
               // through the language-data facet so it merges instead of
               // spawning a second plugin via a second autocompletion() call.
               jsSupport.language.data.of({ autocomplete: completionSource }),
-              picoEditorTheme(cm),
+              beerEditorTheme(cm),
               cm.EditorView.lineWrapping,
               cm.EditorView.updateListener.of(function (update) {
                 if (update.docChanged) {
@@ -1038,13 +1052,16 @@
     return wrap;
   }
 
-  function checkboxInput(checked, onChange) {
+  function checkboxField(text, checked, onChange) {
+    var wrap = el("label", { className: "checkbox" });
     var box = el("input", { type: "checkbox" });
     box.checked = Boolean(checked);
     box.addEventListener("change", function () {
       onChange(box.checked);
     });
-    return box;
+    wrap.appendChild(box);
+    wrap.appendChild(el("span", { text: text }));
+    return wrap;
   }
 
   function sync() {
@@ -1315,19 +1332,18 @@
           labelField("Max tokens", maxTokens),
           labelField("Timeout (s)", timeout)
         ]),
-        el("label", { className: "wf-inline" }, [
-          checkboxInput(Boolean(node.strip_images), function (value) {
+        checkboxField(
+          "Strip images from the request after captioning (final forward + later nodes)",
+          Boolean(node.strip_images),
+          function (value) {
             node.strip_images = value;
             sync();
-          }),
-          document.createTextNode(
-            " Strip images from the request after captioning (final forward + later nodes)"
-          )
-        ]),
+          }
+        ),
         el("div", { className: "wf-prompts-toggle" }, [
           el("button", {
             type: "button",
-            className: "secondary outline",
+            className: "border small",
             text: "Prompts",
             onclick: function () {
               promptsWrap.hidden = !promptsWrap.hidden;
@@ -1342,34 +1358,32 @@
       ENV_ACTION_OPTIONS.forEach(function (pair) {
         var value = pair[0];
         actionsWrap.appendChild(
-          el("label", { className: "wf-inline" }, [
-            checkboxInput((node.actions || []).indexOf(value) !== -1, function (on) {
-              var list = (node.actions || []).slice();
-              var at = list.indexOf(value);
-              if (on && at === -1) {
-                list.push(value);
-              }
-              if (!on && at !== -1) {
-                list.splice(at, 1);
-              }
-              node.actions = list;
-              sync();
-            }),
-            document.createTextNode(" " + pair[1])
-          ])
+          checkboxField(pair[1], (node.actions || []).indexOf(value) !== -1, function (on) {
+            var list = (node.actions || []).slice();
+            var at = list.indexOf(value);
+            if (on && at === -1) {
+              list.push(value);
+            }
+            if (!on && at !== -1) {
+              list.splice(at, 1);
+            }
+            node.actions = list;
+            sync();
+          })
         );
       });
       typeFields = [
         labelField("Actions", actionsWrap, "Runs locally — no sub-request, no tokens."),
         labelField(
           "Timezone",
-          el("label", { className: "wf-inline" }, [
-            checkboxInput(node.use_system_timezone !== false, function (on) {
+          checkboxField(
+            "Use system timezone when formatting is called",
+            node.use_system_timezone !== false,
+            function (on) {
               node.use_system_timezone = on;
               sync();
-            }),
-            document.createTextNode(" Use system timezone when formatting is called")
-          ]),
+            }
+          ),
           "Off = UTC."
         ),
         el("div", { className: "wf-vars" }, [
@@ -1433,20 +1447,14 @@
           "Keep only the last N messages in trimmed (0 = keep all)."
         ),
         el("div", { className: "wf-grid" }, [
-          el("label", { className: "wf-inline" }, [
-            checkboxInput(node.trim_drop_system, function (value) {
-              node.trim_drop_system = value;
-              sync();
-            }),
-            document.createTextNode(" Drop system messages")
-          ]),
-          el("label", { className: "wf-inline" }, [
-            checkboxInput(node.trim_drop_images, function (value) {
-              node.trim_drop_images = value;
-              sync();
-            }),
-            document.createTextNode(" Drop images")
-          ])
+          checkboxField("Drop system messages", node.trim_drop_system, function (value) {
+            node.trim_drop_system = value;
+            sync();
+          }),
+          checkboxField("Drop images", node.trim_drop_images, function (value) {
+            node.trim_drop_images = value;
+            sync();
+          })
         ]),
         el("div", { className: "wf-vars" }, [
           ["count", "user_count", "assistant_count", "image_count", "chars"].map(function (key) {
@@ -1475,23 +1483,23 @@
           "Define async function run(midware). Uses the bundled mini-racer engine."
         ),
         el("div", { className: "wf-grid" }, [
-          el("label", { className: "wf-inline" }, [
-            checkboxInput(node.allow_network, function (value) {
-              node.allow_network = value;
-              sync();
-            }),
-            document.createTextNode(" Allow network (midware.fetch)")
-          ]),
+          checkboxField("Allow network (midware.fetch)", node.allow_network, function (value) {
+            node.allow_network = value;
+            sync();
+          }),
           labelField("Timeout (s)", jsTimeout)
         ]),
-        el("p", {
-          className: "wf-card-note",
-          text: "midware.messages (the caller's conversation), midware.vars (earlier variables), midware.systemRequest. Use midware.set(k, v) to publish {{ " + (node.name || "node") + ".<k> }}, midware.setMessages(arr) to rewrite the context, await midware.fetch(url, opts) for HTTP, and await midware.chat({messages, model}) (or the APIRequest class) to ask a model through the connection above. The APIImageRequest class generates images the same way — create({prompt, ...}) or ask(prompt) returns their url. The return value and console.log go to the node's reasoning."
-        }),
-        el("p", {
-          className: "wf-card-note",
-          text: "Sandboxed V8: 16 MB memory cap, no filesystem. midware.fetch needs the network box; midware.chat goes through the connection (key stays server-side) and does not. The editor autocompletes midware.* and the sandbox's real globals; it falls back to a plain textarea if CodeMirror cannot load."
-        })
+        el("details", { className: "mw-reference" }, [
+          el("summary", { text: "Sandbox reference" }),
+          el("p", {
+            className: "wf-card-note",
+            text: "midware.messages (the caller's conversation), midware.vars (earlier variables), midware.systemRequest. Use midware.set(k, v) to publish {{ " + (node.name || "node") + ".<k> }}, midware.setMessages(arr) to rewrite the context, await midware.fetch(url, opts) for HTTP, and await midware.chat({messages, model}) (or the APIRequest class) to ask a model through the connection above. The APIImageRequest class generates images the same way — create({prompt, ...}) or ask(prompt) returns their url. The return value and console.log go to the node's reasoning."
+          }),
+          el("p", {
+            className: "wf-card-note",
+            text: "Sandboxed V8: 16 MB memory cap, no filesystem. midware.fetch needs the network box; midware.chat goes through the connection (key stays server-side) and does not. The editor autocompletes midware.* and the sandbox's real globals; it falls back to a plain textarea if CodeMirror cannot load."
+          })
+        ])
       ];
     } else {
       typeFields = [
@@ -1504,13 +1512,14 @@
           sync();
         })),
         el("div", { className: "wf-grid" }, [
-          el("label", { className: "wf-inline" }, [
-            checkboxInput(node.expect_json, function (value) {
+          checkboxField(
+            "Expect JSON (keys become {{ " + (node.name || "node") + ".<key> }})",
+            node.expect_json,
+            function (value) {
               node.expect_json = value;
               sync();
-            }),
-            document.createTextNode(" Expect JSON (keys become {{ " + (node.name || "node") + ".<key> }})")
-          ]),
+            }
+          ),
           labelField("Max tokens", maxTokens),
           labelField("Timeout (s)", timeout)
         ])
@@ -1684,7 +1693,7 @@
         el("strong", { text: "Final Request blocks" }),
         el("button", {
           type: "button",
-          className: "secondary outline",
+          className: "border small",
           text: "✕",
           title: "Close",
           onclick: closeBlocksModal
@@ -1703,7 +1712,7 @@
         }),
         el("button", {
           type: "button",
-          className: "secondary outline",
+          className: "border small",
           text: "+ Add core context",
           onclick: addCoreBlock
         })
@@ -1765,7 +1774,7 @@
         el("span", { className: "wf-block-count", text: blockSummary() }),
         el("button", {
           type: "button",
-          className: "secondary outline",
+          className: "border small",
           text: "Edit blocks",
           onclick: openBlocksModal
         })
@@ -1818,7 +1827,7 @@
         el("strong", { text: "Add node" }),
         el("button", {
           type: "button",
-          className: "secondary outline",
+          className: "border small",
           text: "✕",
           title: "Close",
           onclick: closeNodesModal
@@ -1899,14 +1908,15 @@
         className: "wf-card-note",
         text: "When a node's reply carries reasoning, prefix it to the reasoning the client receives, one logged block per node."
       }),
-      el("label", { className: "wf-inline" }, [
-        checkboxInput(Boolean(graph.reasoning), function (value) {
+      checkboxField(
+        "Surface node reasoning in responses",
+        Boolean(graph.reasoning),
+        function (value) {
           graph.reasoning = value;
           sync();
           render();
-        }),
-        document.createTextNode(" Surface node reasoning in responses")
-      ])
+        }
+      )
     ]);
   }
 
@@ -2001,7 +2011,7 @@
         el("div", { className: "wf-actions" }, [
           el("button", {
             type: "button",
-            className: "secondary outline",
+            className: "border small",
             text: "no, go back",
             onclick: function () {
               closeBetaModal();

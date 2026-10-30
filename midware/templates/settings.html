@@ -2,87 +2,96 @@
 {% block title %}Settings - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>Control panel</h1>
-  <p>Runtime knobs and maintenance.</p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>Settings</h1>
+    <p>Runtime knobs and maintenance.</p>
+  </div>
+</div>
 
 {% if admin_auth_enabled %}
 <h2>Control-panel login</h2>
 {% include "_http_warning.html" %}
 {% if admin_env_override %}
-<article class="flash flash-success">
+<article class="flash flash-success" role="status">
   Credentials come from <code>MIDWARE_ADMIN_USERNAME</code> / <code>MIDWARE_ADMIN_PASSWORD</code>,
   so the form below is disabled. Unset those to manage the login here.
 </article>
 {% else %}
-<form method="post">
+<form method="post" class="mw-form-section">
   <input type="hidden" name="action" value="credentials">
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Username
-      <input type="text" name="admin_username" required autocomplete="username" value="{{ admin_username }}">
-    </label>
-    <label>
-      Current password
-      <input type="password" name="current_password" required autocomplete="current-password">
-    </label>
+  <div class="mw-form-grid">
+    <div class="field label border">
+      <input type="text" name="admin_username" id="admin-username" required autocomplete="username" value="{{ admin_username }}" placeholder=" ">
+      <label for="admin-username">Username</label>
+    </div>
+    <div class="field label border">
+      <input type="password" name="current_password" id="admin-current-password" required autocomplete="current-password" placeholder=" ">
+      <label for="admin-current-password">Current password</label>
+    </div>
   </div>
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      New password
-      <input type="password" name="admin_password" required autocomplete="new-password">
-    </label>
-    <label>
-      Confirm new password
-      <input type="password" name="admin_password_confirm" required autocomplete="new-password">
-    </label>
+  <div class="mw-form-grid">
+    <div class="field label border">
+      <input type="password" name="admin_password" id="admin-password" required autocomplete="new-password" placeholder=" ">
+      <label for="admin-password">New password</label>
+    </div>
+    <div class="field label border">
+      <input type="password" name="admin_password_confirm" id="admin-password-confirm" required autocomplete="new-password" placeholder=" ">
+      <label for="admin-password-confirm">Confirm new password</label>
+    </div>
   </div>
-  <button type="submit">Update login</button>
+  <div class="mw-inline-actions">
+    <button type="submit">Update login</button>
+  </div>
 </form>
 {% endif %}
 {% endif %}
 
-<form method="post">
-  <h2>Request logging</h2>
-  <label>
-    Saved requests per API key
-    <input type="number" name="request_log_limit" min="0" max="100000" value="{{ log_limit }}">
-    <small>Each key keeps its newest N request/response bodies. MidWare trims older rows immediately. Set 0 to keep none.</small>
-  </label>
+<form method="post" class="mw-form-section">
+  <h2 style="margin-top:0">Request logging</h2>
+  <div class="field label border">
+    <input type="number" name="request_log_limit" id="request-log-limit" min="0" max="100000" value="{{ log_limit }}" placeholder=" ">
+    <label for="request-log-limit">Saved requests per API key</label>
+  </div>
+  <small class="mw-hint">Each key keeps its newest N request/response bodies. Older rows are trimmed immediately. Set 0 to keep none.</small>
 
   <h2>Premodels</h2>
-  <label>
-    Premodel prefix
-    <input type="text" name="premodel_prefix" value="{{ premodel_prefix }}" maxlength="32" required>
-    <small>Clients address a premodel as <code>{{ premodel_prefix }}slug</code> in the
-      <code>model</code> field. Default: <code>{{ default_premodel_prefix }}</code>.
-      No spaces, 1-32 characters, case-sensitive, and it must match from the very start
-      of the model string (include a trailing separator, e.g. <code>premodels/</code>).</small>
-  </label>
-  <button type="submit">Save settings</button>
-  <button type="submit" name="action" value="reset_premodel_prefix" class="secondary outline">Reset prefix to default</button>
+  <div class="field label border">
+    <input type="text" name="premodel_prefix" id="premodel-prefix" value="{{ premodel_prefix }}" maxlength="32" required placeholder=" ">
+    <label for="premodel-prefix">Premodel prefix</label>
+  </div>
+  <small class="mw-hint">Clients address a premodel as <code>{{ premodel_prefix }}slug</code> in the
+    <code>model</code> field. Default: <code>{{ default_premodel_prefix }}</code>. No spaces, 1-32
+    characters, case-sensitive, and it must match from the very start of the model string
+    (include a trailing separator, e.g. <code>premodels/</code>).</small>
+  <div class="mw-inline-actions">
+    <button type="submit">Save settings</button>
+    <button type="submit" name="action" value="reset_premodel_prefix" class="border">Reset prefix to default</button>
+  </div>
 </form>
 
 <h2>Maintenance</h2>
 <form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
   <input type="hidden" name="action" value="purge">
-  <button type="submit" class="secondary outline">Purge all logged requests</button>
-  <small class="sub">Deletes {{ request_count }} row(s). Keys and routes are untouched.</small>
+  <div class="mw-inline-actions">
+    <button type="submit" class="border error-text">Purge all logged requests</button>
+    <small class="mw-hint">Deletes {{ request_count }} row(s). Keys and routes are untouched.</small>
+  </div>
 </form>
 
 <h2>Runtime state</h2>
-<table class="compact">
-  <tbody>
-    <tr><th>Configured</th><td>{{ 'yes' if configured else 'no' }}{% if configured_at %} · {{ configured_at | datetime }}{% endif %}</td></tr>
-    <tr><th>Routes</th><td>{{ route_count }}</td></tr>
-    <tr><th>API keys</th><td>{{ key_count }}</td></tr>
-    <tr><th>Logged requests</th><td>{{ request_count }}</td></tr>
-    <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
-    <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
-    <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
-    <tr><th>Admin login</th><td>{% if not admin_auth_enabled %}disabled{% else %}{{ admin_username }}{% if admin_credentials_at %} · changed {{ admin_credentials_at | datetime }}{% endif %}{% endif %}</td></tr>
-    <tr><th>working??????</th><td>yesssss!!!!</td></tr>
-  </tbody>
-</table>
+<div class="scroll">
+  <table class="compact border">
+    <tbody>
+      <tr><th>Configured</th><td>{{ 'yes' if configured else 'no' }}{% if configured_at %} · {{ configured_at | datetime }}{% endif %}</td></tr>
+      <tr><th>Routes</th><td>{{ route_count }}</td></tr>
+      <tr><th>API keys</th><td>{{ key_count }}</td></tr>
+      <tr><th>Logged requests</th><td>{{ request_count }}</td></tr>
+      <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
+      <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
+      <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
+      <tr><th>Admin login</th><td>{% if not admin_auth_enabled %}disabled{% else %}{{ admin_username }}{% if admin_credentials_at %} · changed {{ admin_credentials_at | datetime }}{% endif %}{% endif %}</td></tr>
+    </tbody>
+  </table>
+</div>
 {% endblock %}

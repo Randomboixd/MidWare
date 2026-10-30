@@ -2,17 +2,19 @@
 {% block title %}{{ meta.label }} sign-in - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>{% if key %}Signed in with {{ meta.label }}{% else %}Sign-in failed{% endif %}</h1>
-  <p>{% if key %}You can close this tab now.{% else %}{{ error }}{% endif %}</p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>{% if key %}Signed in with {{ meta.label }}{% else %}Sign-in failed{% endif %}</h1>
+    <p>{% if key %}You can close this tab now.{% else %}{{ error }}{% endif %}</p>
+  </div>
+</div>
 
 {% if key %}
-<article class="flash flash-success">
+<article class="flash flash-success" role="status">
   We have already created the API key in the dashboard!
 </article>
 {% else %}
-<article class="flash flash-error">{{ error }}</article>
+<article class="flash flash-error" role="alert">{{ error }}</article>
 <p><small>Return to the MidWare tab and start the sign-in again.</small></p>
 {% endif %}
 {% endblock %}

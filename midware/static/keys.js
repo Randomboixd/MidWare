@@ -6,8 +6,6 @@
     return;
   }
 
-  var toggle = document.getElementById("advanced-toggle");
-  var panel = document.getElementById("advanced-panel");
   var allowPremodels = document.getElementById("allow-premodels");
   var restrictPremodels = document.getElementById("restrict-premodels");
   var premodelPanel = document.getElementById("premodel-panel");
@@ -102,12 +100,6 @@
     }
   }
 
-  if (toggle && panel) {
-    toggle.addEventListener("click", function () {
-      panel.hidden = false;
-      toggle.hidden = true;
-    });
-  }
   if (allowPremodels) {
     allowPremodels.addEventListener("change", syncPremodels);
   }

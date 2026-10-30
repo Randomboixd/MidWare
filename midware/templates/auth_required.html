@@ -2,9 +2,11 @@
 {% block title %}Sign in - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>Authentication required</h1>
-  <p>{{ message or "This page is protected. Your browser should ask for the MidWare username and password." }}</p>
-</hgroup>
-<p><a role="button" href="{{ request.full_path }}">Retry</a></p>
+<div class="mw-page-head">
+  <div>
+    <h1>Authentication required</h1>
+    <p>{{ message or "This page is protected. Your browser should ask for the MidWare username and password." }}</p>
+  </div>
+</div>
+<p><a class="button" href="{{ request.full_path }}">Retry</a></p>
 {% endblock %}

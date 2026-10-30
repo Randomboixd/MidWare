@@ -2,13 +2,15 @@
 {% block title %}Setup - MidWare{% endblock %}
 
 {% block content %}
-<hgroup>
-  <h1>Setup</h1>
-  <p>{% if routes %}Set the control-panel login.{% else %}Tell MidWare where to route traffic and give it the upstream key. It will mint your first client key.{% endif %}</p>
-</hgroup>
+<div class="mw-page-head">
+  <div>
+    <h1>Setup</h1>
+    <p>{% if routes %}Set the control-panel login.{% else %}Tell MidWare where to route traffic and give it the upstream key. It will mint your first client key.{% endif %}</p>
+  </div>
+</div>
 
 {% if routes %}
-<article class="flash flash-success">
+<article class="flash flash-success" role="status">
   MidWare already has an upstream route. This page only manages the admin login —
   add or edit upstreams on the <a href="{{ url_for('admin.routes') }}">Routes page</a>.
 </article>
@@ -16,82 +18,87 @@
 
 <form method="post">
   {% if auth_enabled and not credentials_ready %}
-  <article>
-  <h2>Control-panel login</h2>
-  {% include "_http_warning.html" %}
-  <label>
-    Setup code
-    <input type="text" name="setup_code" required autocomplete="off"
-           placeholder="32-character code" value="{{ form.get('setup_code', '') }}">
-    <small>Printed in the MidWare console/logs when the instance started. It proves you control this host.</small>
-  </label>
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Username
-      <input type="text" name="admin_username" required autocomplete="username"
-             value="{{ form.get('admin_username', admin_username) }}">
-    </label>
-    <label>
-      Password
-      <input type="password" name="admin_password" required autocomplete="new-password">
-      <small>Stored salted and hashed. Your browser will use this to reach the admin pages.</small>
-    </label>
-  </div>
-  </article>
+  <section class="mw-form-section">
+    <h2 style="margin-top:0">Control-panel login</h2>
+    {% include "_http_warning.html" %}
+    <div class="field label border">
+      <input type="text" name="setup_code" id="setup-code" required autocomplete="off"
+             placeholder=" " value="{{ form.get('setup_code', '') }}">
+      <label for="setup-code">Setup code</label>
+    </div>
+    <small class="mw-hint">Printed in the MidWare console/logs when the instance started. It proves you control this host.</small>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="text" name="admin_username" id="setup-username" required autocomplete="username"
+               placeholder=" " value="{{ form.get('admin_username', admin_username) }}">
+        <label for="setup-username">Username</label>
+      </div>
+      <div class="field label border">
+        <input type="password" name="admin_password" id="setup-password" required autocomplete="new-password" placeholder=" ">
+        <label for="setup-password">Password</label>
+      </div>
+    </div>
+    <small class="mw-hint">Stored salted and hashed. Your browser will use this to reach the admin pages.</small>
+  </section>
   {% endif %}
 
   {% if not routes %}
-  <article>
-  <h2>Upstream route</h2>
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Route name
-      <input type="text" name="name" placeholder="OpenAI" value="{{ form.get('name', 'Default') }}">
-    </label>
-    <label>
-      Target host
-      <input type="url" name="target_host" required
-             placeholder="https://api.openai.com"
-             value="{{ form.get('target_host', defaults.DEFAULT_TARGET_HOST) }}">
-      <small>Base URL of the provider. A trailing <code>/v1</code> is fine.</small>
-    </label>
-  </div>
+  <section class="mw-form-section">
+    <h2 style="margin-top:0">Upstream route</h2>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="text" name="name" id="setup-route-name" placeholder=" " value="{{ form.get('name', 'Default') }}">
+        <label for="setup-route-name">Route name</label>
+      </div>
+      <div class="field label border">
+        <input type="url" name="target_host" id="setup-target-host" required placeholder=" "
+               value="{{ form.get('target_host', defaults.DEFAULT_TARGET_HOST) }}">
+        <label for="setup-target-host">Target host</label>
+      </div>
+    </div>
+    <small class="mw-hint">Base URL of the provider. A trailing <code>/v1</code> is fine.</small>
 
-  <label>
-    Upstream API key
-    <input type="password" name="upstream_key" autocomplete="off"
-           placeholder="sk-..." value="{{ form.get('upstream_key', '') }}">
-    <small>Stored locally in SQLite and injected into upstream requests. Clients never see it.</small>
-  </label>
-  <input type="hidden" name="provider" value="">
+    <div class="field label border">
+      <input type="password" name="upstream_key" id="setup-upstream-key" autocomplete="off"
+             placeholder=" " value="{{ form.get('upstream_key', '') }}">
+      <label for="setup-upstream-key">Upstream API key</label>
+    </div>
+    <small class="mw-hint">Stored locally in SQLite and injected into upstream requests. Clients never see it.</small>
+    <input type="hidden" name="provider" value="">
 
-  {% include "_signin.html" %}
+    {% include "_signin.html" %}
 
-  <label>
-    <input type="checkbox" name="test_connection" value="1"
-           {% if form.get('test_connection', '1') %}checked{% endif %}>
-    <input type="hidden" name="test_connection" value="0">
-    Test the connection and fetch models before saving
-  </label>
-  <small>MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</small>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Test the connection and fetch models before saving
+        <span class="mw-hint">MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection and fetch models before saving"
+               {% if form.get('test_connection', '1') %}checked{% endif %}>
+        <span></span>
+      </label>
+      <input type="hidden" name="test_connection" value="0">
+    </div>
 
-  <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
-    <label>
-      Your first MidWare key name
-      <input type="text" name="key_name" placeholder="laptop" value="{{ form.get('key_name', 'default') }}">
-      <small>Created only if you don't have any keys yet.</small>
-    </label>
-    <label>
-      Saved requests per key
-      <input type="number" name="request_log_limit" min="0" max="100000"
-             value="{{ form.get('request_log_limit', defaults.DEFAULT_REQUEST_LOG_LIMIT) }}">
-      <small>How many request/response bodies to keep. 0 disables logging.</small>
-    </label>
-  </div>
-  </article>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="text" name="key_name" id="setup-key-name" placeholder=" " value="{{ form.get('key_name', 'default') }}">
+        <label for="setup-key-name">Your first MidWare key name</label>
+      </div>
+      <div class="field label border">
+        <input type="number" name="request_log_limit" id="setup-log-limit" min="0" max="100000"
+               placeholder=" " value="{{ form.get('request_log_limit', defaults.DEFAULT_REQUEST_LOG_LIMIT) }}">
+        <label for="setup-log-limit">Saved requests per key</label>
+      </div>
+    </div>
+    <small class="mw-hint">The first key is only created if you do not have any yet. The log limit controls how many request/response bodies to keep; 0 disables logging.</small>
+  </section>
   {% endif %}
 
-  <button type="submit">{{ 'Save & start proxying' if not routes else 'Save login' }}</button>
+  <div class="mw-inline-actions">
+    <button type="submit">{{ 'Save & start proxying' if not routes else 'Save login' }}</button>
+  </div>
 </form>
 
 {% if not routes %}

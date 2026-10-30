@@ -60,7 +60,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
-| `midware/templates/`, `midware/static/` | Jinja2 templates (PicoCSS v2 from CDN) and `style.css` / `request_detail.js` / `workflow.js`. |
+| `midware/templates/`, `midware/static/` | Jinja2 templates (BeerCSS v5 from CDN, dark-orange Material theme) and `style.css` / `request_detail.js` / `workflow.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
 | `run.py`, `wsgi.py` | Entrypoints; both read `HOST`/`PORT`, `wsgi.py` is used in the container. |
 | `Dockerfile`, `docker-compose.yml` | Container build; DB lives in the `/data` volume. |
@@ -566,8 +566,8 @@ Do not break these; several have regression tests.
   `APIRequest` subclass, sandbox-accurate globals from the mini-racer probe,
   and the ABSENT APIs (`URL`, `TextEncoder`, `fetch`, …) offered with an
   "Not available in this sandbox" info tooltip. Theme and syntax colours
-  come from Pico CSS variables (`picoEditorTheme`), so light/dark follow
-  the site — including the search panel (`cm-panels`/`cm-search`),
+  come from BeerCSS variables (`beerEditorTheme`), so the editor follows
+  the site theme — including the search panel (`cm-panels`/`cm-search`),
   matching/non-matching bracket marks, and search-match highlights.
   `makeDraggable` drops the card's `draggable` flag on mousedown
   over any
@@ -661,10 +661,15 @@ Do not break these; several have regression tests.
   `tests/test_logging_settings.py` (skipped-row accounting, metadata-only rows,
   form round-trip); the DB-level switches are in `tests/test_db.py`.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `441 passed` — **update this number whenever the test count changes.**
+  `443 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 
+- UI: BeerCSS v5 (pinned CDN) with the dark-orange Material palette in `style.css`.
+  Form controls use `.field` + `placeholder=" "` (or `label.active` for selects);
+  checkbox/radio/switch marks are drawn in CSS, so the icon font is never fetched.
+  BeerCSS sets `display` on articles, buttons and labels, so `[hidden]` is forced
+  to `display:none !important` — keep that guard when adding new hidden panels.
 - Type hints and `from __future__ import annotations` in modules; docstrings explain
   *why*, not *what*.
 - Snake_case functions, small helpers prefixed `_` for module-private.
