@@ -141,7 +141,7 @@ def setup():
         password = form.get("admin_password") or ""
         # Credentials may only be *created* here, never replaced: an existing login
         # is changed from Settings (which demands the current password). Otherwise
-        # any request carrying a cached Basic session could silently take the
+        # a request carrying a stale browser session could silently take the
         # account over.
         creating_credentials = auth_enabled and not credentials_ready
 
@@ -159,7 +159,8 @@ def setup():
         if routes:
             if creating_credentials:
                 adminauth.set_credentials(username, password)
-                flash("Admin credentials saved. Sign in to continue.", "success")
+                adminauth.login(username)
+                flash("Admin credentials saved. You are now signed in.", "success")
             return redirect(url_for("dashboard.index"))
 
         target_host = (form.get("target_host") or "").strip()
@@ -194,6 +195,7 @@ def setup():
         db.set_setting("request_log_limit", str(log_limit))
         if creating_credentials:
             adminauth.set_credentials(username, password)
+            adminauth.login(username)
         db.mark_configured()
         # Unchecking the test means "do not touch the network"; leave the catalogue
         # for the background/stale refresh instead of calling /v1/models here.
@@ -649,7 +651,10 @@ def _update_credentials():
         flash("New passwords do not match.", "error")
     else:
         adminauth.set_credentials(username, password)
-        flash("Admin credentials updated.", "success")
+        # Re-issue this browser's session with the new fingerprint; every other
+        # browser is signed out because its stored fingerprint no longer matches.
+        adminauth.login(username)
+        flash("Admin credentials updated. Other sessions were signed out.", "success")
     return redirect(url_for("admin.settings"))
 
 

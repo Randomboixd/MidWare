@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-from test_admin_auth import basic, seed
+from test_admin_auth import login, seed
 from test_proxy import StubResponse
 
 START_BODY = {
@@ -161,12 +161,10 @@ def test_signin_requires_login_once_claimed(secured_app):
 
     locked = client.post("/admin/signin/start", json={"provider": "nanogpt"})
     assert locked.status_code == 401
+    assert locked.get_json()["error"]["code"] == "authentication_required"
 
-    opened = client.post(
-        "/admin/signin/start",
-        json={"provider": "nanogpt"},
-        headers=basic("admin", "s3cret"),
-    )
+    login(client)
+    opened = client.post("/admin/signin/start", json={"provider": "nanogpt"})
     assert opened.status_code == 200
     assert opened.get_json()["ok"] is True
 
@@ -247,14 +245,12 @@ def test_openrouter_callback_requires_login_once_claimed(secured_app):
     install(secured_app)
     client = secured_app.test_client()
 
-    assert client.get("/admin/signin/openrouter/callback?code=a&state=b").status_code == 401
-    assert (
-        client.get(
-            "/admin/signin/openrouter/callback?code=a&state=b",
-            headers=basic("admin", "s3cret"),
-        ).status_code
-        == 400
-    )
+    locked = client.get("/admin/signin/openrouter/callback?code=a&state=b")
+    assert locked.status_code == 302
+    assert "/signin" in locked.headers["Location"]
+
+    login(client)
+    assert client.get("/admin/signin/openrouter/callback?code=a&state=b").status_code == 400
 
 
 def test_routes_page_offers_service_signin(configured_client):

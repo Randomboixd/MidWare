@@ -347,6 +347,27 @@ details[open] > summary::after {
   content: "▾";
 }
 
+.mw-nav-form {
+  display: inline;
+  margin: 0;
+}
+
+button.mw-nav-link {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mw-auth-page {
+  max-width: 26rem;
+  margin: 2.5rem auto;
+}
+
+.mw-auth-card h1 {
+  margin-block-start: 0;
+}
+
 .mw-inline-actions {
   display: flex;
   flex-wrap: wrap;

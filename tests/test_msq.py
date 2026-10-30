@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from datetime import timedelta
@@ -27,10 +26,7 @@ from midware.msq_checks import (
     text_forensics_findings,
 )
 
-
-def basic(username: str, password: str) -> dict[str, str]:
-    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-    return {"Authorization": f"Basic {token}"}
+from test_admin_auth import login
 
 
 def sse_chunks(*texts: str) -> list[bytes]:
@@ -341,9 +337,10 @@ def test_msq_requires_login(secured_app):
     client = secured_app.test_client()
 
     locked = client.get("/admin/msq/")
-    assert locked.status_code == 401
-    assert locked.headers["WWW-Authenticate"].startswith("Basic")
-    assert client.get("/admin/msq/", headers=basic("admin", "pw")).status_code == 200
+    assert locked.status_code == 302
+    assert "/signin" in locked.headers["Location"]
+    assert login(client, password="pw").status_code == 302
+    assert client.get("/admin/msq/").status_code == 200
 
 
 # -- hardcore checks ---------------------------------------------------------

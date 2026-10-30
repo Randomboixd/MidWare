@@ -29,8 +29,9 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     db.init_schema()
     app.extensions["midware_db"] = db
 
-    from .adminauth import ensure_setup_code
+    from .adminauth import ensure_secret_key, ensure_setup_code, register_template_context
 
+    ensure_secret_key(app)
     ensure_setup_code(app)
 
     app.extensions["midware_http"] = httpx.Client(
@@ -39,12 +40,14 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
         follow_redirects=False,
     )
 
+    from .blueprints.account import bp as account_bp
     from .blueprints.admin import bp as admin_bp
     from .blueprints.dashboard import bp as dashboard_bp
     from .blueprints.msq import bp as msq_bp
     from .blueprints.proxy import bp as proxy_bp
 
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(account_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(msq_bp)
     app.register_blueprint(proxy_bp)
@@ -54,6 +57,7 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     register_template_helpers(app)
     register_cors(app)
+    register_template_context(app)
 
     @app.after_request
     def _identify(response):

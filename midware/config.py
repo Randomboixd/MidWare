@@ -6,6 +6,7 @@ Every value can be overridden with an environment variable of the same name.
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -35,7 +36,10 @@ DATABASE = os.environ.get("MIDWARE_DB") or str(BASE_DIR / "midware.db")
 # next to the database file so the Docker /data volume holds both.
 IMAGES_DIR = os.environ.get("MIDWARE_IMAGES_DIR") or str(Path(DATABASE).parent / "images")
 
-SECRET_KEY = os.environ.get("MIDWARE_SECRET_KEY", "midware-dev-secret-change-me")
+# Signing key for the login session cookie. An empty value means "generate one
+# once and keep it in the database", so a fresh install does not ship with a
+# publicly known key. Set MIDWARE_SECRET_KEY to override (Docker Compose does).
+SECRET_KEY = os.environ.get("MIDWARE_SECRET_KEY", "")
 
 # Control-panel login. The password set here (if any) overrides the one stored in
 # the database, which makes it both a headless/Docker switch and a lockout
@@ -45,6 +49,23 @@ ADMIN_PASSWORD = os.environ.get("MIDWARE_ADMIN_PASSWORD", "")
 
 # Enforced for every human-facing page. Only the test fixtures turn it off.
 ADMIN_AUTH_ENABLED = True
+
+# Login sessions are signed cookies that survive closing the browser. Flask
+# refreshes the expiry on every visit, so this is an idle timeout, not a fixed
+# account age.
+ADMIN_SESSION_DAYS = max(1, min(_env_int("MIDWARE_ADMIN_SESSION_DAYS", 30), 365))
+PERMANENT_SESSION_LIFETIME = timedelta(days=ADMIN_SESSION_DAYS)
+SESSION_COOKIE_NAME = "midware_session"
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+# Self-hosted deployments often run on plain HTTP or behind a TLS terminator
+# that Flask cannot see; opt in explicitly when the browser sees HTTPS.
+SESSION_COOKIE_SECURE = _env_bool("MIDWARE_SESSION_COOKIE_SECURE", False)
+SESSION_REFRESH_EACH_REQUEST = True
+
+# Best-effort in-memory brake on password guessing. Zero attempts disables it.
+ADMIN_LOGIN_MAX_ATTEMPTS = _env_int("MIDWARE_ADMIN_LOGIN_MAX_ATTEMPTS", 5)
+ADMIN_LOGIN_WINDOW_SECONDS = _env_int("MIDWARE_ADMIN_LOGIN_WINDOW_SECONDS", 300)
 
 # How long we wait on the upstream provider, in seconds.
 UPSTREAM_TIMEOUT = float(os.environ.get("MIDWARE_UPSTREAM_TIMEOUT", "300"))

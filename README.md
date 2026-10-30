@@ -78,7 +78,7 @@ This allows the same MidWare instance to expose models from multiple providers w
 * Streaming responses
 * Token accounting
 * Request history and request inspector
-* Basic Auth protected administration
+* Cookie-session protected administration
 * Instance claiming during initial setup
 * Premodels
 * Premodel workflows (chained AI sub-calls)
@@ -251,9 +251,9 @@ MidWare is designed around the idea that upstream API credentials should stay on
 
 Clients receive `mw-...` keys instead.
 
-The admin interface is separately protected with HTTP Basic Authentication, while `/v1/\*` uses MidWare API keys.
+The admin interface is separately protected with a browser login at `/signin`, while `/v1/\*` uses MidWare API keys. Sessions last 30 days by default (`MIDWARE_ADMIN_SESSION_DAYS`), survive closing the browser, and are refreshed on each visit. Changing the password signs out every other browser.
 
-For anything exposed beyond a trusted local network, use HTTPS. Running Basic Auth over plain HTTP means the credentials are not encrypted in transit.
+For anything exposed beyond a trusted local network, use HTTPS. Over plain HTTP the login password and session cookie are sent to the server unencrypted. When a TLS proxy terminates HTTPS in front of MidWare, set `MIDWARE_SESSION_COOKIE_SECURE=1` so the browser only returns the session cookie over HTTPS.
 
 A private Tailscale deployment is also a very nice way to keep MidWare away from the public internet.
 
@@ -296,7 +296,7 @@ The `appdata` directory contains MidWare's persistent data, including its SQLite
 
 ### Setting the secret key
 
-`MIDWARE\_SECRET\_KEY` should be a long, random secret. Don't just use `password123`, your cat's name, or the output of `echo "lol"`.
+`MIDWARE\_SECRET\_KEY` signs the login session cookie and should be a long, random secret. Don't just use `password123`, your cat's name, or the output of `echo "lol"`. Docker Compose requires it; when it is omitted (for example running `run.py` directly), MidWare generates one once and stores it in the database. Changing it signs out every browser.
 
 Python's `secrets` module can generate one:
 

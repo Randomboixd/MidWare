@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from test_admin_auth import basic, seed
+from test_admin_auth import login, seed
 from test_signin import install
 
 
@@ -165,8 +165,12 @@ def test_balance_requires_login_once_claimed(secured_app):
     )
     client = secured_app.test_client()
 
-    assert client.get(f"/admin/routes/{route_id}/balance").status_code == 401
-    opened = client.get(
-        f"/admin/routes/{route_id}/balance", headers=basic("admin", "s3cret")
+    locked = client.get(
+        f"/admin/routes/{route_id}/balance", headers={"Accept": "application/json"}
     )
+    assert locked.status_code == 401
+    assert locked.get_json()["error"]["code"] == "authentication_required"
+
+    login(client)
+    opened = client.get(f"/admin/routes/{route_id}/balance")
     assert opened.status_code == 200

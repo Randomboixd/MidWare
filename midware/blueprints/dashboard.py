@@ -8,7 +8,6 @@ from flask import (
     Blueprint,
     Response,
     abort,
-    make_response,
     redirect,
     render_template,
     request,
@@ -95,24 +94,16 @@ def request_detail(request_id: int):
         abort(404)
 
     locked = adminauth.messages_locked()
-    # The sign-in button reloads with ``?messages=1``; a 401 here is what makes the
-    # browser pop its login box. Cancelling leaves the caller on this page with a
-    # note, because the body below is the ordinary locked view.
+    # The sign-in button reloads with ``?messages=1``; send an unauthenticated
+    # caller to the login page and bring them straight back afterwards.
     if request.args.get("messages") == "1" and locked:
         if adminauth.enabled() and not adminauth.credentials_configured():
             return redirect(url_for("admin.setup"))
-        response = make_response(
-            render_template(
-                "request_detail.html",
-                row=row,
-                conversation={"messages": []},
-                messages_locked=True,
-                auth_message="You need to sign in to view that.",
-            ),
-            401,
+        return redirect(
+            adminauth.signin_url(
+                url_for("dashboard.request_detail", request_id=request_id, messages=1)
+            )
         )
-        response.headers["WWW-Authenticate"] = adminauth.CHALLENGE
-        return response
 
     conversation = (
         {"messages": []}
@@ -124,7 +115,6 @@ def request_detail(request_id: int):
         row=row,
         conversation=conversation,
         messages_locked=locked,
-        auth_message=None,
     )
 
 

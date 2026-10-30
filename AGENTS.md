@@ -42,7 +42,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/config.py` | Every setting, overridable by a same-named `MIDWARE_*` env var. |
 | `midware/db.py` | All persistence. Raw `sqlite3`, hand-written SQL, per-thread connections, schema + `_migrate()`. |
 | `midware/auth.py` | Client token extraction (`Authorization: Bearer` / `x-api-key`) + `authenticate()`; `get_db()` helper. |
-| `midware/adminauth.py` | HTTP Basic login for the human-facing pages: salted hashing, the admin guard/`admin_required`, `messages_locked()`, env-var override. |
+| `midware/adminauth.py` | Cookie-session login for the human-facing pages: salted hashing, `/signin` session handling, the admin guard/`admin_required`, `messages_locked()`, login throttle, secret-key provisioning, env-var override. |
 | `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); multipart text fields (`parse_multipart_fields`); `truncate`, `strip_ansi`, `model_from_request_body`. |
 | `midware/conversation.py` | Normalize request/response bodies (JSON, multipart or streamed) into display blocks for the viewer, including image/embedding `data` arrays. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
@@ -60,6 +60,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
+| `midware/blueprints/account.py` | Public `/signin` (GET/POST) and `/signout` (POST) pages for the control-panel session. |
 | `midware/templates/`, `midware/static/` | Jinja2 templates (BeerCSS v5 from CDN, dark-orange Material theme) and `style.css` / `request_detail.js` / `workflow.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
 | `run.py`, `wsgi.py` | Entrypoints; both read `HOST`/`PORT`, `wsgi.py` is used in the container. |
@@ -312,7 +313,7 @@ Do not break these; several have regression tests.
   module-level `_pending` table keyed by an unguessable token with a 10-minute
   TTL; the three `/admin/signin/*` endpoints bypass the login guard **only while
   no admin account exists** (the bootstrap setup page offers them too) and demand
-  Basic once claimed. The acquired key never touches the server: `signin.js`
+  a signed-in session once claimed. The acquired key never touches the server: `signin.js`
   fills the route form (key, provider host, and a suggested route name —
   `OpenRouter (OAuth)` / `NanoGPT` / `NanoGPT (Subscription)`, suffixed ` (n)` on
   collision, computed
@@ -605,26 +606,39 @@ Do not break these; several have regression tests.
 - **Conversation viewer**: table for request metadata excluding messages; messages are
   numbered, collapsible, and only the last user + last assistant start open. The
   client-side **Fetch** button re-requests `/requests/<id>/messages.json`.
-- **Admin login** (`adminauth.py`): HTTP Basic on every `/admin/*` route and on the
-  request-message surfaces (`/requests/<id>?messages=1`, `messages.json`). The
-  dashboard (`/`, `/activity`, `/requests`, and a detail page's metadata) stays
+- **Admin login** (`adminauth.py` + `blueprints/account.py`): a signed Flask session
+  cookie guards every `/admin/*` route and the request-message surfaces
+  (`/requests/<id>?messages=1`, `messages.json`). `/signin` (GET/POST) and
+  `/signout` (POST) are public; `/signin` redirects to `/admin/setup` until
+  credentials exist. Sessions are persistent (`PERMANENT_SESSION_LIFETIME`, default
+  30 days via `MIDWARE_ADMIN_SESSION_DAYS`, refreshed on each visit), named
+  `midware_session`, and carry `HttpOnly` + `SameSite=Lax`; `Secure` is opt-in with
+  `MIDWARE_SESSION_COOKIE_SECURE`. The session stores an HMAC credential
+  fingerprint keyed by the app secret, so changing the password invalidates every
+  other browser without a session table. `MIDWARE_SECRET_KEY` wins when set;
+  otherwise `issue_session_secret()` generates one once into `meta` so logins
+  survive a restart. Failed logins are throttled in memory per IP+username
+  (`ADMIN_LOGIN_MAX_ATTEMPTS` / `ADMIN_LOGIN_WINDOW_SECONDS`). Unauthenticated
+  browser requests redirect to `/signin?next=…`; JSON callers (`request.is_json`,
+  `Accept: application/json`, or a `.json` path) get `401`
+  `authentication_required`, and `?messages=1` likewise redirects to `/signin`.
+  The dashboard (`/`, `/activity`, `/requests`, and a detail page's metadata) stays
   public; only message bodies and raw payloads are hidden (`messages_locked()`).
   With no credentials configured, all admin pages redirect to `/admin/setup`, which
   is the only open page and where the login is chosen (fresh install *and*
-  migration). Claiming the instance requires the 32-char `admin_setup_code`: a
-  startup banner prints it to the server console, and only someone who can read the
-  logs (i.e. controls the host) will pass. Setup can only ever *create* the login:
-  once credentials exist it never renders or accepts the account form, and with a
-  route present it redirects to `/admin/routes`. Changing the login is exclusively
-  `/admin/settings`, which demands the current password (this closes a cached-Basic
-  / CSRF account-takeover hole). Passwords are salted scrypt hashes in `meta`.
-  `MIDWARE_ADMIN_USERNAME` /
-  `MIDWARE_ADMIN_PASSWORD` override the database (headless provisioning + lockout
-  recovery) and skip the claim step. The setup and settings login forms also show a
-  client-side warning when the page is served over plain HTTP. The proxy surface is
-  unaffected and never emits a `WWW-Authenticate` header. The detail route returns a
-  `401` + `WWW-Authenticate` on `?messages=1` so the browser prompts, falling back to
-  the locked page with a note when the prompt is cancelled.
+  migration); saving it signs the browser in. Claiming the instance requires the
+  32-char `admin_setup_code`: a startup banner prints it to the server console, and
+  only someone who can read the logs (i.e. controls the host) will pass. Setup can
+  only ever *create* the login: once credentials exist it never renders or accepts
+  the account form, and with a route present it redirects to `/admin/routes`.
+  Changing the login is exclusively `/admin/settings`, which demands the current
+  password (this closes a stale-session account-takeover hole) and re-issues the
+  current session while signing out the others. Passwords are salted scrypt hashes
+  in `meta`. `MIDWARE_ADMIN_USERNAME` / `MIDWARE_ADMIN_PASSWORD` override the
+  database (headless provisioning + lockout recovery) and skip the claim step. The
+  setup and settings login forms also show a client-side warning when the page is
+  served over plain HTTP. The proxy surface is unaffected and never emits a
+  `WWW-Authenticate` header.
 
 ## Testing
 
@@ -633,6 +647,8 @@ Do not break these; several have regression tests.
   login. `app` installs a `_ProbeClient` so admin connection tests never hit the
   network, and sets `ADMIN_AUTH_ENABLED=False` so unrelated tests skip the login;
   `secured_app` is the same app with auth on (`tests/test_admin_auth.py`).
+- Auth tests sign in with `login(client, ...)` from `tests/test_admin_auth.py`
+  (a POST to `/signin`); there is no Basic-auth helper.
 - Proxy tests use the hand-rolled `StubClient`/`StubResponse` and `install_stub()`
   from `tests/test_proxy.py`; import them from there in other test modules.
 - The provider fake in `tests/test_signin.py` (`FakeUpstream`/`install`) also
@@ -661,7 +677,7 @@ Do not break these; several have regression tests.
   `tests/test_logging_settings.py` (skipped-row accounting, metadata-only rows,
   form round-trip); the DB-level switches are in `tests/test_db.py`.
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `443 passed` — **update this number whenever the test count changes.**
+  `452 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

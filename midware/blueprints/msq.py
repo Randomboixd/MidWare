@@ -1,8 +1,8 @@
 """MSQ control panel: list recorders, create/edit/delete them, run one now.
 
-Everything here is behind the admin login (the same HTTP Basic challenge used by
-the request viewer), because running a probe spends the upstream credential and
-the results expose provider behaviour.
+Everything here is behind the admin login (the same browser session used by the
+request viewer), because running a probe spends the upstream credential and the
+results expose provider behaviour.
 """
 
 from __future__ import annotations

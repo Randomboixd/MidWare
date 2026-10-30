@@ -20,11 +20,22 @@
       <a class="mw-brand{{ ' active' if here in ('dashboard.index', 'dashboard.activity') }}" href="{{ url_for('dashboard.index') }}"{% if here == 'dashboard.index' %} aria-current="page"{% endif %}>MidWare</a>
       <span class="mw-nav-spacer"></span>
       {{ nav_link('Requests', 'dashboard.requests_page', 'dashboard.request') }}
+      {% if not admin_auth_enabled or admin_signed_in %}
       {{ nav_link('MSQ', 'msq.index', 'msq.') }}
       {{ nav_link('Keys', 'admin.keys', 'admin.key') }}
       {{ nav_link('Routes', 'admin.routes', 'admin.route') }}
       {{ nav_link('Premodels', 'admin.premodels', 'admin.premodel') }}
       {{ nav_link('Settings', 'admin.settings', none) }}
+      {% endif %}
+      {% if admin_auth_enabled %}
+      {% if admin_signed_in %}
+      <form method="post" action="{{ url_for('account.signout') }}" class="mw-nav-form">
+        <button type="submit" class="mw-nav-link">Sign out</button>
+      </form>
+      {% else %}
+      <a class="mw-nav-link" href="{{ url_for('account.signin') }}">Sign in</a>
+      {% endif %}
+      {% endif %}
     </nav>
   </header>
 

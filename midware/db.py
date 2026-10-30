@@ -593,6 +593,21 @@ class Database:
             )
         return self.get_meta("admin_setup_code") or code
 
+    def issue_session_secret(self) -> str:
+        """Return the persisted cookie-signing secret, creating it once if absent.
+
+        Persisting it means login sessions survive a restart without requiring
+        ``MIDWARE_SECRET_KEY`` on small self-hosted installs. The INSERT OR IGNORE
+        keeps two processes starting at once from choosing different secrets.
+        """
+        secret = secrets.token_hex(32)
+        with self.write() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                ("admin_session_secret", secret),
+            )
+        return self.get_meta("admin_session_secret") or secret
+
     def clear_setup_code(self) -> None:
         with self.write() as conn:
             conn.execute("DELETE FROM meta WHERE key = ?", ("admin_setup_code",))

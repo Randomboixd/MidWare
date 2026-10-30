@@ -48,10 +48,9 @@
 
 {% if messages_locked %}
 <h2>Messages</h2>
-{% if auth_message %}<article class="flash flash-error" role="alert">{{ auth_message }}</article>{% endif %}
 <article class="mw-form-section">
   <p>Message history is protected. Sign in to view the full request and response.</p>
-  <p><a class="button" href="{{ url_for('dashboard.request_detail', request_id=row['id'], messages=1) }}">Sign in to view messages</a></p>
+  <p><a class="button" href="{{ url_for('account.signin', next=url_for('dashboard.request_detail', request_id=row['id'], messages=1)) }}">Sign in to view messages</a></p>
 </article>
 {% else %}
 <h2>Messages</h2>
