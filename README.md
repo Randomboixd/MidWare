@@ -245,6 +245,35 @@ MSQ can therefore tell you that a provider isn't merely responding — it's actu
 
 Keep in mind that MSQ sends real requests and therefore **uses real provider tokens**.
 
+## System Management Accounts
+
+For automation that needs to *manage* MidWare - creating routes, minting keys, editing MSQ recorders - a plain `mw-...` key is not enough. The System Management API at `/_midware/api/v1` requires every request to be signed with an Ed25519 key, so a stolen token alone cannot be used. The full protocol and a copy-pasteable client live in [SMA.md](SMA.md).
+
+The flow:
+
+1. The client generates an Ed25519 keypair and calls `POST /_midware/api/v1/EnrollSystemAccount` with its public key, a name, a return URL and the permissions it wants. It gets back a pending token and the server's public key.
+2. `POST /_midware/api/v1/ActivateSystemAccount` (signed) returns a one-time consent link.
+3. The admin opens `/_midware/authorize/<token>`, sees exactly which permissions are requested and where the client will send the user back, then Allows or Denies.
+4. `POST /_midware/api/v1/ActivateSystemAccount/exchange` (signed) trades the pending token for a `sma_live_...` token. Every later call to `/_midware/api/v1/interact/*` is signed the same way.
+
+The signature is over a NUL-separated canonical string:
+
+```
+"MW-SMA-1" \0 account_id \0 METHOD \0 path(+query) \0 timestamp \0 nonce \0 sha256(body)
+```
+
+Sent as `X-Midware-Account`, `X-Midware-Timestamp` (Unix seconds, within `MIDWARE_SMA_NONCE_WINDOW_SECONDS`), `X-Midware-Nonce` (unique per request) and `X-Midware-Signature`, alongside `Authorization: Bearer sma_live_...`. Responses are signed back with the server key under `MW-SMA-RESP-1`.
+
+Permissions are deny-by-default and closed: `midware.read:routes`, `midware.write:routes`, `midware.edit:routes`, `midware.write:apikeys`, `midware.read:apikeysowned`, `midware.edit:apikeysowned`, `midware.read:apikeystatus`, `midware.write:apikeystatus`, `midware.read:msq`, `midware.write:msq`, `midware.edit:msq`. `write` includes delete. Every account can also shut itself off. `read:routes` never returns the upstream API key.
+
+Keys can be switched off without deleting them: a disabled key is recognised and refused with `403 api_key_disabled`, and re-enabling restores it with the same token. The keys page has a toggle, and the `apikeystatus` scopes expose it to automation.
+
+Keys minted through the API are tagged to the account that made them, and cannot be unrestricted: they must name route or model ids.
+
+The whole surface is switched from **Settings → System Management Accounts API**. Revoking an account there takes effect on its next call and deletes the keys it minted. Enrollment is unauthenticated, so it is rate-limited per address and pending requests expire.
+
+If this server is reachable over plain HTTP, signed requests still cannot be forged from a captured token, but an active attacker on the network can relay a request while it is fresh. So the API refuses plain HTTP by default. It answers over HTTPS out of the box; if the instance has no TLS and sits on a network you trust, tick **Allow over plain HTTP** in Settings. Behind a TLS terminator, set `MIDWARE_TRUST_PROXY_HOPS=1` so MidWare sees the original scheme.
+
 ## Security
 
 MidWare is designed around the idea that upstream API credentials should stay on the server.

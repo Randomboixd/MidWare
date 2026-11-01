@@ -71,6 +71,73 @@
   </div>
 </form>
 
+<h2>System Management Accounts API</h2>
+<form method="post" class="mw-form-section">
+  <input type="hidden" name="sma_present" value="1">
+  <input type="hidden" name="request_log_limit" value="{{ log_limit }}">
+  {% if premodel_prefix %}<input type="hidden" name="premodel_prefix" value="{{ premodel_prefix }}">{% endif %}
+  <label class="checkbox">
+    <input type="checkbox" name="sma_enabled" value="1" {% if sma_enabled %}checked{% endif %}>
+    <span>System Management Accounts API</span>
+  </label>
+  <small class="mw-hint">Signed, scoped access for automation at <code>/_midware/api/v1</code>.
+    Turning this off refuses every call, including pending activations.</small>
+
+  <label class="checkbox" style="margin-top:1rem">
+    <input type="checkbox" name="sma_allow_plain_http" value="1"
+           {% if sma_allow_plain_http %}checked{% endif %}>
+    <span>Allow over plain HTTP</span>
+  </label>
+  <input type="hidden" name="sma_allow_present" value="1">
+  <small class="mw-hint">Off by default: the API answers over HTTPS, and refuses
+    plain HTTP. Turn this on only if this instance lives on a trusted network
+    without TLS — on plain HTTP an attacker who can watch the connection can
+    relay a signed request while it is fresh.</small>
+  {% if not sma_https %}
+  <small class="mw-hint">This page is being served over plain HTTP.</small>
+  {% endif %}
+
+  <div class="mw-inline-actions">
+    <button type="submit">Save settings</button>
+  </div>
+</form>
+
+{% if sma_accounts %}
+<div class="scroll">
+  <table class="compact border">
+    <thead>
+      <tr>
+        <th>Account</th>
+        <th>State</th>
+        <th>Permissions</th>
+        <th>Requested</th>
+        <th>Last used</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in sma_accounts %}
+      {% set account = entry.account %}
+      <tr>
+        <td>{{ account.name }}<br><small class="mw-hint"><code>{{ account.key_fingerprint }}</code></small></td>
+        <td>{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<br><small class="mw-hint">expires {{ account.expires_at | datetime }}</small>{% endif %}</td>
+        <td><small class="mw-hint">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</small></td>
+        <td>{{ account.created_at | datetime }}</td>
+        <td>{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
+        <td>
+          <form method="post" onsubmit="return confirm('Revoke {{ account.name }}? Keys it created will be deleted.')">
+            <input type="hidden" name="action" value="revoke_system_account">
+            <input type="hidden" name="system_account_id" value="{{ account.id }}">
+            <button type="submit" class="border small error-text">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <h2>Maintenance</h2>
 <form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
   <input type="hidden" name="action" value="purge">

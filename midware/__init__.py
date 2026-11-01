@@ -22,6 +22,20 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     if config_overrides:
         app.config.update(config_overrides)
 
+    proxy_hops = int(app.config.get("TRUST_PROXY_HOPS") or 0)
+    if proxy_hops > 0:
+        # Only trust X-Forwarded-* when the operator says a proxy is in front;
+        # otherwise a client could claim "https" and an arbitrary address.
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=proxy_hops,
+            x_proto=proxy_hops,
+            x_host=proxy_hops,
+            x_port=proxy_hops,
+        )
+
     if database_path is None:
         database_path = os.environ.get("MIDWARE_DB") or app.config["DATABASE"]
 
@@ -45,12 +59,41 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     from .blueprints.dashboard import bp as dashboard_bp
     from .blueprints.msq import bp as msq_bp
     from .blueprints.proxy import bp as proxy_bp
+    from .blueprints.sma import api_bp as sma_api_bp
+    from .blueprints.sma import consent_bp as sma_consent_bp
+    from .blueprints.sma import sign_api_response
 
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(account_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(msq_bp)
     app.register_blueprint(proxy_bp)
+    app.register_blueprint(sma_api_bp)
+    app.register_blueprint(sma_consent_bp)
+
+    # App-level so it also signs routing errors and 404s that never match the
+    # System Management blueprint.
+    app.after_request(sign_api_response)
+
+    @app.errorhandler(404)
+    @app.errorhandler(405)
+    def _sma_http_error(exc):
+        from flask import jsonify, request
+
+        if request.path.startswith("/_midware/"):
+            return (
+                jsonify(
+                    {
+                        "error": {
+                            "message": exc.description or exc.name,
+                            "type": "midware_system_account_error",
+                            "code": (exc.name or "http_error").lower().replace(" ", "_"),
+                        }
+                    }
+                ),
+                exc.code or 500,
+            )
+        return exc
 
     from .cors import register_cors
     from .jinja import register_template_helpers
@@ -82,12 +125,16 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
 
 def _maybe_refresh_models() -> None:
-    from flask import current_app
+    from flask import current_app, request
 
     from .auth import get_db
     from .models import refresh_in_background
 
     if current_app.config.get("TESTING"):
+        return
+    if request.path.startswith("/_midware/"):
+        # The System Management API is server-to-server chatter; it must never
+        # sit behind a model-catalogue fetch (a known way to hang a request).
         return
     checker = current_app.extensions.get("midware_model_refresh")
     if checker is not None:

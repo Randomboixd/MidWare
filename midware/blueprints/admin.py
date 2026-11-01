@@ -16,7 +16,7 @@ from flask import (
     url_for,
 )
 
-from .. import adminauth, signin
+from .. import adminauth, signin, sma
 from ..auth import get_db
 from ..balance import fetch_balance
 from ..db import LIMIT_FLAG_FIELDS, LIMIT_VALUE_FIELDS
@@ -435,12 +435,25 @@ def route_balance(route_id: int):
 def keys():
     db = get_db()
     if request.method == "POST":
-        if request.form.get("action") == "delete":
+        action = request.form.get("action")
+        if action == "delete":
             from ..images import unlink_image
 
             for row in db.delete_api_key(request.form.get("key_id", type=int)):
                 unlink_image(row["id"], row["ext"])
             flash("Key deleted.", "success")
+        elif action == "toggle":
+            key_id = request.form.get("key_id", type=int)
+            key = db.get_api_key(key_id) if key_id else None
+            if key is None or key["is_system"]:
+                flash("That key no longer exists.", "error")
+            else:
+                enabled = not bool(key["enabled"])
+                db.set_api_key_enabled(key_id, enabled)
+                flash(
+                    f"Key '{key['name']}' {'enabled' if enabled else 'disabled'}.",
+                    "success",
+                )
         return redirect(url_for("admin.keys"))
 
     return render_template("keys.html", api_keys=db.list_api_keys())
@@ -595,11 +608,40 @@ def settings():
             db.set_setting("premodel_prefix", default)
             flash(f"Premodel prefix reset to '{default}'.", "success")
             return redirect(url_for("admin.settings"))
+        if action == "revoke_system_account":
+            account_id = request.form.get("system_account_id", type=int)
+            account = db.get_system_account(account_id) if account_id else None
+            if account is None:
+                flash("That system account no longer exists.", "error")
+            else:
+                revoked_keys = sma.revoke_account(db, account_id, "revoked by admin")
+                db.record_system_event(account_id, "admin.revoke", status=200)
+                flash(
+                    f"System account '{account['name']}' revoked"
+                    f" ({revoked_keys} minted key(s) deleted).",
+                    "success",
+                )
+            return redirect(url_for("admin.settings"))
+
+        if request.form.get("sma_present"):
+            enabled = _form_bool("sma_enabled")
+            db.set_sma_enabled(enabled)
+            if not enabled:
+                # The child switch is meaningless without the master switch; keep
+                # the stored pair consistent even on a forged submit.
+                db.set_sma_allow_plain_http(False)
+            elif request.form.get("sma_allow_present"):
+                db.set_sma_allow_plain_http(_form_bool("sma_allow_plain_http"))
 
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
         saved = f"Settings saved. Request log limit set to {log_limit}."
+        if request.form.get("sma_present"):
+            saved += (
+                " System Management Accounts API is "
+                + ("enabled." if db.sma_enabled(current_app.config["SMA_ENABLED"]) else "disabled.")
+            )
         if "premodel_prefix" in request.form:
             prefix = normalize_prefix(request.form.get("premodel_prefix"))
             if prefix is None:
@@ -615,6 +657,12 @@ def settings():
         log_limit=db.request_log_limit(),
         premodel_prefix=_premodel_prefix(db),
         default_premodel_prefix=current_app.config["DEFAULT_PREMODEL_PREFIX"],
+        sma_enabled=db.sma_enabled(current_app.config["SMA_ENABLED"]),
+        sma_allow_plain_http=db.sma_allow_plain_http(
+            current_app.config["SMA_ALLOW_PLAIN_HTTP"]
+        ),
+        sma_https=request.is_secure,
+        sma_accounts=_system_accounts(db),
         configured=db.is_configured(),
         configured_at=db.get_meta("configured_at"),
         route_count=len(db.list_routes()),
@@ -628,6 +676,27 @@ def settings():
         admin_env_override=adminauth.env_override_active(),
         admin_credentials_at=adminauth.credentials_set_at(),
     )
+
+
+def _system_accounts(db) -> list[dict]:
+    """Live system accounts for the settings panel, newest first.
+
+    Retired rows (denied, revoked, expired) are hidden: they cannot be acted on
+    and would otherwise pile up. `expire_system_accounts` prunes them after 30
+    days, the same window the audit log keeps.
+    """
+    db.expire_system_accounts()
+    rows: list[dict] = []
+    for row in reversed(db.list_system_accounts()):
+        if row["state"] not in {"pending", "approved", "active"}:
+            continue
+        rows.append(
+            {
+                "account": row,
+                "scopes": sma.parse_scopes(row["scopes"]),
+            }
+        )
+    return rows
 
 
 def _update_credentials():

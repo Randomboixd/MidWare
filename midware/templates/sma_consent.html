@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ account.name }} wants access - MidWare{% endblock %}
+
+{% block content %}
+<div class="mw-page-head">
+  <div>
+    <h1>{{ account.name }} wants to access this MidWare server.</h1>
+    <p>Only approve this if you started the request yourself.</p>
+  </div>
+</div>
+
+{% if tampered %}
+<article class="flash flash-error" role="alert">
+  This request does not match the details that were enrolled, so it has been
+  refused. Ask the client to enroll again.
+</article>
+{% endif %}
+
+{% if transport == 'plain' %}
+<article role="status">
+  This page and the API were reached over plain HTTP. Signatures still protect
+  the account, but anyone who can watch the network can replay a request while
+  it is fresh. Approve only on a network you trust.
+</article>
+{% endif %}
+
+<h2>What it can do</h2>
+{% if scopes %}
+<ul class="mw-scope-list">
+  {% for scope in scopes %}
+  <li>
+    <code>{{ scope }}</code>
+    <small class="mw-hint">{{ scope_descriptions.get(scope, '') }}</small>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<article class="flash flash-error" role="alert">This request asks for no permissions.</article>
+{% endif %}
+
+<h2>Who is asking</h2>
+<div class="scroll">
+  <table class="compact border">
+    <tbody>
+      <tr><th>Account</th><td>{{ account.name }}</td></tr>
+      <tr><th>Account ID</th><td>{{ account.id }}</td></tr>
+      <tr><th>Key fingerprint</th><td><code>{{ account.key_fingerprint }}</code></td></tr>
+      <tr><th>Requested</th><td>{{ account.created_at | datetime }}</td></tr>
+      <tr><th>From address</th><td>{{ account.requested_ip or 'unknown' }}</td></tr>
+      <tr><th>Returns to</th><td><code>{{ redirect_host }}</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Decision</h2>
+<form method="post" action="{{ url_for('sma_consent.consent_decide', token=token) }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="mw-inline-actions">
+    <button type="submit" name="decision" value="allow"{% if tampered %} disabled{% endif %}>Allow</button>
+    <button type="submit" name="decision" value="deny" class="border">Deny</button>
+  </div>
+  <small class="mw-hint">You can revoke this account later under Settings.</small>
+</form>
+{% endblock %}

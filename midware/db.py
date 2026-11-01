@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     restrict_models     INTEGER NOT NULL DEFAULT 0,
     allowed_model_ids   TEXT,
     is_system           INTEGER NOT NULL DEFAULT 0,
+    owner_system_account_id INTEGER REFERENCES system_accounts(id) ON DELETE SET NULL,
+    enabled             INTEGER NOT NULL DEFAULT 1,
     limit_tokens_enabled INTEGER NOT NULL DEFAULT 0,
     limit_tokens_hour    INTEGER NOT NULL DEFAULT 0,
     max_tokens_hour      INTEGER NOT NULL DEFAULT 0,
@@ -242,6 +244,73 @@ CREATE TABLE IF NOT EXISTS stored_images (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stored_images_expires ON stored_images(expires_at);
+
+-- System Management Accounts: an enrolled automation account with its own
+-- Ed25519 key, a scoped grant approved by the admin, and a hashed bearer token.
+-- Only the token hashes are stored; the plaintext is handed out once.
+CREATE TABLE IF NOT EXISTS system_accounts (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT    NOT NULL,
+    description           TEXT    NOT NULL DEFAULT '',
+    public_key            TEXT    NOT NULL,
+    key_fingerprint       TEXT    NOT NULL,
+    redirect_uri          TEXT    NOT NULL,
+    scopes                TEXT    NOT NULL DEFAULT '[]',
+    payload_hash          TEXT    NOT NULL,
+    state                 TEXT    NOT NULL DEFAULT 'pending',
+    pending_token_hash    TEXT,
+    token_hash            TEXT,
+    activation_token_hash TEXT,
+    activation_expires_at TEXT,
+    requested_ip          TEXT    NOT NULL DEFAULT '',
+    requested_transport   TEXT    NOT NULL DEFAULT '',
+    created_at            TEXT    NOT NULL,
+    expires_at            TEXT,
+    activated_at          TEXT,
+    last_used_at          TEXT,
+    revoked_at            TEXT,
+    revoked_reason        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_accounts_state ON system_accounts(state);
+CREATE INDEX IF NOT EXISTS idx_system_accounts_key ON system_accounts(public_key);
+
+CREATE TABLE IF NOT EXISTS system_account_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT    NOT NULL,
+    account_id INTEGER REFERENCES system_accounts(id) ON DELETE CASCADE,
+    action     TEXT    NOT NULL,
+    method     TEXT    NOT NULL DEFAULT '',
+    path       TEXT    NOT NULL DEFAULT '',
+    target_id  TEXT    NOT NULL DEFAULT '',
+    status     INTEGER NOT NULL DEFAULT 0,
+    ip         TEXT    NOT NULL DEFAULT '',
+    detail     TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_events_account ON system_account_events(account_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_system_events_created ON system_account_events(created_at);
+
+-- Replay defence: a signature may only be presented once inside the clock window.
+CREATE TABLE IF NOT EXISTS system_nonces (
+    account_id INTEGER NOT NULL REFERENCES system_accounts(id) ON DELETE CASCADE,
+    nonce      TEXT    NOT NULL,
+    expires_at TEXT    NOT NULL,
+    PRIMARY KEY (account_id, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_nonces_expires ON system_nonces(expires_at);
+
+CREATE TABLE IF NOT EXISTS sma_rate_usage (
+    system_account_id INTEGER NOT NULL REFERENCES system_accounts(id) ON DELETE CASCADE,
+    kind              TEXT    NOT NULL,
+    window            TEXT    NOT NULL,
+    window_start      TEXT    NOT NULL,
+    amount            INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (system_account_id, kind, window, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sma_rate_usage_start ON sma_rate_usage(window_start);
 """
 
 
@@ -491,6 +560,8 @@ class Database:
                     "image_url_https": "INTEGER NOT NULL DEFAULT 0",
                     "log_requests": "INTEGER NOT NULL DEFAULT 1",
                     "log_message_contents": "INTEGER NOT NULL DEFAULT 1",
+                    "owner_system_account_id": "INTEGER",
+                    "enabled": "INTEGER NOT NULL DEFAULT 1",
                 },
             )
 
@@ -1154,6 +1225,7 @@ class Database:
         image_url_https: bool = False,
         log_requests: bool = True,
         log_message_contents: bool = True,
+        owner_system_account_id: int | None = None,
     ) -> str:
         token = self.generate_token()
         if image_response_mode not in IMAGE_RESPONSE_MODES:
@@ -1171,10 +1243,10 @@ class Database:
                     limit_requests_hour, max_requests_hour, limit_requests_day,
                     max_requests_day, limit_requests_week, max_requests_week,
                     image_response_mode, image_retention_days, image_url_https,
-                    log_requests, log_message_contents
+                    log_requests, log_message_contents, owner_system_account_id
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?)
+                          ?, ?, ?)
                 """,
                 (
                     name,
@@ -1210,6 +1282,7 @@ class Database:
                     int(bool(image_url_https)),
                     int(bool(log_requests)),
                     int(bool(log_message_contents)),
+                    owner_system_account_id,
                 ),
             )
         return token
@@ -1317,8 +1390,278 @@ class Database:
         with self.write() as conn:
             conn.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (to_iso(utcnow()), key_id))
 
+    def set_api_key_enabled(self, key_id: int, enabled: bool) -> bool:
+        """Flip a key's on/off switch; ``False`` when the key does not exist.
+
+        Disabling is reversible and deliberately separate from deletion: the
+        row, its usage history and its limits all survive.
+        """
+        with self.write() as conn:
+            cur = conn.execute(
+                "UPDATE api_keys SET enabled = ? WHERE id = ? AND is_system = 0",
+                (1 if enabled else 0, key_id),
+            )
+            return cur.rowcount == 1
+
     def resolve_api_key(self, token: str | None) -> sqlite3.Row | None:
         return self.get_api_key_by_token(token or "")
+
+    # -- system management accounts -----------------------------------------
+
+    SYSTEM_ACCOUNT_STATES = ("pending", "approved", "active", "denied", "revoked")
+
+    _SYSTEM_ACCOUNT_FIELDS = (
+        "name",
+        "description",
+        "redirect_uri",
+        "scopes",
+        "payload_hash",
+        "state",
+        "pending_token_hash",
+        "token_hash",
+        "activation_token_hash",
+        "activation_expires_at",
+        "expires_at",
+        "activated_at",
+        "last_used_at",
+        "revoked_at",
+        "revoked_reason",
+    )
+
+    _SYSTEM_TOKEN_COLUMNS = {
+        "live": "token_hash",
+        "pending": "pending_token_hash",
+        "activation": "activation_token_hash",
+    }
+
+    def create_system_account(
+        self,
+        *,
+        name: str,
+        public_key: str,
+        key_fingerprint: str,
+        redirect_uri: str,
+        scopes: str,
+        payload_hash: str,
+        pending_token_hash: str,
+        description: str = "",
+        requested_ip: str = "",
+        requested_transport: str = "",
+        expires_at: str | None = None,
+    ) -> int:
+        with self.write() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO system_accounts (
+                    name, description, public_key, key_fingerprint, redirect_uri,
+                    scopes, payload_hash, state, pending_token_hash, requested_ip,
+                    requested_transport, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                """,
+                (
+                    name,
+                    description,
+                    public_key,
+                    key_fingerprint,
+                    redirect_uri,
+                    scopes,
+                    payload_hash,
+                    pending_token_hash,
+                    requested_ip,
+                    requested_transport,
+                    to_iso(utcnow()),
+                    expires_at,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_system_account(self, account_id: int) -> sqlite3.Row | None:
+        return self._row("SELECT * FROM system_accounts WHERE id = ?", (account_id,))
+
+    def get_system_account_by_token(self, token_hash: str, kind: str = "live") -> sqlite3.Row | None:
+        column = self._SYSTEM_TOKEN_COLUMNS.get(kind)
+        if column is None or not token_hash:
+            return None
+        return self._row(f"SELECT * FROM system_accounts WHERE {column} = ?", (token_hash,))
+
+    def system_account_key_holder(self, public_key: str) -> sqlite3.Row | None:
+        """The pending/active account already using this public key, if any.
+
+        Denied, expired and revoked rows do not block a fresh enrollment: the
+        same machine may legitimately try again after a revocation.
+        """
+        return self._row(
+            "SELECT * FROM system_accounts WHERE public_key = ? "
+            "AND state IN ('pending', 'approved', 'active') ORDER BY id LIMIT 1",
+            (public_key,),
+        )
+
+    def system_account_name_holder(self, name: str) -> sqlite3.Row | None:
+        return self._row(
+            "SELECT * FROM system_accounts WHERE lower(name) = lower(?) "
+            "AND state IN ('pending', 'approved', 'active') ORDER BY id LIMIT 1",
+            (name,),
+        )
+
+    def list_system_accounts(self) -> list[sqlite3.Row]:
+        return self._rows("SELECT * FROM system_accounts ORDER BY id")
+
+    def list_system_accounts_by_state(self, state: str) -> list[sqlite3.Row]:
+        return self._rows("SELECT * FROM system_accounts WHERE state = ? ORDER BY id", (state,))
+
+    def count_system_accounts_in_state(self, state: str) -> int:
+        return int(self._scalar("SELECT COUNT(*) FROM system_accounts WHERE state = ?", (state,)))
+
+    def count_recent_enrollments(self, ip: str, since: str) -> int:
+        return int(
+            self._scalar(
+                "SELECT COUNT(*) FROM system_accounts WHERE requested_ip = ? AND created_at >= ?",
+                (ip, since),
+            )
+        )
+
+    def update_system_account(self, account_id: int, **fields: Any) -> None:
+        updates = {key: value for key, value in fields.items() if key in self._SYSTEM_ACCOUNT_FIELDS}
+        if not updates:
+            return
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with self.write() as conn:
+            conn.execute(
+                f"UPDATE system_accounts SET {assignments} WHERE id = ?",
+                (*updates.values(), account_id),
+            )
+
+    def expire_system_accounts(self, now: datetime | None = None) -> int:
+        """Retire stale pending/approved rows and drop their one-time tokens."""
+        cutoff = to_iso(now or utcnow())
+        with self.write() as conn:
+            cur = conn.execute(
+                """
+                UPDATE system_accounts
+                SET state = 'revoked', revoked_at = ?, revoked_reason = 'expired',
+                    pending_token_hash = NULL, activation_token_hash = NULL,
+                    activation_expires_at = NULL
+                WHERE state IN ('pending', 'approved') AND expires_at IS NOT NULL
+                  AND expires_at <= ?
+                """,
+                (cutoff, cutoff),
+            )
+            # Retired accounts are kept only as a short audit tail; the settings
+            # panel never lists them, so they must not accumulate forever.
+            conn.execute(
+                "DELETE FROM system_accounts "
+                "WHERE state IN ('revoked', 'denied') AND COALESCE(revoked_at, created_at) < ?",
+                (to_iso((now or utcnow()) - timedelta(days=30)),),
+            )
+            return cur.rowcount
+
+    def consume_system_nonce(self, account_id: int, nonce: str, expires_at: str) -> bool:
+        """Record a nonce; ``False`` means it was already presented (a replay)."""
+        now = to_iso(utcnow())
+        with self.write() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO system_nonces (account_id, nonce, expires_at) VALUES (?, ?, ?)",
+                (account_id, nonce, expires_at),
+            )
+            conn.execute("DELETE FROM system_nonces WHERE expires_at <= ?", (now,))
+            return cur.rowcount == 1
+
+    def record_system_event(
+        self,
+        account_id: int | None,
+        action: str,
+        *,
+        method: str = "",
+        path: str = "",
+        target_id: Any = "",
+        status: int = 0,
+        ip: str = "",
+        detail: str = "",
+    ) -> None:
+        """Append an audit row; never raises into the caller's response."""
+        try:
+            with self.write() as conn:
+                conn.execute(
+                    "DELETE FROM system_account_events WHERE created_at < ?",
+                    (to_iso(utcnow() - timedelta(days=30)),),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO system_account_events (
+                        created_at, account_id, action, method, path, target_id,
+                        status, ip, detail
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        to_iso(utcnow()),
+                        account_id,
+                        action,
+                        method,
+                        path,
+                        str(target_id),
+                        int(status),
+                        ip,
+                        detail[:500],
+                    ),
+                )
+        except sqlite3.Error:
+            pass
+
+    def list_system_events(self, account_id: int | None = None, limit: int = 100) -> list[sqlite3.Row]:
+        limit = max(1, min(int(limit), 500))
+        if account_id is None:
+            return self._rows(
+                "SELECT * FROM system_account_events ORDER BY id DESC LIMIT ?", (limit,)
+            )
+        return self._rows(
+            "SELECT * FROM system_account_events WHERE account_id = ? ORDER BY id DESC LIMIT ?",
+            (account_id, limit),
+        )
+
+    def system_rate_usage_claim(
+        self, account_id: int, limits: dict[str, int], now: datetime | None = None
+    ) -> tuple[dict[str, int], bool]:
+        return self._rate_usage_claim("system_account", account_id, limits, now)
+
+    def list_api_keys_owned(self, owner_id: int) -> list[sqlite3.Row]:
+        return self._rows(
+            """
+            SELECT k.*,
+                   (SELECT COALESCE(SUM(u.requests), 0) FROM usage_daily u
+                    WHERE u.api_key_id = k.id) AS request_count,
+                   (SELECT COALESCE(SUM(u.total_tokens), 0) FROM usage_daily u
+                    WHERE u.api_key_id = k.id) AS token_count
+            FROM api_keys k
+            WHERE k.owner_system_account_id = ? AND k.is_system = 0
+            ORDER BY k.id
+            """,
+            (owner_id,),
+        )
+
+    def get_owned_api_key(self, owner_id: int, key_id: int) -> sqlite3.Row | None:
+        return self._row(
+            "SELECT * FROM api_keys WHERE id = ? AND owner_system_account_id = ? "
+            "AND is_system = 0",
+            (key_id, owner_id),
+        )
+
+    def sma_enabled(self, default: bool = True) -> bool:
+        raw = self.get_setting("sma_enabled")
+        if raw is None:
+            return default
+        return raw == "1"
+
+    def set_sma_enabled(self, enabled: bool) -> None:
+        self.set_setting("sma_enabled", "1" if enabled else "0")
+
+    def sma_allow_plain_http(self, default: bool = False) -> bool:
+        raw = self.get_setting("sma_allow_plain_http")
+        if raw is None:
+            return default
+        return raw == "1"
+
+    def set_sma_allow_plain_http(self, enabled: bool) -> None:
+        self.set_setting("sma_allow_plain_http", "1" if enabled else "0")
 
     # -- stored images --------------------------------------------------------
 
@@ -1371,6 +1714,7 @@ class Database:
     _RATE_TABLES = {
         "api_key": ("rate_usage", "api_key_id"),
         "premodel": ("premodel_rate_usage", "premodel_id"),
+        "system_account": ("sma_rate_usage", "system_account_id"),
     }
 
     def _prune_rate_usage(self, conn: sqlite3.Connection, table: str, now: datetime | None = None) -> None:

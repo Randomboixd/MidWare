@@ -97,6 +97,35 @@ def test_proxy_rejects_unknown_key(configured_client):
     assert response.get_json()["error"]["code"] == "invalid_api_key"
 
 
+def test_disabled_key_is_refused_then_reenabled(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+    key_id = db.list_api_keys()[0]["id"]
+
+    db.set_api_key_enabled(key_id, False)
+    blocked = client.post("/v1/chat/completions", json={"model": "m"}, headers=auth_header(token))
+    assert blocked.status_code == 403
+    assert blocked.get_json()["error"]["code"] == "api_key_disabled"
+
+    db.set_api_key_enabled(key_id, True)
+    allowed = client.get("/v1/models", headers=auth_header(token))
+    assert allowed.status_code == 200
+
+
+def test_admin_can_toggle_a_key(configured):
+    app, token = configured
+    db = app.extensions["midware_db"]
+    client = app.test_client()
+    key = db.list_api_keys()[0]
+
+    client.post("/admin/keys", data={"action": "toggle", "key_id": key["id"]})
+    assert db.get_api_key(key["id"])["enabled"] == 0
+
+    client.post("/admin/keys", data={"action": "toggle", "key_id": key["id"]})
+    assert db.get_api_key(key["id"])["enabled"] == 1
+
+
 def test_proxy_forwards_and_replaces_credentials(configured, monkeypatch):
     app, token = configured
     client = app.test_client()

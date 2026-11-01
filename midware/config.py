@@ -93,6 +93,43 @@ SQLITE_TIMEOUT = float(os.environ.get("MIDWARE_SQLITE_TIMEOUT", "5"))
 # Hard cap on how much of an upstream response we buffer for parsing, in bytes.
 MAX_CAPTURE_BYTES = _env_int("MIDWARE_MAX_CAPTURE_BYTES", 8 * 1024 * 1024)
 
+# How many reverse proxies sit in front of MidWare. Only when this is above zero
+# is X-Forwarded-Proto/X-Forwarded-For believed; otherwise a client could spoof
+# "https" and its own address by setting the header itself.
+TRUST_PROXY_HOPS = max(0, _env_int("MIDWARE_TRUST_PROXY_HOPS", 0))
+
+# -- System Management Accounts (SMA) ---------------------------------------
+# A signed, scoped API for automation under /_midware/api. Requests carry an
+# Ed25519 signature over the method, path, body digest, timestamp and a nonce,
+# so a stolen token alone is not enough to call it. The live on/off switch is
+# the "System Management Accounts API" setting; this is the default.
+
+SMA_ENABLED = _env_bool("MIDWARE_SMA_ENABLED", True)
+
+# A pending enrollment that is never approved is forgotten after this long.
+SMA_PENDING_TTL_SECONDS = _env_int("MIDWARE_SMA_PENDING_TTL_SECONDS", 86_400)
+
+# How long the consent link handed back to the client stays usable.
+SMA_ACTIVATION_TTL_SECONDS = _env_int("MIDWARE_SMA_ACTIVATION_TTL_SECONDS", 900)
+
+# Allowed clock difference, and the lifetime of a consumed nonce.
+SMA_NONCE_WINDOW_SECONDS = _env_int("MIDWARE_SMA_NONCE_WINDOW_SECONDS", 300)
+
+# Per-request body cap for the SMA surface.
+SMA_MAX_BODY_BYTES = _env_int("MIDWARE_SMA_MAX_BODY_BYTES", 65_536)
+
+# Unauthenticated enrollment is a free way to fill the database and pester the
+# admin, so it is throttled per address and capped globally.
+SMA_ENROLL_PER_HOUR = _env_int("MIDWARE_SMA_ENROLL_PER_HOUR", 5)
+SMA_MAX_PENDING = _env_int("MIDWARE_SMA_MAX_PENDING", 50)
+
+# Per-account request budget for interact/* calls.
+SMA_REQUESTS_PER_MINUTE = _env_int("MIDWARE_SMA_REQUESTS_PER_MINUTE", 120)
+
+# HTTPS is always acceptable. Plain HTTP is refused unless the instance opts in
+# here (or with the "Allow over plain HTTP" setting), because a captured signed
+# request can be relayed by anyone on the path while it is still fresh.
+SMA_ALLOW_PLAIN_HTTP = _env_bool("MIDWARE_SMA_ALLOW_PLAIN_HTTP", False)
 # -- Model Service Quality (MSQ) --------------------------------------------
 # MSQ periodically asks a model a fixed question and scores how well it answers
 # (latency, stray symbols, slop words). The scheduler is an in-process daemon

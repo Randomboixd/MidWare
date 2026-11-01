@@ -48,6 +48,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
 | `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
 | `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
+| `midware/sma.py` | System Management Accounts: Ed25519 request signing, the canonical signing payload, scope names, enrollment validation, route/key redaction. |
 | `midware/premodels.py` | Premodel overlays: slugging, configurable prefix parsing (`prefix_regex`/`normalize_prefix`), SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/workflow.py` | Premodel workflows: `normalize_workflow` validation, `WorkflowScope` variable expansion, `run_workflow` sub-call chain (Origin → API Request nodes → Final Request). |
 | `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url` (used by proxy + workflow; keeps `workflow.py` out of an import cycle with the blueprint). |
@@ -57,6 +58,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/msq_checks.py` | MSQ hardcore checks: incremental SSE audit, text forensics (repetition/glitch/template), long-context needle builder + grading. |
 | `midware/jinja.py` | Template filters (`tokens`, `comma`, `datetime`, `relative`, `ms`, `preview`) + `app_version`. |
 | `midware/blueprints/proxy.py` | The proxy surface: `/v1/*`, `/proxy/*`; auth, routing, forwarding, teeing, persisting. |
+| `midware/blueprints/sma.py` | System Management API (`/_midware/api/v1`) and the admin consent page (`/_midware/authorize`). |
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
@@ -92,6 +94,7 @@ this development environment, so Docker changes are verified by reading only.
 - `api_keys(id, name, description, token UNIQUE, cors_allow_origin,
   allow_premodels, restrict_premodels, allowed_premodel_ids, restrict_providers,
   allowed_route_ids, restrict_models, allowed_model_ids, is_system,
+  enabled,
   limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
   limit_requests_enabled, limit_requests_{minute,hour,day,week},
   max_requests_{minute,hour,day,week}, image_response_mode, image_retention_days,
@@ -172,6 +175,28 @@ this development environment, so Docker changes are verified by reading only.
   `kind` is `requests` or `tokens`; `window` is `minute`/`hour`/`day`/`week` floored
   to UTC (`rate_window_start`, week = Monday); `amount` is the consumption in the
   current window only. Rows older than 14 days are pruned on write.
+- `system_accounts(id, name, description, public_key, key_fingerprint, redirect_uri,
+  scopes JSON, payload_hash, state pending|approved|active|denied|revoked,
+  pending_token_hash, token_hash, activation_token_hash, activation_expires_at,
+  requested_ip, requested_transport, created_at, expires_at, activated_at,
+  last_used_at, revoked_at, revoked_reason)` — one enrolled System Management
+  account. Only token *hashes* are stored; the plaintext lives in the client and is
+  handed out once. `payload_hash` freezes `{name, public_key, redirect_uri, scopes}`
+  at enrollment so consent can refuse a row edited afterwards. Denied and revoked
+  rows are hidden from the settings panel and pruned by `expire_system_accounts`
+  after 30 days.
+- `system_account_events(id, created_at, account_id FK CASCADE, action, method, path,
+  target_id, status, ip, detail)` — append-only audit of enroll/activate/consent and
+  every `interact/*` call. Kept out of `requests` and `usage_daily`; pruned to 30
+  days.
+- `system_nonces(account_id FK CASCADE, nonce, expires_at, PK(account_id, nonce))` —
+  replay defence. The nonce is burned *after* the signature verifies, so an invalid
+  request cannot exhaust a client's nonces.
+- `sma_rate_usage(system_account_id FK CASCADE, kind, window, window_start, amount,
+  PK(...))` — per-account counter, registered in `_RATE_TABLES` so the shared
+  `_rate_usage_*` helpers drive it.
+- `api_keys.owner_system_account_id` (nullable `REFERENCES system_accounts(id) ON
+  DELETE SET NULL`) — tags keys minted by an SMA account. NULL for human keys.
 
 `init_schema()` calls `_migrate()` **before** `executescript(SCHEMA)` because
 `CREATE TABLE IF NOT EXISTS` will not reshape an old `requests` table. To add a
@@ -223,6 +248,17 @@ Do not break these; several have regression tests.
   `log_message_contents` off stores `request_body`/`response_body` as `NULL` while
   keeping the row's metadata (model, status, tokens, latency, error). Locks in
   `tests/test_logging_settings.py`.
+- **Key on/off switch** (`api_keys.enabled`, default `1`): a disabled key is
+  still a real key — `auth.authenticate()` recognises it and returns
+  `403 api_key_disabled`, so `/v1/*` (including `/v1/models`) and `/proxy/*`
+  stop answering while the row, its usage history and its limits survive.
+  Re-enabling restores service with the same token. The admin toggles it from
+  the keys page (`POST /admin/keys` with `action=toggle`); an SMA account uses
+  `GET /interact/apikeys/<id>/status` and `POST .../enable|disable` behind
+  `midware.read:apikeystatus` / `midware.write:apikeystatus`. Those two scopes
+  are deliberately **global** rather than `...owned`: they reach any real key,
+  which the consent page states outright. `is_system` keys are never toggleable
+  (`404 api_key_not_found`).
 - **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
   `/v1/embeddings`): already-forwarded endpoints made first-class by
   `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
@@ -278,6 +314,73 @@ Do not break these; several have regression tests.
   all-or-nothing; tokens settle in `_persist`; `429` codes are shared with key
   limits. A key-limit rejection rolls back before the premodel claim runs, so it
   never eats premodel quota; plain (non-premodel) calls touch no premodel counters.
+- **System Management Accounts** (`sma.py` + `blueprints/sma.py`): signed, scoped
+  access for automation at `/_midware/api/v1`, switched live by the *System
+  Management Accounts API* setting on `/admin/settings` (`db.sma_enabled`, default
+  `SMA_ENABLED`). Transport is a second gate: HTTPS always passes, plain HTTP is
+  refused until the *Allow over plain HTTP* child switch is ticked
+  (`db.sma_allow_plain_http`, default `SMA_ALLOW_PLAIN_HTTP` false), and saving the
+  master switch off forces that child off, so the nested pair cannot end up
+  inconsistent. A refusal is `403 insecure_transport`, and the consent page
+  applies the same rule (it is an admin decision page, so it must not be served
+  in the clear either). A normal key is a bearer token; this surface can rewrite
+  routes and mint keys, so possession of a token is not enough — every call also
+  carries `X-Midware-Account`, `X-Midware-Timestamp`, `X-Midware-Nonce` and
+  `X-Midware-Signature`, an Ed25519 signature over
+  `"MW-SMA-1" + account + method + path(+query) + timestamp + nonce + sha256(body)`
+  (`sma.signature_payload`). The public key comes from the stored enrollment row,
+  never from a header. Timestamp skew is capped by `SMA_NONCE_WINDOW_SECONDS`;
+  the nonce is stored in `system_nonces` and burned **after** the signature
+  verifies. Every response to `/_midware/api/*` is signed with the persisted
+  server key (`sma_server_signing_key` in `meta`) over the `MW-SMA-RESP-1`
+  scheme, carries `no-store`/`no-referrer`, and every failure uses the OpenAI
+  error shape with `type: midware_system_account_error`. Signing is an
+  app-level `after_request` (`sign_api_response`), not a blueprint hook, so
+  routing 404s and rejected signatures are signed too; the app-level 404/405
+  handlers similarly return JSON for `/_midware/*` instead of Flask's HTML page.
+  Enrollment (`POST /EnrollSystemAccount`) is unauthenticated by design, so it is
+  throttled per address (`SMA_ENROLL_PER_HOUR`), capped by `SMA_MAX_PENDING`, and
+  validates name (reserved names, control/bidi stripped), redirect URI (https
+  unless loopback, no userinfo/fragment) and scopes against the closed `SCOPES`
+  list. It freezes `{name, public_key, redirect_uri, scopes}` into `payload_hash`.
+  `ActivateSystemAccount` mints a random consent token (hash stored, single use,
+  `SMA_ACTIVATION_TTL_SECONDS`); the admin opens `/_midware/authorize/<token>`,
+  which is admin-guarded, shows the stored scopes plus the requester's address and
+  redirect host, warns on plain HTTP, and requires a session CSRF token on a
+  POST-only decision. Approval flips `pending -> approved` atomically (`WHERE
+  state='pending'`); a payload-digest mismatch is refused with 409 instead of
+  granting the edited scopes. Denial retires the consent link but keeps the
+  pending token so `status` can report `denied`. `exchange` (signed, `approved`
+  only) rotates to a fresh `sma_live_` token, clears the pending/activation
+  hashes and sets `active`; retrying after that is refused.
+  Scopes are deny-by-default and enforced by the `@scoped(...)` decorator via the
+  view attribute — an endpoint with no declared scope fails closed, locked by
+  `test_every_sma_endpoint_declares_a_scope`. `midware.write:self` is implicit and
+  never grantable, so `DisableSystemAccount` needs no grant. `read:routes` always
+  strips `upstream_key` (returning `has_upstream_key` instead), and
+  `read:apikeysowned` never returns a token. Keys minted with
+  `midware.write:apikeys` are tagged `owner_system_account_id`, are visible only
+  to that account, and must name route or model ids — an SMA may never mint (or
+  widen an owned key into) an unrestricted key (`apikey_scope_too_broad`). Naming
+  a route, or a `"<route_id>:<model_id>"` entry, also requires `midware.read:routes`
+  and the id must exist, so `write:apikeys` alone can only produce model-scoped keys.
+  Tokens are namespaced (`sma_live_` / `sma_pending_`): `token_kind` rejects a
+  `mw-` key before it reaches the database, and an SMA token is unknown to
+  `resolve_api_key`, so neither surface accepts the other's credential.
+  `/_midware/*` is skipped by `_maybe_refresh_models` (the model-refresh hook must
+  never sit on this path) and by the per-key CORS handler. Auditing writes
+  `system_account_events` for enroll, consent, exchange and every interact call.
+  Revocation (`admin.revoke` on `/admin/settings`, or self-disable) goes through
+  `sma.revoke_account`, which clears the token hashes *and* deletes every key
+  the account minted (with its stored images) — otherwise the grant would be
+  revoked while its keys keep spending upstream tokens. The next call is a 401.
+  `MIDWARE_TRUST_PROXY_HOPS` (default 0) is what makes `X-Forwarded-Proto`/`-For`
+  trusted via `ProxyFix`, which is how a TLS terminator makes `request.is_secure`
+  true. The settings page's SMA panel lists only pending/approved/active
+  accounts; denied and revoked rows are hidden and pruned by
+  `expire_system_accounts` after 30 days (their `system_account_events` cascade
+  with them, so the audit tail and the row lifetime match). Revoke is the only
+  row action.
 - **SSE parsing** (`parse_sse_events`): events end at blank lines. Captured bodies
   sometimes lose separators, so a `data:` line inside an event only starts a new
   event when the previous payload is complete JSON, or the previous payload was not a
@@ -676,8 +779,15 @@ Do not break these; several have regression tests.
 - Per-key request/message logging coverage lives in
   `tests/test_logging_settings.py` (skipped-row accounting, metadata-only rows,
   form round-trip); the DB-level switches are in `tests/test_db.py`.
+- System Management Account coverage lives in `tests/test_sma.py`: enrollment
+  validation, signature replay/path-transplant/stale-clock, scope denial, route
+  redaction, key-minting constraints and ownership isolation, the consent
+  CSRF/tamper/deny paths, revocation, credential namespace isolation, and the
+  "every endpoint declares a scope" invariant. Tests that only exercise the API
+  approve accounts directly through `db.update_system_account`; tests that go
+  through the consent page use the `secured` fixture (credentials + `/signin`).
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `452 passed` — **update this number whenever the test count changes.**
+  `508 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

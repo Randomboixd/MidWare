@@ -70,6 +70,20 @@ def authenticate() -> tuple[dict | None, tuple | None]:
             401,
         )
 
+    if not row["enabled"]:
+        # A disabled key is still a real key: it is recognised, refused, and can
+        # be switched back on without reissuing the token.
+        return None, (
+            {
+                "error": {
+                    "message": "This MidWare API key is disabled.",
+                    "type": "midware_authentication_error",
+                    "code": "api_key_disabled",
+                }
+            },
+            403,
+        )
+
     route = get_db().active_route()
     if route is None:
         return None, (

@@ -15,7 +15,7 @@
 {% if api_keys %}
 <div class="scroll">
   <table class="compact border">
-    <thead><tr><th>Name</th><th>Key</th><th class="num">Requests</th><th class="num">Tokens</th><th>Last used</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Key</th><th>Status</th><th class="num">Requests</th><th class="num">Tokens</th><th>Last used</th><th></th></tr></thead>
     <tbody>
       {% for k in api_keys %}
       <tr>
@@ -24,11 +24,22 @@
           {% if k['description'] %}<br><small>{{ k['description'] }}</small>{% endif %}
         </td>
         <td class="mono token">{{ k['token'] }}</td>
+        <td>
+          {% if k['enabled'] %}<span class="pill ok">enabled</span>
+          {% else %}<span class="pill bad">disabled</span>{% endif %}
+        </td>
         <td class="num">{{ k['request_count'] }}</td>
         <td class="num">{{ k['token_count'] | tokens }}</td>
         <td>{{ k['last_used_at'] | relative }}</td>
         <td style="white-space:nowrap">
           <a class="button border small" href="{{ url_for('admin.key_edit', key_id=k['id']) }}">Edit</a>
+          <form method="post" class="inline-form">
+            <input type="hidden" name="action" value="toggle">
+            <input type="hidden" name="key_id" value="{{ k['id'] }}">
+            <button type="submit" class="border small">
+              {{ 'Disable' if k['enabled'] else 'Enable' }}
+            </button>
+          </form>
           <form method="post" class="inline-form" onsubmit="return confirm('Delete this key?')">
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="key_id" value="{{ k['id'] }}">

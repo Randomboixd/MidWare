@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}System account request - MidWare{% endblock %}
+
+{% block content %}
+<div class="mw-page-head">
+  <div>
+    <h1>
+      {% if state == 'approved' %}Approved
+      {% elif state == 'denied' %}Denied
+      {% elif state == 'error' %}Refused
+      {% else %}Request handled{% endif %}
+    </h1>
+    <p>You can close this tab now.</p>
+  </div>
+</div>
+
+{% if state == 'approved' and redirect_uri %}
+<p>The client can continue at
+  <a href="{{ redirect_uri }}" rel="noreferrer">{{ redirect_uri }}</a>.</p>
+{% elif state == 'denied' %}
+<p>No access was granted.</p>
+{% elif state == 'error' %}
+<p>The enrollment no longer matches what was stored, so nothing was changed.</p>
+{% endif %}
+
+{% if account %}
+<p><small class="mw-hint">{{ account.name }} (account {{ account.id }})</small></p>
+{% endif %}
+{% endblock %}

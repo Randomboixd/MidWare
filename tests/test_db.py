@@ -302,6 +302,38 @@ def test_logging_migration_adds_columns(tmp_path):
     assert key["log_message_contents"] == 1
 
 
+def test_key_enable_migration_and_ownership(tmp_path):
+    from midware.db import Database
+
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    db.init_schema()
+
+    key_cols = {row["name"] for row in db._rows("PRAGMA table_info(api_keys)")}
+    assert "enabled" in key_cols
+    assert "owner_system_account_id" in key_cols
+
+    # An old row is enabled by default, so upgrading never cuts clients off.
+    token = db.create_api_key("migrated")
+    key = db.get_api_key_by_token(token)
+    assert key["enabled"] == 1
+    assert key["owner_system_account_id"] is None
+
+    assert db.set_api_key_enabled(key["id"], False) is True
+    assert db.get_api_key(key["id"])["enabled"] == 0
+    assert db.set_api_key_enabled(key["id"], True) is True
+    assert db.get_api_key(key["id"])["enabled"] == 1
+
+
 def test_record_request_can_skip_row_and_contents():
     db = make_db()
     key = db.get_api_key_by_token(db.create_api_key("k"))
