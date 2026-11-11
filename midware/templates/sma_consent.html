@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ account.company }} ({{ account.name }}) wants access - MidWare{% endblock %}
+{% block title %}{{ account.name }} by {{ account.company }} wants access - MidWare{% endblock %}
 
 {% block content %}
 <div class="mw-page-head">
   <div>
-    <h1>This will allow {{ account.company }} ({{ account.name }}) to:</h1>
+    <h1>This will allow "{{ account.name }}" by "{{ account.company }}" to:</h1>
     <p>Only approve this if you started the request yourself.</p>
   </div>
 </div>

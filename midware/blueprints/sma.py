@@ -1326,9 +1326,9 @@ def usage_series() -> Any:
 def usage_breakdown() -> Any:
     db = get_db()
     dimension = (_arg_text("by") or "").lower()
-    if dimension not in {"route", "key", "model", "host"}:
+    if dimension not in {"route", "key", "model", "prefix"}:
         raise sma.SmaError(
-            "invalid_query", "'by' must be one of route, key, model or host."
+            "invalid_query", "'by' must be one of route, key, model or prefix."
         )
     days = _arg_int("days", 30, minimum=1, maximum=_MAX_USAGE_DAYS)
     _audit("usage.breakdown", status=200, detail=f"{dimension}/{days}d")

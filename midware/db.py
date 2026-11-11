@@ -2279,14 +2279,20 @@ class Database:
         """Token totals grouped by one dimension over the last ``days`` days.
 
         ``route`` and ``key`` read the daily rollup table (indexed, cheap);
-        ``model`` and ``host`` have no rollup and read the per-request log, so
+        ``model`` and ``prefix`` have no rollup and read the per-request log, so
         they are always bounded by a day window.
         """
-        if dim in {"model", "host"}:
+        if dim in {"model", "prefix"}:
             since = self._usage_window_start(days, now)
             if dim == "model":
                 return self.model_usage(since=since)
-            return self.host_usage(since=since)
+            # ``host_usage`` groups ``requests.host_prefix`` — the ``[Route Name]``
+            # routing prefix, not the upstream URL. The API calls that dimension
+            # ``prefix`` so it is not confused with ``models[].host``.
+            return [
+                {"prefix": row["host"], **{key: row[key] for key in ("requests", "prompt_tokens", "completion_tokens", "total_tokens")}}
+                for row in self.host_usage(since=since)
+            ]
         if dim not in {"route", "key"}:
             raise ValueError(f"Unknown usage dimension '{dim}'.")
 

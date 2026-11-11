@@ -121,15 +121,7 @@
       {% set account = entry.account %}
       <tr>
         <td>{{ account.name }}<br><small class="mw-hint"><code>{{ account.key_fingerprint }}</code></small></td>
-        <td>
-          <form method="post" class="mw-inline-actions">
-            <input type="hidden" name="action" value="set_company">
-            <input type="hidden" name="system_account_id" value="{{ account.id }}">
-            <input type="text" name="company" value="{{ account.company }}" maxlength="48"
-                   size="12" aria-label="Company label for {{ account.name }}">
-            <button type="submit" class="border small">Set</button>
-          </form>
-        </td>
+        <td>{{ account.company }}</td>
         <td>{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<br><small class="mw-hint">expires {{ account.expires_at | datetime }}</small>{% endif %}</td>
         <td><small class="mw-hint">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</small></td>
         <td>{{ account.created_at | datetime }}</td>

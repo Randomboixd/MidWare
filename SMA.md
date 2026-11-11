@@ -287,10 +287,11 @@ with at most 50 pending accounts server-wide.
   must contain a letter or digit. `admin`, `midware`, `system`, `root`,
   `msq measurements` are reserved. Unique among pending/approved/active accounts.
 - `company`: optional, 1–48 characters, default `"Indie"`. A **self-declared
-  label**, not an identity — the consent page shows "This will allow
-  \<company\> (\<name\>) to:" and marks it as claimed, not verified. Send the
-  name of the person or project that wrote the client, not the end user's.
-  `company_id` is accepted as an alias. The same reserved words apply.
+  label**, not an identity — the consent page reads
+  `This will allow "<name>" by "<company>" to:` and marks the company as
+  claimed, not verified. Send the name of the person or project that wrote the
+  client, not the end user's. `company_id` is accepted as an alias. The same
+  reserved words apply.
 - `public_key`: the raw key, not PEM. One key may only back one live account.
 - `redirect_uri`: absolute `https://`, or `http://` on loopback
   (`localhost`, `127.0.0.1`, `::1`, `*.localhost`). No credentials, no fragment.
@@ -335,7 +336,7 @@ link (only the newest works).
 
 The admin must be signed into the MidWare control panel to open it, and must be
 on HTTPS (or the plain-HTTP opt-in must be on). The link is single-use and lives
-15 minutes. The page reads "This will allow \<company\> (\<name\>) to:", lists
+15 minutes. The page reads `This will allow "<name>" by "<company>" to:`, lists
 each permission as a sentence with the raw scope id underneath, and marks the
 abusable ones **DANGEROUS** with a one-line reason. Company is self-declared and
 labelled as such; it is not verified.
@@ -608,7 +609,7 @@ healthy, where did the tokens go, why the 502". Content would arrive as
 | --- | --- | --- |
 | `GET /interact/usage` | `midware.read:usage` | totals for `period=day\|month\|year\|all` |
 | `GET /interact/usage/series` | `midware.read:usage` | daily buckets, zero-filled |
-| `GET /interact/usage/breakdown` | `midware.read:usage` | `by=route\|key\|model\|host` |
+| `GET /interact/usage/breakdown` | `midware.read:usage` | `by=route\|key\|model\|prefix` |
 
 All three accept `api_key_id` and `route_id` (totals, series); `days` (default
 30, max 365) applies to series and breakdown.
@@ -631,10 +632,12 @@ All three accept `api_key_id` and `route_id` (totals, series); `days` (default
 ```
 
 Totals and `series` read the permanent daily ledger, so pruning the request log
-never shrinks a headline number. `by=model` and `by=host` read the request log
+never shrinks a headline number. `by=model` and `by=prefix` read the request log
 and are therefore always bounded by `days`. `breakdown` returns
-`{"model": ...}`/`{"host": ...}` rows for those two dimensions. Rows with no key
-or route use `"id": null, "name": "unknown"`.
+`{"model": ...}`/`{"prefix": ...}` rows for those two dimensions. `prefix` is the
+`[Route Name]` routing prefix a request carried, not the upstream URL — that
+lives on `models[].host`. Rows with no key or route use
+`"id": null, "name": "unknown"`.
 
 ---
 

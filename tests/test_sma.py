@@ -1255,10 +1255,11 @@ def test_usage_breakdown_dimensions(sma_env):
     assert by_route["id"] == route["id"]
     assert by_route["name"] == route["name"]
 
-    by_host = _signed(
-        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=host"
+    by_prefix = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=prefix"
     )
-    assert by_host.status_code == 200
+    assert by_prefix.status_code == 200
+    assert "prefix" in by_prefix.get_json()["data"][0]
 
     by_key = _signed(
         client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=key"
@@ -1471,27 +1472,25 @@ def test_company_is_covered_by_the_tamper_hash(secured):
     assert b"does not match the details that were enrolled" in page.data
 
 
-def test_admin_relabel_keeps_the_hash_valid(secured):
+def test_consent_page_headline_names_the_client_and_its_company(secured):
     app, client, db = secured
-    signing, account_id, token = _pending(client)
-    activation = _issue_activation(db, account_id)
-
-    saved = client.post(
-        "/admin/settings",
-        data={
-            "action": "set_company",
-            "system_account_id": str(account_id),
+    signing, public_key = _key()
+    enrolled = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Hermes Agent Skill",
             "company": "Torch",
+            "public_key": public_key,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
         },
     )
-    assert saved.status_code == 302
-    row = db.get_system_account(account_id)
-    assert row["company"] == "Torch"
-    assert sma.enrollment_payload_hash(sma.frozen_payload(row)) == row["payload_hash"]
+    assert enrolled.status_code == 201
+    account_id = enrolled.get_json()["account_id"]
+    activation = _issue_activation(db, account_id)
 
     page = client.get(f"/_midware/authorize/{activation}")
-    assert b"This will allow Torch" in page.data
-    assert b"does not match the details that were enrolled" not in page.data
+    assert b'This will allow "Hermes Agent Skill" by "Torch" to:' in page.data
 
 
 def test_consent_page_marks_dangerous_scopes(secured):

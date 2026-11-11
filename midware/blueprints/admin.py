@@ -608,32 +608,6 @@ def settings():
             db.set_setting("premodel_prefix", default)
             flash(f"Premodel prefix reset to '{default}'.", "success")
             return redirect(url_for("admin.settings"))
-        if action == "set_company":
-            account_id = request.form.get("system_account_id", type=int) or 0
-            account = db.get_system_account(account_id) if account_id else None
-            if account is None:
-                flash("That system account no longer exists.", "error")
-            else:
-                try:
-                    company = sma.normalize_company(request.form.get("company"))
-                except sma.SmaError as exc:
-                    flash(exc.message, "error")
-                else:
-                    db.update_system_account(
-                        account_id,
-                        company=company,
-                        # Keep the frozen digest in step with the row, or the
-                        # next consent page would accuse the admin of tampering.
-                        payload_hash=sma.enrollment_payload_hash(
-                            sma.frozen_payload({**dict(account), "company": company})
-                        ),
-                    )
-                    db.record_system_event(
-                        account_id, "admin.company", status=200, detail=company
-                    )
-                    flash(f"Company label for '{account['name']}' is now '{company}'.", "success")
-            return redirect(url_for("admin.settings"))
-
         if action == "revoke_system_account":
             account_id = request.form.get("system_account_id", type=int)
             account = db.get_system_account(account_id) if account_id else None
