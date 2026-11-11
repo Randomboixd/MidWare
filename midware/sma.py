@@ -53,6 +53,9 @@ WRITE_APIKEYS_STATUS = "midware.write:apikeystatus"
 READ_MSQ = "midware.read:msq"
 WRITE_MSQ = "midware.write:msq"
 EDIT_MSQ = "midware.edit:msq"
+READ_REQUESTS = "midware.read:requests"
+READ_USAGE = "midware.read:usage"
+READ_MODELS = "midware.read:models"
 WRITE_SELF = "midware.write:self"
 
 SCOPES: tuple[str, ...] = (
@@ -67,6 +70,9 @@ SCOPES: tuple[str, ...] = (
     READ_MSQ,
     WRITE_MSQ,
     EDIT_MSQ,
+    READ_REQUESTS,
+    READ_USAGE,
+    READ_MODELS,
 )
 
 # Not grantable: every account can shut itself off, and asking for it would only
@@ -87,7 +93,64 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
     READ_MSQ: "Read Model Service Quality recorders and their results.",
     WRITE_MSQ: "Add and delete MSQ recorders, and run checks now.",
     EDIT_MSQ: "Change an MSQ recorder's prompt, model, schedule or scoring.",
+    READ_REQUESTS: (
+        "Read the request log: model, route, key name, status, latency and token "
+        "counts. Prompts and responses are not included."
+    ),
+    READ_USAGE: (
+        "Read usage totals and per-day, per-route, per-key and per-model breakdowns."
+    ),
+    READ_MODELS: "Read which models each route serves, as cached from the provider.",
 }
+
+# What the consent page says out loud. Scope ids are an implementation detail the
+# admin should not have to decode while deciding whether to trust a client.
+SCOPE_LABELS: dict[str, str] = {
+    READ_ROUTES: "Read provider routes",
+    WRITE_ROUTES: "Add and delete routes",
+    EDIT_ROUTES: "Edit route settings",
+    WRITE_APIKEYS: "Create API keys",
+    READ_APIKEYS_OWNED: "Read the keys it created",
+    EDIT_APIKEYS_OWNED: "Change the keys it created",
+    READ_APIKEYS_STATUS: "Read which keys are enabled",
+    WRITE_APIKEYS_STATUS: "Enable or disable any key",
+    READ_MSQ: "Read MSQ recorders and results",
+    WRITE_MSQ: "Add recorders and run probes",
+    EDIT_MSQ: "Change recorder prompts and scoring",
+    READ_REQUESTS: "Read request data",
+    READ_USAGE: "Read usage totals",
+    READ_MODELS: "Read the model catalogue",
+}
+
+# Why a scope deserves a warning rather than a line in a list. The consent page
+# renders these as a DANGEROUS badge with the reason underneath, because "edit
+# routes" means nothing to most admins while "can repoint a route" does.
+SCOPE_DANGER: dict[str, str] = {
+    WRITE_ROUTES: "Can add a route that points at a host it controls",
+    EDIT_ROUTES: "Can repoint an existing route or swap its upstream key",
+    WRITE_APIKEYS: "Can mint credentials that spend your upstream quota",
+    EDIT_APIKEYS_OWNED: "Can widen what the keys it minted may reach",
+    WRITE_APIKEYS_STATUS: "Can disable every key on the server, including yours",
+    EDIT_MSQ: "Can change scoring so failures look like passes",
+}
+
+# Scopes in this namespace are dangerous by naming convention, so the badge does
+# not depend on somebody remembering to add a map entry. Nothing is granted in
+# this namespace today; ``midware.dangerous.read:request_content`` is the
+# intended first resident.
+DANGEROUS_PREFIX = "midware.dangerous."
+
+
+def is_dangerous(scope: str) -> bool:
+    return scope.startswith(DANGEROUS_PREFIX) or scope in SCOPE_DANGER
+
+
+def danger_reason(scope: str) -> str:
+    if scope in SCOPE_DANGER:
+        return SCOPE_DANGER[scope]
+    if scope.startswith(DANGEROUS_PREFIX):
+        return "Reads content, not metadata"
+    return ""
 
 # Names that would make the consent page lie about who is asking.
 RESERVED_NAMES = frozenset(
@@ -107,6 +170,8 @@ _BIDI_CHARS = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 _NONCE_RE = re.compile(r"^[A-Za-z0-9_\-]{16,128}$")
 
 MAX_NAME_LENGTH = 64
+MAX_COMPANY_LENGTH = 48
+DEFAULT_COMPANY = "Indie"
 MAX_REDIRECT_LENGTH = 2048
 MAX_PUBLIC_KEY_LENGTH = 256
 
@@ -344,6 +409,37 @@ def normalize_name(raw: Any) -> str:
     return name
 
 
+def normalize_company(raw: Any) -> str:
+    """The self-declared name of whoever built this client.
+
+    A label, not an identity: it is shown on the consent page so the admin can
+    tell "Hermes Agent Skill by Torch" from some anonymous bot, and nothing
+    stops two clients claiming the same company. Missing or blank means an
+    unnamed hobby client, which is what ``Indie`` is for.
+    """
+    if raw is None:
+        return DEFAULT_COMPANY
+    if not isinstance(raw, str):
+        raise SmaError("invalid_company", "company must be a string.")
+    company = _BIDI_CHARS.sub("", _CONTROL_CHARS.sub("", raw)).strip()
+    company = re.sub(r"\s+", " ", company)
+    if not company:
+        return DEFAULT_COMPANY
+    if len(company) > MAX_COMPANY_LENGTH:
+        raise SmaError(
+            "invalid_company", f"company must be at most {MAX_COMPANY_LENGTH} characters."
+        )
+    if not any(char.isalnum() for char in company):
+        raise SmaError("invalid_company", "company must contain at least one letter or digit.")
+    if company.casefold() in RESERVED_NAMES:
+        raise SmaError(
+            "reserved_company",
+            f"'{company}' is reserved for the MidWare server itself. Use the name of the "
+            "person or project that wrote the client.",
+        )
+    return company
+
+
 def normalize_redirect_uri(raw: Any) -> str:
     """Validate the browser bounce target at enrollment time.
 
@@ -418,10 +514,28 @@ def enrollment_payload_hash(payload: dict[str, Any]) -> str:
 # -- presentation ------------------------------------------------------------
 
 
+def frozen_payload(row: Any) -> dict[str, Any]:
+    """The fields the admin is asked to approve, as stored.
+
+    Recomputed at consent time and compared against ``payload_hash``, so a row
+    edited between enrollment and approval fails instead of silently expanding
+    the grant. Every displayable identity field belongs in here — including the
+    company label, which is what the page says out loud.
+    """
+    return {
+        "name": row["name"],
+        "company": row["company"],
+        "public_key": row["public_key"],
+        "redirect_uri": row["redirect_uri"],
+        "scopes": sorted(parse_scopes(row["scopes"])),
+    }
+
+
 def public_account(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": row["name"],
+        "company": row["company"],
         "description": row["description"],
         "state": row["state"],
         "scopes": parse_scopes(row["scopes"]),

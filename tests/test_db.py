@@ -159,9 +159,41 @@ def test_route_provider_migration_adds_column(tmp_path):
     assert "provider" in columns
 
 
-def test_rate_limit_migration_adds_columns(tmp_path):
+def test_system_account_company_migration_adds_column(tmp_path):
     from midware.db import Database
 
+    db = Database(str(tmp_path / "old.db"))
+    with db.write() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE system_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '', public_key TEXT NOT NULL,
+                key_fingerprint TEXT NOT NULL, redirect_uri TEXT NOT NULL,
+                scopes TEXT NOT NULL DEFAULT '[]', payload_hash TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending', pending_token_hash TEXT,
+                token_hash TEXT, activation_token_hash TEXT,
+                activation_expires_at TEXT, requested_ip TEXT NOT NULL DEFAULT '',
+                requested_transport TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                expires_at TEXT, activated_at TEXT, last_used_at TEXT,
+                revoked_at TEXT, revoked_reason TEXT
+            );
+            INSERT INTO system_accounts (name, public_key, key_fingerprint, redirect_uri,
+                payload_hash, created_at)
+            VALUES ('Old Bot', 'pk', 'fp', 'https://client.example.com/cb', 'hash', '2026-01-01T00:00:00+00:00');
+            """
+        )
+
+    db.init_schema()
+
+    columns = {row["name"] for row in db._rows("PRAGMA table_info(system_accounts)")}
+    assert "company" in columns
+    # Existing accounts keep working and get the documented default.
+    assert db.get_system_account(1)["company"] == "Indie"
+
+
+def test_rate_limit_migration_adds_columns(tmp_path):
+    from midware.db import Database
     db = Database(str(tmp_path / "old.db"))
     with db.write() as conn:
         conn.executescript(

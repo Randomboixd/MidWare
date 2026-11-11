@@ -4,11 +4,13 @@ import base64
 import json
 import secrets
 import time
+from datetime import timedelta
 
 import pytest
 from nacl.signing import SigningKey
 
 from midware import adminauth, create_app, sma
+from midware.db import to_iso, utcnow
 
 BASE = "/_midware/api/v1"
 ROUTE_READ = sma.READ_ROUTES
@@ -624,7 +626,10 @@ def test_consent_allows_then_exchange_issues_a_live_token(secured):
 
     page = client.get(f"/_midware/authorize/{activation}")
     assert page.status_code == 200
-    assert b"wants to access this MidWare server" in page.data
+    assert b"This will allow" in page.data
+    assert b"Indie" in page.data  # default company label for an unnamed client
+    assert b"Read provider routes" in page.data
+    assert b"midware.read:routes" in page.data
 
     csrf = _extract_csrf(page.data)
     allowed = client.post(
@@ -998,3 +1003,507 @@ def test_settings_toggle_round_trips(secured):
         data={"sma_present": "1", "sma_enabled": "1", "request_log_limit": "10"},
     )
     assert db.sma_enabled(True) is True
+
+
+# -- read scopes: request log, usage, models ---------------------------------
+
+
+def _seed_request(
+    db,
+    *,
+    route_id=None,
+    api_key_id=None,
+    status: int = 200,
+    model: str = "deepseek-v3.2",
+    total: int = 120,
+    when: str | None = None,
+    prompt: str = "PROMPT SECRET",
+    answer: str = "ANSWER SECRET",
+) -> int:
+    """Insert a request row directly so ``created_at`` can be backdated."""
+    with db.write() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO requests (
+                created_at, request_path, method, model, model_raw, host_prefix,
+                status_code, latency_ms, streamed, prompt_tokens, completion_tokens,
+                total_tokens, token_source, upstream_request_id, error, request_body,
+                response_body, route_id, api_key_id
+            ) VALUES (?, '/v1/chat/completions', 'POST', ?, ?, '', ?, 120, 0, 40, 80, ?,
+                      'upstream', 'gen-1', ?, ?, ?, ?, ?)
+            """,
+            (
+                when or to_iso(utcnow()),
+                model,
+                model,
+                status,
+                total,
+                "boom" if status >= 400 else None,
+                prompt,
+                answer,
+                route_id,
+                api_key_id,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def test_new_read_scopes_can_be_granted(sma_env):
+    client, _ = sma_env
+    signing, public_key = _key()
+    response = _enroll(
+        client,
+        signing,
+        public_key,
+        scopes=[sma.READ_REQUESTS, sma.READ_USAGE, sma.READ_MODELS],
+        name="Reader",
+    )
+    assert response.status_code == 201, response.get_json()
+    assert set(response.get_json()["scopes"]) == {
+        sma.READ_REQUESTS,
+        sma.READ_USAGE,
+        sma.READ_MODELS,
+    }
+
+
+def test_read_endpoints_need_their_scope(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_MSQ])
+    for path in (
+        f"{BASE}/interact/requests",
+        f"{BASE}/interact/usage",
+        f"{BASE}/interact/usage/series",
+        f"{BASE}/interact/usage/breakdown?by=route",
+        f"{BASE}/interact/models",
+    ):
+        response = _signed(client, signing, account_id, token, "GET", path)
+        assert response.status_code == 403, path
+        assert response.get_json()["error"]["code"] == "scope_denied"
+
+
+def test_request_log_never_returns_content(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    _seed_request(db, route_id=route["id"])
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_REQUESTS])
+
+    response = _signed(client, signing, account_id, token, "GET", f"{BASE}/interact/requests")
+    assert response.status_code == 200
+    raw = response.get_data(as_text=True)
+    assert "PROMPT SECRET" not in raw
+    assert "ANSWER SECRET" not in raw
+
+    row = response.get_json()["data"][0]
+    assert "request_body" not in row
+    assert "response_body" not in row
+    assert row["model"] == "deepseek-v3.2"
+    assert row["total_tokens"] == 120
+    assert row["route_name"] == route["name"]
+
+
+def test_request_log_filters_and_caps(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    _seed_request(db, route_id=route["id"], status=200, model="alpha")
+    _seed_request(db, route_id=route["id"], status=500, model="beta")
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_REQUESTS])
+
+    def call(query: str) -> dict:
+        response = _signed(
+            client, signing, account_id, token, "GET", f"{BASE}/interact/requests{query}"
+        )
+        assert response.status_code == 200, response.get_json()
+        return response.get_json()
+
+    assert call("")["total"] == 2
+    only_failed = call("?status=500")
+    assert only_failed["total"] == 1
+    assert only_failed["data"][0]["model"] == "beta"
+    assert call("?model=alpha")["total"] == 1
+
+    page = call("?limit=1")
+    assert len(page["data"]) == 1
+    assert page["total"] == 2
+    assert call("?limit=9999")["limit"] == 500
+
+    tomorrow = to_iso(utcnow() + timedelta(days=1))
+    assert call(f"?since={tomorrow}")["total"] == 0
+    yesterday = to_iso(utcnow() - timedelta(days=1))
+    assert call(f"?since={yesterday}")["total"] == 2
+
+    bad = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests?status=abc"
+    )
+    assert bad.status_code == 400
+    assert bad.get_json()["error"]["code"] == "invalid_query"
+
+
+def test_request_log_since_and_until_days(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    old = to_iso(utcnow() - timedelta(days=10))
+    _seed_request(db, route_id=route["id"], when=old)
+    _seed_request(db, route_id=route["id"])
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_REQUESTS])
+    yesterday = (utcnow() - timedelta(days=1)).date().isoformat()
+
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests?since={yesterday}"
+    )
+    assert response.get_json()["total"] == 1
+
+    cutoff = (utcnow() - timedelta(days=5)).date().isoformat()
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests?until={cutoff}"
+    )
+    assert response.get_json()["total"] == 1
+
+
+def test_request_detail_and_404(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    request_id = _seed_request(db, route_id=route["id"])
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_REQUESTS])
+
+    one = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{request_id}"
+    )
+    assert one.status_code == 200
+    assert one.get_json()["id"] == request_id
+
+    missing = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/999999"
+    )
+    assert missing.status_code == 404
+    assert missing.get_json()["error"]["code"] == "request_not_found"
+
+
+def _seed_usage(db, *, route_id=None, api_key_id=None, tokens=100, latency=200) -> None:
+    db.record_request(
+        api_key_id=api_key_id,
+        route_id=route_id,
+        method="POST",
+        request_path="/v1/chat/completions",
+        model="deepseek-v3.2",
+        status_code=200,
+        latency_ms=latency,
+        streamed=False,
+        prompt_tokens=tokens // 4,
+        completion_tokens=tokens - tokens // 4,
+        total_tokens=tokens,
+        log_messages=False,
+    )
+
+
+def test_usage_totals_by_period(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    _seed_usage(db, route_id=route["id"], tokens=100)
+    _seed_usage(db, route_id=route["id"], tokens=50)
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_USAGE])
+
+    day = _signed(client, signing, account_id, token, "GET", f"{BASE}/interact/usage")
+    body = day.get_json()
+    assert body["period"] == "day"
+    assert body["requests"] == 2
+    assert body["total_tokens"] == 150
+
+    every = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage?period=all"
+    )
+    assert every.get_json()["total_tokens"] == 150
+
+    bad = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage?period=century"
+    )
+    assert bad.status_code == 400
+    assert bad.get_json()["error"]["code"] == "invalid_query"
+
+
+def test_usage_series_is_zero_filled(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    _seed_usage(db, route_id=route["id"], tokens=40)
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_USAGE])
+
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/series?days=7"
+    )
+    body = response.get_json()
+    assert body["days"] == 7
+    assert len(body["data"]) == 7
+    assert body["data"][-1]["day"] == utcnow().date().isoformat()
+    assert sum(row["total_tokens"] for row in body["data"]) == 40
+    assert body["data"][0]["requests"] == 0
+
+
+def test_usage_breakdown_dimensions(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    _seed_usage(db, route_id=route["id"], tokens=100)
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_USAGE])
+
+    by_model = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=model"
+    )
+    assert by_model.status_code == 200
+    assert by_model.get_json()["data"][0]["model"] == "deepseek-v3.2"
+
+    by_route = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=route"
+    ).get_json()["data"][0]
+    assert by_route["id"] == route["id"]
+    assert by_route["name"] == route["name"]
+
+    by_host = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=host"
+    )
+    assert by_host.status_code == 200
+
+    by_key = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=key"
+    ).get_json()["data"][0]
+    assert by_key["id"] is None and by_key["name"] == "unknown"
+
+    bad = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/usage/breakdown?by=vibes"
+    )
+    assert bad.status_code == 400
+    assert bad.get_json()["error"]["code"] == "invalid_query"
+
+
+def test_model_catalogue_and_key_round_trip(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    db.replace_models(route["id"], ["deepseek-v3.2", "mistral-large"])
+    db.set_meta("models_refreshed_at", "2026-11-11T04:00:12+00:00")
+    db.set_meta("models_refresh_error", "")
+
+    signing, account_id, token = _active(
+        client, db, scopes=[sma.READ_MODELS, sma.WRITE_APIKEYS, ROUTE_READ]
+    )
+    response = _signed(client, signing, account_id, token, "GET", f"{BASE}/interact/models")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["meta"]["refreshed_at"] == "2026-11-11T04:00:12+00:00"
+    assert len(body["data"]) == 2
+    entry = body["data"][0]
+    assert entry["key"] == f"{route['id']}:{entry['model_id']}"
+    assert entry["host"] == route["target_host"]
+    assert entry["route_name"] == route["name"]
+
+    created = _signed(
+        client,
+        signing,
+        account_id,
+        token,
+        "POST",
+        f"{BASE}/interact/apikeys/create",
+        {
+            "name": "pinned",
+            "restrict_models": True,
+            "allowed_model_ids": [entry["key"]],
+        },
+    )
+    assert created.status_code == 201, created.get_json()
+
+
+def test_model_catalogue_filters(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    db.replace_models(route["id"], ["only-model"])
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_MODELS])
+
+    def call(query: str):
+        return _signed(
+            client, signing, account_id, token, "GET", f"{BASE}/interact/models{query}"
+        )
+
+    assert len(call(f"?route_id={route['id']}").get_json()["data"]) == 1
+    assert len(call(f"?host={route['target_host']}").get_json()["data"]) == 1
+    assert call("?host=https://elsewhere.example").get_json()["data"] == []
+    assert call("?route_id=9999").status_code == 404
+
+
+def test_msq_check_history(sma_env):
+    client, db = sma_env
+    route = db.list_routes()[0]
+    recorder_id = db.create_msq_recorder(
+        name="probe", route_id=route["id"], model="deepseek-v3.2"
+    )
+    for index in range(3):
+        db.record_msq_check(
+            recorder_id=recorder_id,
+            status_code=200,
+            ok=True,
+            ttft_ms=100 + index,
+            total_ms=200,
+            completion_tokens=10,
+            tokens_per_second=55.0,
+            score=0.9,
+            response_excerpt="fine",
+        )
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_MSQ])
+
+    response = _signed(
+        client,
+        signing,
+        account_id,
+        token,
+        "GET",
+        f"{BASE}/interact/msq/{recorder_id}/checks?limit=2",
+    )
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert len(data) == 2
+    assert data[0]["id"] > data[1]["id"]  # newest first
+    assert data[0]["tokens_per_second"] == 55.0
+
+    missing = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/msq/9999/checks"
+    )
+    assert missing.status_code == 404
+    assert missing.get_json()["error"]["code"] == "msq_not_found"
+
+
+# -- company label -----------------------------------------------------------
+
+
+def test_company_defaults_to_indie(sma_env):
+    client, _ = sma_env
+    signing, public_key = _key()
+    response = _enroll(client, signing, public_key, name="Anon")
+    assert response.status_code == 201
+    assert response.get_json()["company"] == "Indie"
+
+
+def test_company_is_stored_and_returned(sma_env):
+    client, db = sma_env
+    signing, public_key = _key()
+    response = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Hermes Agent Skill",
+            "company": "  Torch  ",
+            "public_key": public_key,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
+        },
+    )
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["company"] == "Torch"
+    assert db.get_system_account(body["account_id"])["company"] == "Torch"
+
+
+def test_company_accepts_the_company_id_alias(sma_env):
+    client, _ = sma_env
+    signing, public_key = _key()
+    response = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Alias Client",
+            "company_id": "Torch",
+            "public_key": public_key,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
+        },
+    )
+    assert response.status_code == 201
+    assert response.get_json()["company"] == "Torch"
+
+
+def test_company_rejects_reserved_and_overlong(sma_env):
+    client, _ = sma_env
+    signing, public_key = _key()
+    reserved = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Sneaky",
+            "company": "MidWare",
+            "public_key": public_key,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
+        },
+    )
+    assert reserved.status_code == 400
+    assert reserved.get_json()["error"]["code"] == "reserved_company"
+
+    signing2, public_key2 = _key()
+    too_long = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Wordy",
+            "company": "x" * 49,
+            "public_key": public_key2,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
+        },
+    )
+    assert too_long.status_code == 400
+    assert too_long.get_json()["error"]["code"] == "invalid_company"
+
+
+def test_company_strips_invisible_characters(sma_env):
+    client, _ = sma_env
+    signing, public_key = _key()
+    response = client.post(
+        f"{BASE}/EnrollSystemAccount",
+        json={
+            "name": "Bidi Client",
+            "company": "Tor\u202ech\u200b",
+            "public_key": public_key,
+            "redirect_uri": "https://client.example.com/callback",
+            "scopes": [sma.READ_USAGE],
+        },
+    )
+    assert response.status_code == 201
+    assert response.get_json()["company"] == "Torch"
+
+
+def test_company_is_covered_by_the_tamper_hash(secured):
+    app, client, db = secured
+    signing, account_id, token = _pending(client)
+    activation = _issue_activation(db, account_id)
+    db.update_system_account(account_id, company="Evil Corp")
+
+    page = client.get(f"/_midware/authorize/{activation}")
+    assert b"does not match the details that were enrolled" in page.data
+
+
+def test_admin_relabel_keeps_the_hash_valid(secured):
+    app, client, db = secured
+    signing, account_id, token = _pending(client)
+    activation = _issue_activation(db, account_id)
+
+    saved = client.post(
+        "/admin/settings",
+        data={
+            "action": "set_company",
+            "system_account_id": str(account_id),
+            "company": "Torch",
+        },
+    )
+    assert saved.status_code == 302
+    row = db.get_system_account(account_id)
+    assert row["company"] == "Torch"
+    assert sma.enrollment_payload_hash(sma.frozen_payload(row)) == row["payload_hash"]
+
+    page = client.get(f"/_midware/authorize/{activation}")
+    assert b"This will allow Torch" in page.data
+    assert b"does not match the details that were enrolled" not in page.data
+
+
+def test_consent_page_marks_dangerous_scopes(secured):
+    app, client, db = secured
+    signing, account_id, token = _pending(
+        client, scopes=[sma.WRITE_APIKEYS, sma.READ_REQUESTS], name="Mixed"
+    )
+    activation = _issue_activation(db, account_id)
+    page = client.get(f"/_midware/authorize/{activation}")
+    data = page.data
+
+    assert data.count(b"DANGEROUS") == 1
+    assert b"Can mint credentials that spend your upstream quota" in data
+    assert b"Read request data" in data
+    assert b"midware.read:requests" in data

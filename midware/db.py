@@ -251,6 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_stored_images_expires ON stored_images(expires_at
 CREATE TABLE IF NOT EXISTS system_accounts (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     name                  TEXT    NOT NULL,
+    company               TEXT    NOT NULL DEFAULT 'Indie',
     description           TEXT    NOT NULL DEFAULT '',
     public_key            TEXT    NOT NULL,
     key_fingerprint       TEXT    NOT NULL,
@@ -587,6 +588,16 @@ class Database:
                 "routes",
                 existing_routes,
                 {"provider": "TEXT NOT NULL DEFAULT ''"},
+            )
+
+        existing_accounts = {
+            row["name"] for row in self._rows("PRAGMA table_info(system_accounts)")
+        }
+        if existing_accounts:
+            self._add_columns(
+                "system_accounts",
+                existing_accounts,
+                {"company": "TEXT NOT NULL DEFAULT 'Indie'"},
             )
 
     def _add_columns(self, table: str, existing: set[str], added: dict[str, str]) -> None:
@@ -1412,6 +1423,7 @@ class Database:
 
     _SYSTEM_ACCOUNT_FIELDS = (
         "name",
+        "company",
         "description",
         "redirect_uri",
         "scopes",
@@ -1444,6 +1456,7 @@ class Database:
         scopes: str,
         payload_hash: str,
         pending_token_hash: str,
+        company: str = "Indie",
         description: str = "",
         requested_ip: str = "",
         requested_transport: str = "",
@@ -1453,13 +1466,14 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO system_accounts (
-                    name, description, public_key, key_fingerprint, redirect_uri,
+                    name, company, description, public_key, key_fingerprint, redirect_uri,
                     scopes, payload_hash, state, pending_token_hash, requested_ip,
                     requested_transport, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
+                    company,
                     description,
                     public_key,
                     key_fingerprint,
@@ -1972,16 +1986,12 @@ class Database:
         offset: int = 0,
         api_key_id: int | None = None,
         route_id: int | None = None,
+        model: str | None = None,
+        status: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> list[sqlite3.Row]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if api_key_id is not None:
-            clauses.append("r.api_key_id = ?")
-            params.append(api_key_id)
-        if route_id is not None:
-            clauses.append("r.route_id = ?")
-            params.append(route_id)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = self._request_filters(api_key_id, route_id, model, status, since, until)
         params.extend([limit, offset])
         return self._rows(
             f"""
@@ -1996,17 +2006,50 @@ class Database:
             tuple(params),
         )
 
-    def count_requests(self, api_key_id: int | None = None, route_id: int | None = None) -> int:
+    @staticmethod
+    def _request_filters(
+        api_key_id: int | None = None,
+        route_id: int | None = None,
+        model: str | None = None,
+        status: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> tuple[str, list[Any]]:
+        """Shared WHERE clause so a page and its total always agree."""
         clauses: list[str] = []
         params: list[Any] = []
         if api_key_id is not None:
-            clauses.append("api_key_id = ?")
+            clauses.append("r.api_key_id = ?")
             params.append(api_key_id)
         if route_id is not None:
-            clauses.append("route_id = ?")
+            clauses.append("r.route_id = ?")
             params.append(route_id)
+        if model is not None:
+            clauses.append("(r.model = ? OR r.model_raw = ?)")
+            params.extend([model, model])
+        if status is not None:
+            clauses.append("r.status_code = ?")
+            params.append(status)
+        if since is not None:
+            clauses.append("r.created_at >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("r.created_at < ?")
+            params.append(until)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        return int(self._scalar(f"SELECT COUNT(*) FROM requests {where}", tuple(params)))
+        return where, params
+
+    def count_requests(
+        self,
+        api_key_id: int | None = None,
+        route_id: int | None = None,
+        model: str | None = None,
+        status: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> int:
+        where, params = self._request_filters(api_key_id, route_id, model, status, since, until)
+        return int(self._scalar(f"SELECT COUNT(*) FROM requests r {where}", tuple(params)))
 
     def get_request(self, request_id: int) -> sqlite3.Row | None:
         return self._row(
@@ -2145,6 +2188,7 @@ class Database:
         self,
         api_key_id: int | None = None,
         route_id: int | None = None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -2154,6 +2198,9 @@ class Database:
         if route_id is not None:
             clauses.append("route_id = ?")
             params.append(route_id)
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._rows(
             f"""
@@ -2184,6 +2231,7 @@ class Database:
         self,
         api_key_id: int | None = None,
         route_id: int | None = None,
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -2193,6 +2241,9 @@ class Database:
         if route_id is not None:
             clauses.append("route_id = ?")
             params.append(route_id)
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._rows(
             f"""
@@ -2218,6 +2269,79 @@ class Database:
             }
             for row in rows
         ]
+
+    def usage_breakdown(
+        self,
+        dim: str,
+        days: int = 30,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Token totals grouped by one dimension over the last ``days`` days.
+
+        ``route`` and ``key`` read the daily rollup table (indexed, cheap);
+        ``model`` and ``host`` have no rollup and read the per-request log, so
+        they are always bounded by a day window.
+        """
+        if dim in {"model", "host"}:
+            since = self._usage_window_start(days, now)
+            if dim == "model":
+                return self.model_usage(since=since)
+            return self.host_usage(since=since)
+        if dim not in {"route", "key"}:
+            raise ValueError(f"Unknown usage dimension '{dim}'.")
+
+        column = "route_id" if dim == "route" else "api_key_id"
+        if dim == "route":
+            join = "LEFT JOIN routes rt ON rt.id = u.route_id"
+            label = "rt.name"
+        else:
+            join = "LEFT JOIN api_keys k ON k.id = u.api_key_id"
+            label = "k.name"
+
+        rows = self._rows(
+            f"""
+            SELECT CASE WHEN u.{column} = -1 THEN NULL ELSE u.{column} END AS id,
+                   COALESCE(NULLIF({label}, ''), 'unknown') AS name,
+                   SUM(u.requests)                          AS requests,
+                   COALESCE(SUM(u.prompt_tokens), 0)        AS prompt_tokens,
+                   COALESCE(SUM(u.completion_tokens), 0)    AS completion_tokens,
+                   COALESCE(SUM(u.total_tokens), 0)         AS total_tokens
+            FROM usage_daily u
+            {join}
+            WHERE u.day >= ?
+            GROUP BY u.{column}
+            ORDER BY total_tokens DESC, requests DESC
+            """,
+            (self._usage_window_start(days, now)[:10],),
+        )
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "requests": int(row["requests"]),
+                "prompt_tokens": int(row["prompt_tokens"]),
+                "completion_tokens": int(row["completion_tokens"]),
+                "total_tokens": int(row["total_tokens"]),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _usage_window_start(days: int, now: datetime | None = None) -> str:
+        """First instant of the UTC day ``days - 1`` days ago."""
+        anchor = window_start("day", now)
+        return to_iso(anchor - timedelta(days=max(days - 1, 0)))
+
+    def usage_for_period(
+        self,
+        period: str = "day",
+        api_key_id: int | None = None,
+        route_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Totals for a named window, including the unbounded ``all``."""
+        if period == "all":
+            return self._all_time(api_key_id, route_id)
+        return self.usage_totals(period, api_key_id, route_id)
 
     def overview(self, api_key_id: int | None = None, route_id: int | None = None) -> dict[str, Any]:
         return {

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ account.name }} wants access - MidWare{% endblock %}
+{% block title %}{{ account.company }} ({{ account.name }}) wants access - MidWare{% endblock %}
 
 {% block content %}
 <div class="mw-page-head">
   <div>
-    <h1>{{ account.name }} wants to access this MidWare server.</h1>
+    <h1>This will allow {{ account.company }} ({{ account.name }}) to:</h1>
     <p>Only approve this if you started the request yourself.</p>
   </div>
 </div>
@@ -29,8 +29,13 @@
 <ul class="mw-scope-list">
   {% for scope in scopes %}
   <li>
-    <code>{{ scope }}</code>
+    <strong>{{ scope_labels.get(scope, scope) }}</strong>
+    {% if scope in scope_danger %}<span class="mw-danger-badge">DANGEROUS</span>{% endif %}
     <small class="mw-hint">{{ scope_descriptions.get(scope, '') }}</small>
+    {% if scope in scope_danger %}
+    <small class="mw-hint mw-danger-reason">{{ scope_danger[scope] }}</small>
+    {% endif %}
+    <small class="mw-hint"><code>{{ scope }}</code></small>
   </li>
   {% endfor %}
 </ul>
@@ -43,6 +48,7 @@
   <table class="compact border">
     <tbody>
       <tr><th>Account</th><td>{{ account.name }}</td></tr>
+      <tr><th>Company</th><td>{{ account.company }} <small class="mw-hint">claimed by the client, not verified</small></td></tr>
       <tr><th>Account ID</th><td>{{ account.id }}</td></tr>
       <tr><th>Key fingerprint</th><td><code>{{ account.key_fingerprint }}</code></td></tr>
       <tr><th>Requested</th><td>{{ account.created_at | datetime }}</td></tr>

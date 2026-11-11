@@ -307,6 +307,25 @@ code {
   line-height: 1.4;
 }
 
+/* Consent page: a scope that can be abused is marked, because the prose alone
+   reads like a feature list. */
+.mw-danger-badge {
+  display: inline-block;
+  margin-inline-start: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--error-container);
+  color: var(--on-error-container);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.mw-danger-reason {
+  color: var(--error);
+}
+
 .mw-reference {
   margin-top: 1.5rem;
   border: 1px solid var(--outline-variant);

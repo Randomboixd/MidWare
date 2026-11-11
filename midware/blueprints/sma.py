@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from datetime import timedelta
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -66,6 +67,12 @@ ENDPOINT_STATES: dict[str, frozenset[str]] = {
 
 _CSRF_SESSION_KEY = "sma_csrf"
 _MAX_NAME = sma.MAX_NAME_LENGTH
+
+# Caps for read endpoints. Large enough that one call answers a normal question,
+# small enough that a stuck client cannot pull the whole log in a loop.
+_MAX_REQUEST_PAGE = 500
+_MAX_USAGE_DAYS = 365
+_MAX_CHECKS = 200
 
 
 def scoped(scope: str) -> Callable:
@@ -170,6 +177,71 @@ def _str_list(body: dict[str, Any], key: str) -> list[str]:
 
 def _client_ip() -> str:
     return (request.remote_addr or "")[:64]
+
+
+# -- query parameters --------------------------------------------------------
+#
+# Read endpoints take filters from the query string rather than a body, so they
+# get their own parsers. Ranges are clamped rather than rejected: a client that
+# asks for 5000 rows gets 500 and a correct ``limit`` echo, which is friendlier
+# than an error it cannot recover from without guessing the cap.
+
+
+def _arg_int(name: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise sma.SmaError("invalid_query", f"'{name}' must be an integer.") from exc
+    if value < minimum:
+        raise sma.SmaError("invalid_query", f"'{name}' must be at least {minimum}.")
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
+def _arg_optional_int(name: str) -> int | None:
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise sma.SmaError("invalid_query", f"'{name}' must be an integer.") from exc
+
+
+def _arg_text(name: str) -> str | None:
+    raw = request.args.get(name)
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def _arg_instant(name: str, *, exclusive_end: bool) -> str | None:
+    """Parse a timestamp filter into the format ``created_at`` is stored in.
+
+    Accepts a full ISO 8601 timestamp or a bare date. A bare date on ``until``
+    means "before the start of the following day", so ``until=2026-11-11``
+    includes everything logged on the 11th — the reading a human expects.
+    """
+    raw = _arg_text(name)
+    if raw is None:
+        return None
+    parsed = parse_iso(raw)
+    if parsed is None:
+        # An unescaped ``+00:00`` offset arrives here as a space, because a
+        # query string decodes ``+`` as a space. Clients should send ``%2B``,
+        # but refusing a timestamp that is only wrong by transport quoting
+        # helps nobody.
+        parsed = parse_iso(raw.replace(" ", "+"))
+    if parsed is None:
+        raise sma.SmaError("invalid_query", f"'{name}' must be an ISO 8601 date or timestamp.")
+    if exclusive_end and len(raw) == 10:
+        parsed = parsed + timedelta(days=1)
+    return to_iso(parsed)
 
 
 def _transport() -> str:
@@ -426,6 +498,7 @@ def enroll() -> Any:
     body = _json_body()
 
     name = sma.normalize_name(body.get("name"))
+    company = sma.normalize_company(body.get("company", body.get("company_id")))
     public_key = body.get("public_key")
     redirect_uri = sma.normalize_redirect_uri(body.get("redirect_uri"))
     scopes = sma.normalize_scopes(body.get("scopes"))
@@ -463,6 +536,7 @@ def enroll() -> Any:
 
     frozen = {
         "name": name,
+        "company": company,
         "public_key": public_key,
         "redirect_uri": redirect_uri,
         "scopes": sorted(scopes),
@@ -470,6 +544,7 @@ def enroll() -> Any:
     pending_token = sma.new_token(sma.TOKEN_PENDING_PREFIX)
     account_id = db.create_system_account(
         name=name,
+        company=company,
         description=description,
         public_key=public_key,
         key_fingerprint=finger,
@@ -496,6 +571,7 @@ def enroll() -> Any:
             {
                 "account_id": account_id,
                 "name": name,
+                "company": company,
                 "state": "pending",
                 "scopes": sorted(scopes),
                 "key_fingerprint": finger,
@@ -1123,6 +1199,248 @@ def run_msq(recorder_id: int) -> Any:
     return jsonify(result)
 
 
+# -- request log -------------------------------------------------------------
+
+
+def _request_payload(row: Any) -> dict[str, Any]:
+    """One logged request, metadata only.
+
+    ``request_body`` and ``response_body`` are deliberately absent: they hold
+    whole prompts and responses, and a signed automation token must not be able
+    to read every conversation that has crossed the proxy. Reading content is a
+    separate, explicitly dangerous grant (``midware.dangerous.read:request_content``)
+    that does not exist yet.
+    """
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "method": row["method"],
+        "request_path": row["request_path"],
+        "model": row["model"],
+        "model_raw": row["model_raw"],
+        "host_prefix": row["host_prefix"],
+        "status_code": row["status_code"],
+        "latency_ms": row["latency_ms"],
+        "streamed": bool(row["streamed"]),
+        "prompt_tokens": row["prompt_tokens"],
+        "completion_tokens": row["completion_tokens"],
+        "total_tokens": row["total_tokens"],
+        "token_source": row["token_source"],
+        "upstream_request_id": row["upstream_request_id"],
+        "error": row["error"],
+        "route_id": row["route_id"],
+        "route_name": row["route_name"],
+        "api_key_id": row["api_key_id"],
+        "api_key_name": row["api_key_name"],
+    }
+
+
+def _request_filters() -> dict[str, Any]:
+    return {
+        "api_key_id": _arg_optional_int("api_key_id"),
+        "route_id": _arg_optional_int("route_id"),
+        "model": _arg_text("model"),
+        "status": _arg_optional_int("status"),
+        "since": _arg_instant("since", exclusive_end=False),
+        "until": _arg_instant("until", exclusive_end=True),
+    }
+
+
+@api_bp.get("/interact/requests")
+@scoped(sma.READ_REQUESTS)
+def list_requests() -> Any:
+    db = get_db()
+    limit = _arg_int("limit", 50, minimum=1, maximum=_MAX_REQUEST_PAGE)
+    offset = _arg_int("offset", 0)
+    filters = _request_filters()
+    rows = db.list_requests(limit=limit, offset=offset, **filters)
+    _audit("requests.list", status=200)
+    return jsonify(
+        {
+            "data": [_request_payload(row) for row in rows],
+            "total": db.count_requests(**filters),
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+
+
+@api_bp.get("/interact/requests/<int:request_id>")
+@scoped(sma.READ_REQUESTS)
+def get_request(request_id: int) -> Any:
+    db = get_db()
+    row = db.get_request(request_id)
+    if row is None:
+        raise sma.SmaError("request_not_found", "No such request.", 404)
+    _audit("requests.get", target=request_id, status=200)
+    return jsonify(_request_payload(row))
+
+
+# -- usage -------------------------------------------------------------------
+
+
+@api_bp.get("/interact/usage")
+@scoped(sma.READ_USAGE)
+def usage_totals() -> Any:
+    db = get_db()
+    period = (_arg_text("period") or "day").lower()
+    if period not in {"day", "month", "year", "all"}:
+        raise sma.SmaError(
+            "invalid_query", "'period' must be one of day, month, year or all."
+        )
+    api_key_id = _arg_optional_int("api_key_id")
+    route_id = _arg_optional_int("route_id")
+    _audit("usage.totals", status=200, detail=period)
+    return jsonify(db.usage_for_period(period, api_key_id, route_id))
+
+
+@api_bp.get("/interact/usage/series")
+@scoped(sma.READ_USAGE)
+def usage_series() -> Any:
+    db = get_db()
+    days = _arg_int("days", 30, minimum=1, maximum=_MAX_USAGE_DAYS)
+    api_key_id = _arg_optional_int("api_key_id")
+    route_id = _arg_optional_int("route_id")
+    totals = db.daily_usage(days, api_key_id, route_id)
+
+    today = utcnow().date()
+    series: list[dict[str, Any]] = []
+    for offset in range(days - 1, -1, -1):
+        day = (today - timedelta(days=offset)).isoformat()
+        bucket = totals.get(day, {})
+        series.append(
+            {
+                "day": day,
+                "requests": int(bucket.get("requests", 0)),
+                "prompt_tokens": int(bucket.get("prompt_tokens", 0)),
+                "completion_tokens": int(bucket.get("completion_tokens", 0)),
+                "total_tokens": int(bucket.get("total_tokens", 0)),
+            }
+        )
+    _audit("usage.series", status=200, detail=f"{days}d")
+    return jsonify({"days": days, "data": series})
+
+
+@api_bp.get("/interact/usage/breakdown")
+@scoped(sma.READ_USAGE)
+def usage_breakdown() -> Any:
+    db = get_db()
+    dimension = (_arg_text("by") or "").lower()
+    if dimension not in {"route", "key", "model", "host"}:
+        raise sma.SmaError(
+            "invalid_query", "'by' must be one of route, key, model or host."
+        )
+    days = _arg_int("days", 30, minimum=1, maximum=_MAX_USAGE_DAYS)
+    _audit("usage.breakdown", status=200, detail=f"{dimension}/{days}d")
+    return jsonify(
+        {"by": dimension, "days": days, "data": db.usage_breakdown(dimension, days)}
+    )
+
+
+# -- model catalogue ---------------------------------------------------------
+
+
+@api_bp.get("/interact/models")
+@scoped(sma.READ_MODELS)
+def list_models() -> Any:
+    db = get_db()
+    route_id = _arg_optional_int("route_id")
+    host = _arg_text("host")
+    active_only = (_arg_text("active_only") or "").lower() in {"1", "true", "yes"}
+
+    routes = {row["id"]: row for row in db.list_routes()}
+    if route_id is not None and route_id not in routes:
+        raise sma.SmaError("route_not_found", f"Route {route_id} does not exist.", 404)
+
+    data: list[dict[str, Any]] = []
+    for model in db.list_models(route_id):
+        route = routes.get(model["route_id"])
+        if route is None:
+            continue
+        if host and _normalized_host(route["target_host"]) != _normalized_host(host):
+            continue
+        if active_only and not route["is_active"]:
+            continue
+        data.append(
+            {
+                # Exactly the string ``allowed_model_ids`` takes: pick a model
+                # off one route and pin a key to that pair.
+                "key": f"{model['route_id']}:{model['model_id']}",
+                "model_id": model["model_id"],
+                # What to send to /v1 as ``model``: non-default routes namespace
+                # their models as ``[Route Name]model``.
+                "slug": model["slug"],
+                "route_id": model["route_id"],
+                "route_name": route["name"],
+                "host": route["target_host"],
+                "provider": route["provider"],
+                "route_active": bool(route["is_active"]),
+                "is_default_route": bool(model["is_default"]),
+                "fetched_at": model["fetched_at"],
+            }
+        )
+    data.sort(key=lambda item: (item["route_name"].casefold(), item["model_id"].casefold()))
+
+    _audit("models.list", status=200)
+    return jsonify(
+        {
+            "meta": {
+                "refreshed_at": db.get_meta("models_refreshed_at") or None,
+                "refresh_error": db.get_meta("models_refresh_error") or "",
+            },
+            "data": data,
+        }
+    )
+
+
+def _normalized_host(value: str) -> str:
+    return (value or "").strip().rstrip("/").lower()
+
+
+@api_bp.get("/interact/msq/<int:recorder_id>/checks")
+@scoped(sma.READ_MSQ)
+def msq_checks(recorder_id: int) -> Any:
+    db = get_db()
+    _msq_recorder(db, recorder_id)
+    limit = _arg_int("limit", 20, minimum=1, maximum=_MAX_CHECKS)
+    since_raw = _arg_instant("since", exclusive_end=False)
+
+    if since_raw is None:
+        rows = db.list_msq_checks(recorder_id, limit=limit)
+    else:  # bounded by the caller's window instead of a row count
+        since_dt = parse_iso(since_raw)
+        rows = db.recent_msq_checks(recorder_id, since_dt) if since_dt else []
+
+    # Newest first: the API answers "what happened recently", the chart in the
+    # UI keeps its own oldest-first order.
+    selected = list(reversed(rows))[:limit]
+    _audit("msq.checks", target=recorder_id, status=200)
+    return jsonify(
+        {
+            "recorder_id": recorder_id,
+            "data": [
+                {
+                    "id": row["id"],
+                    "created_at": row["created_at"],
+                    "status_code": row["status_code"],
+                    "ok": bool(row["ok"]),
+                    "ttft_ms": row["ttft_ms"],
+                    "total_ms": row["total_ms"],
+                    "generation_ms": row["generation_ms"],
+                    "completion_tokens": row["completion_tokens"],
+                    "tokens_per_second": row["tokens_per_second"],
+                    "score": row["score"],
+                    "hard_fail": bool(row["hard_fail"]),
+                    "penalties": row["penalties"],
+                    "response_excerpt": row["response_excerpt"],
+                    "error": row["error"],
+                }
+                for row in selected
+            ],
+        }
+    )
+
+
 # -- consent page (browser) --------------------------------------------------
 
 
@@ -1185,6 +1503,10 @@ def consent(token: str) -> Any:
         account=row,
         scopes=scopes,
         scope_descriptions=sma.SCOPE_DESCRIPTIONS,
+        scope_labels=sma.SCOPE_LABELS,
+        scope_danger={
+            scope: sma.danger_reason(scope) for scope in scopes if sma.is_dangerous(scope)
+        },
         redirect_host=urlsplit(row["redirect_uri"]).netloc,
         csrf=_csrf_token(),
         tampered=frozen != row["payload_hash"],
@@ -1194,14 +1516,7 @@ def consent(token: str) -> Any:
 
 
 def _recomputed_hash(row: Any) -> str:
-    return sma.enrollment_payload_hash(
-        {
-            "name": row["name"],
-            "public_key": row["public_key"],
-            "redirect_uri": row["redirect_uri"],
-            "scopes": sorted(sma.parse_scopes(row["scopes"])),
-        }
-    )
+    return sma.enrollment_payload_hash(sma.frozen_payload(row))
 
 
 @consent_bp.post("/<token>")

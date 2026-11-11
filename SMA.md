@@ -275,6 +275,7 @@ with at most 50 pending accounts server-wide.
 ```json
 {
   "name": "Docs Bot",
+  "company": "Torch",
   "description": "optional, max 500 chars",
   "public_key": "<base64 of the raw 32-byte Ed25519 public key>",
   "redirect_uri": "https://client.example.com/sma/callback",
@@ -285,6 +286,11 @@ with at most 50 pending accounts server-wide.
 - `name`: 1–64 characters, no control characters, no right-to-left overrides,
   must contain a letter or digit. `admin`, `midware`, `system`, `root`,
   `msq measurements` are reserved. Unique among pending/approved/active accounts.
+- `company`: optional, 1–48 characters, default `"Indie"`. A **self-declared
+  label**, not an identity — the consent page shows "This will allow
+  \<company\> (\<name\>) to:" and marks it as claimed, not verified. Send the
+  name of the person or project that wrote the client, not the end user's.
+  `company_id` is accepted as an alias. The same reserved words apply.
 - `public_key`: the raw key, not PEM. One key may only back one live account.
 - `redirect_uri`: absolute `https://`, or `http://` on loopback
   (`localhost`, `127.0.0.1`, `::1`, `*.localhost`). No credentials, no fragment.
@@ -298,6 +304,7 @@ with at most 50 pending accounts server-wide.
 {
   "account_id": 3,
   "name": "Docs Bot",
+  "company": "Torch",
   "state": "pending",
   "scopes": ["midware.read:routes", "midware.write:apikeys"],
   "key_fingerprint": "ab12-cd34-ef56-7890",
@@ -328,7 +335,10 @@ link (only the newest works).
 
 The admin must be signed into the MidWare control panel to open it, and must be
 on HTTPS (or the plain-HTTP opt-in must be on). The link is single-use and lives
-15 minutes.
+15 minutes. The page reads "This will allow \<company\> (\<name\>) to:", lists
+each permission as a sentence with the raw scope id underneath, and marks the
+abusable ones **DANGEROUS** with a one-line reason. Company is self-declared and
+labelled as such; it is not verified.
 
 #### `GET /ActivateSystemAccount/status`
 
@@ -507,6 +517,7 @@ The hidden `MSQ Measurements` system key is never visible or toggleable here
 | `POST /interact/msq/<id>/update` | `midware.edit:msq` | |
 | `POST /interact/msq/<id>/delete` | `midware.write:msq` | |
 | `POST /interact/msq/<id>/run` | `midware.write:msq` | probe **now**; 30 s cooldown |
+| `GET /interact/msq/<id>/checks` | `midware.read:msq` | probe history, newest first |
 
 ```json
 {
@@ -531,6 +542,134 @@ The hidden `MSQ Measurements` system key is never visible or toggleable here
 `hardcore_json` may be an object (stored canonically) or a JSON string. A probe
 spends real upstream tokens, so `run` is throttled and every run is audited.
 
+#### `GET /interact/msq/<id>/checks`
+
+Query: `limit` (default 20, max 200), `since` (ISO 8601, inclusive).
+
+```json
+{
+  "recorder_id": 4,
+  "data": [{
+    "id": 481, "created_at": "2026-11-11T09:00:04+00:00",
+    "status_code": 200, "ok": true, "ttft_ms": 620, "total_ms": 4100,
+    "generation_ms": 3480, "completion_tokens": 300,
+    "tokens_per_second": 86.2, "score": 0.94, "hard_fail": false,
+    "penalties": null, "response_excerpt": "…", "error": null
+  }]
+}
+```
+
+Newest first. `run` answers "is it working right now"; this answers "has it been
+working", which is the question that catches a route degrading over a day. The
+web UI's chart keeps its own oldest-first order.
+
+---
+
+### 4.7 Request log
+
+| Method + path | Scope | Notes |
+| --- | --- | --- |
+| `GET /interact/requests` | `midware.read:requests` | filtered page of the log |
+| `GET /interact/requests/<id>` | `midware.read:requests` | one entry |
+
+Query: `limit` (default 50, max 500), `offset`, `api_key_id`, `route_id`,
+`model`, `status` (HTTP status code), `since`, `until` (ISO 8601, or a bare
+date; `until=2026-11-11` means "before 2026-11-12T00:00"). Percent-encode the
+`+` in an offset as `%2B`; a literal space is also accepted.
+
+```json
+{
+  "data": [{
+    "id": 1234, "created_at": "2026-11-11T09:31:02+00:00",
+    "method": "POST", "request_path": "/v1/chat/completions",
+    "model": "deepseek-v3.2", "model_raw": "deepseek-v3.2", "host_prefix": "",
+    "status_code": 200, "latency_ms": 812, "streamed": true,
+    "prompt_tokens": 41, "completion_tokens": 210, "total_tokens": 251,
+    "token_source": "upstream", "upstream_request_id": "gen-...", "error": null,
+    "route_id": 9, "route_name": "NanoGPT-PAID",
+    "api_key_id": 7, "api_key_name": "hermes-main"
+  }],
+  "total": 50231, "limit": 50, "offset": 0
+}
+```
+
+**Prompts and responses are not included, and will never be part of this
+scope.** `request_body` and `response_body` hold whole conversations; a signed
+automation token that could read them would turn one stolen key into a
+transcript of everything that crossed the proxy. Metadata is what answers "is it
+healthy, where did the tokens go, why the 502". Content would arrive as
+`midware.dangerous.read:request_content`, which does not exist yet.
+
+---
+
+### 4.8 Usage
+
+| Method + path | Scope | Notes |
+| --- | --- | --- |
+| `GET /interact/usage` | `midware.read:usage` | totals for `period=day\|month\|year\|all` |
+| `GET /interact/usage/series` | `midware.read:usage` | daily buckets, zero-filled |
+| `GET /interact/usage/breakdown` | `midware.read:usage` | `by=route\|key\|model\|host` |
+
+All three accept `api_key_id` and `route_id` (totals, series); `days` (default
+30, max 365) applies to series and breakdown.
+
+```json
+{"period": "month", "start": "2026-11-01T00:00:00+00:00", "requests": 8123,
+ "prompt_tokens": 1200000, "completion_tokens": 430000, "total_tokens": 1630000,
+ "avg_latency_ms": 940}
+```
+
+```json
+{"days": 30, "data": [{"day": "2026-11-11", "requests": 312,
+ "prompt_tokens": 41000, "completion_tokens": 12000, "total_tokens": 53000}]}
+```
+
+```json
+{"by": "route", "days": 30, "data": [
+  {"id": 9, "name": "NanoGPT-PAID", "requests": 512, "prompt_tokens": 150000,
+   "completion_tokens": 60000, "total_tokens": 210000}]}
+```
+
+Totals and `series` read the permanent daily ledger, so pruning the request log
+never shrinks a headline number. `by=model` and `by=host` read the request log
+and are therefore always bounded by `days`. `breakdown` returns
+`{"model": ...}`/`{"host": ...}` rows for those two dimensions. Rows with no key
+or route use `"id": null, "name": "unknown"`.
+
+---
+
+### 4.9 Model catalogue
+
+`GET /interact/models` — `midware.read:models`. Query: `route_id`, `host`,
+`active_only` (`1`/`true`/`yes`).
+
+```json
+{
+  "meta": {"refreshed_at": "2026-11-11T04:00:12+00:00", "refresh_error": ""},
+  "data": [{
+    "key": "9:deepseek-v3.2",
+    "model_id": "deepseek-v3.2",
+    "slug": "[NanoGPT-PAID]deepseek-v3.2",
+    "route_id": 9, "route_name": "NanoGPT-PAID",
+    "host": "https://api.nano-gpt.com/api/v1", "provider": "nanogpt",
+    "route_active": true, "is_default_route": false,
+    "fetched_at": "2026-11-11T04:00:12+00:00"
+  }]
+}
+```
+
+Two strings, two jobs:
+
+- `key` is exactly what `allowed_model_ids` takes (`"<route_id>:<model_id>"`),
+  so you can pick a model off one route and pin a key to that pair without
+  guessing ids.
+- `slug` is exactly what to send to `/v1` as `model`. Non-default routes
+  namespace their models as `[Route Name]model`.
+
+`meta.refreshed_at` / `refresh_error` come from the catalogue refresh thread. A
+stale or failing catalogue is the quiet failure that breaks routing, so it is
+reported next to the list rather than left to be discovered.
+
 ---
 
 ## 5. Permissions
@@ -551,6 +690,18 @@ delete.
 | `midware.read:msq` | Read recorders |
 | `midware.write:msq` | Create/delete recorders, run a probe |
 | `midware.edit:msq` | Update a recorder |
+| `midware.read:requests` | Read the request log — metadata only, never prompts or responses |
+| `midware.read:usage` | Read usage totals, daily series and breakdowns |
+| `midware.read:models` | Read the cached model catalogue per route |
+
+The consent page renders these as sentences, not ids ("Read request data"), and
+marks the ones that can be abused with a **DANGEROUS** badge and a one-line
+reason. It is presentation only: the grant is still the scope list, and the
+tamper hash covers the set.
+
+Scopes in the `midware.dangerous.` namespace are dangerous by naming
+convention. Nothing is granted there today; the first intended resident is
+`midware.dangerous.read:request_content` for reading prompt/response bodies.
 
 Not grantable: `midware.write:self`. Every account can call
 `DisableSystemAccount` and read `interact/self` without asking.
@@ -583,6 +734,8 @@ An untouched enrollment, or an approved one that is never exchanged, becomes
 | Calls per account | 120/min (`MIDWARE_SMA_REQUESTS_PER_MINUTE`) |
 | MSQ probe cooldown | 30 s |
 | Audit retention | 30 days |
+| Request log page | 500 rows maximum |
+| Usage window | 365 days maximum |
 
 A denied account keeps its pending token so `status` can report `denied`, but
 nothing else accepts it. An expired enrollment has its token hashes cleared, so
@@ -853,6 +1006,14 @@ happen:
     stop impersonating a browser afterwards.
 14. **HTTPS by default.** If you get `insecure_transport`, switch the base URL to
     `https://`; don't ask for the opt-in.
+15. **You cannot read prompts or responses.** `read:requests` returns metadata.
+    If a task needs message content, say so instead of hunting for an endpoint;
+    the only route is a `midware.dangerous.read:request_content` grant, which
+    does not exist yet.
+16. **New scopes are never silently granted.** If a call answers `403
+    scope_denied` after the server adds a capability, the client must re-enroll
+    (revoke, enroll again, get a new human Allow). That is the design: nothing
+    can expand its own reach without the admin clicking.
 
 ---
 
