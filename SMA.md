@@ -861,7 +861,7 @@ happen:
 | Symptom | Cause |
 | --- | --- |
 | `503 sma_disabled` | Master switch is off in Settings. |
-| `403 insecure_transport` | Plain HTTP and the opt-in is off (or a proxy isn't trusted: set `MIDWARE_TRUST_PROXY_HOPS`). |
+| `403 insecure_transport` | Plain HTTP and the opt-in is off (or a proxy isn't trusted: the peer address must be in `MIDWARE_TRUSTED_PROXIES`, default loopback, or set `MIDWARE_TRUST_PROXY_HOPS`). |
 | `401 invalid_signature` on every call | Body bytes changed after signing, or the method/path/timestamp differ. |
 | `401 stale_timestamp` | Host clock drift over 300 s. |
 | `401 replayed_nonce` | A nonce was reused (often a retried request). |

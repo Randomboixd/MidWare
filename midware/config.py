@@ -98,6 +98,23 @@ MAX_CAPTURE_BYTES = _env_int("MIDWARE_MAX_CAPTURE_BYTES", 8 * 1024 * 1024)
 # "https" and its own address by setting the header itself.
 TRUST_PROXY_HOPS = max(0, _env_int("MIDWARE_TRUST_PROXY_HOPS", 0))
 
+# Address-based proxy trust: forwarded headers are honoured only when the peer
+# connection comes from one of these addresses/CIDRs. Loopback by default, which
+# covers the usual topology (a TLS terminator on the same host or sharing this
+# NetworkNamespace) without the operator having to count hops. A remote client
+# cannot reach a loopback listener, so it cannot forge the header. Add the
+# Docker gateway (e.g. 172.17.0.1/32) if the proxy runs in another container
+# without sharing the network namespace. Empty string disables address trust.
+TRUSTED_PROXIES = tuple(
+    item.strip()
+    for item in (os.environ.get("MIDWARE_TRUSTED_PROXIES", "127.0.0.1/32,::1/128") or "").split(",")
+    if item.strip()
+)
+
+# X-Forwarded-For decides what address rate limiting and logs see, so believing
+# it is opt-in even when the peer is trusted.
+TRUST_FORWARDED_FOR = _env_bool("MIDWARE_TRUST_FORWARDED_FOR", False)
+
 # -- System Management Accounts (SMA) ---------------------------------------
 # A signed, scoped API for automation under /_midware/api. Requests carry an
 # Ed25519 signature over the method, path, body digest, timestamp and a nonce,

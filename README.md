@@ -300,8 +300,28 @@ the keys it minted.
 
 The whole surface is switched from **Settings → System Management Accounts API**.
 It refuses plain HTTP by default. If the instance has no TLS and sits on a
-network you trust, you can allow plain HTTP; behind a TLS terminator, set
-`MIDWARE_TRUST_PROXY_HOPS=1` so MidWare sees the original scheme.
+network you trust, you can allow plain HTTP.
+
+Behind a TLS terminator, MidWare has to be told that the request really arrived
+over TLS, because the connection it sees is plain. There are two ways to say so,
+and you only need one:
+
+- **Address-based trust (default).** Forwarded headers are believed only when the
+  peer connection comes from `MIDWARE_TRUSTED_PROXIES` — `127.0.0.1/32,::1/128`
+  by default, which covers a terminator on the same host or sharing this network
+  namespace (the usual `tailscale serve`, Caddy, or nginx-on-the-host setup).
+  Set it to a comma-separated list of addresses/CIDRs if your proxy arrives from
+  somewhere else, such as the Docker bridge gateway `172.17.0.1/32`. Set it empty
+  to disable address trust entirely. A remote client cannot reach a loopback
+  listener, so it still cannot claim `https` over a cleartext connection.
+- **Hop counting (legacy).** `MIDWARE_TRUST_PROXY_HOPS=1` trusts
+  `X-Forwarded-*` from a fixed number of hops. It still works, but it has to be
+  raised every time another proxy is added, and it cannot distinguish a
+  forwarded header from a spoofed one as precisely as a peer address can.
+
+`X-Forwarded-For` is deliberately *not* believed by default even from a trusted
+peer, because it decides the client address used by rate limiting and logs. Opt
+in with `MIDWARE_TRUST_FORWARDED_FOR=1` when you want the real client IP.
 
 ## Signing in to providers
 

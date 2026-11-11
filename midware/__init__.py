@@ -24,8 +24,8 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
 
     proxy_hops = int(app.config.get("TRUST_PROXY_HOPS") or 0)
     if proxy_hops > 0:
-        # Only trust X-Forwarded-* when the operator says a proxy is in front;
-        # otherwise a client could claim "https" and an arbitrary address.
+        # Legacy hop counting: trust X-Forwarded-* from a fixed number of hops.
+        # Kept for existing deployments; address-based trust below is preferred.
         from werkzeug.middleware.proxy_fix import ProxyFix
 
         app.wsgi_app = ProxyFix(
@@ -35,6 +35,20 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
             x_host=proxy_hops,
             x_port=proxy_hops,
         )
+    else:
+        # Address-based trust: X-Forwarded-Proto/Host are believed only when the
+        # peer is a proxy we control (loopback by default). This is what makes a
+        # TLS-terminating proxy work without any hop-count configuration, while a
+        # remote client still cannot claim "https" over a cleartext connection.
+        trusted = app.config.get("TRUSTED_PROXIES") or ()
+        if trusted:
+            from .proxies import TrustedProxies
+
+            app.wsgi_app = TrustedProxies(
+                app.wsgi_app,
+                trusted,
+                trust_forwarded_for=bool(app.config.get("TRUST_FORWARDED_FOR")),
+            )
 
     if database_path is None:
         database_path = os.environ.get("MIDWARE_DB") or app.config["DATABASE"]
