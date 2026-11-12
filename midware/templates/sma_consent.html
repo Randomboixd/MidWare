@@ -9,6 +9,10 @@
   </div>
 </div>
 
+{% if error %}
+<article class="flash flash-error" role="alert">{{ error }}</article>
+{% endif %}
+
 {% if tampered %}
 <article class="flash flash-error" role="alert">
   This request does not match the details that were enrolled, so it has been
@@ -59,11 +63,39 @@
 </div>
 
 <h2>Decision</h2>
+{% if danger_scopes %}
+<section class="mw-danger-panel" role="alert">
+  <h3>This app requests potentially dangerous permissions</h3>
+  <p>These can be used to affect your server, your keys, or your conversations:</p>
+  <ul>
+    {% for scope in danger_scopes %}
+    <li>
+      <strong>{{ scope_labels.get(scope, scope) }}</strong>
+      {% if scope_consequences.get(scope) %}
+      <small class="mw-hint mw-danger-reason">{{ scope_consequences[scope] }}</small>
+      {% endif %}
+      <small class="mw-hint"><code>{{ scope }}</code></small>
+    </li>
+    {% endfor %}
+  </ul>
+  <p><strong>Only accept if you started this request yourself, and you understand what it gives away.</strong></p>
+</section>
+{% endif %}
 <form method="post" action="{{ url_for('sma_consent.consent_decide', token=token) }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if danger_scopes %}
+  <div class="field">
+    <label for="consent-password">Confirm with your MidWare password</label>
+    <input type="password" id="consent-password" name="password" required
+           autocomplete="current-password" placeholder=" ">
+    <small class="mw-hint">
+      Required to grant a dangerous permission. Sign-in lockout applies here too.
+    </small>
+  </div>
+  {% endif %}
   <div class="mw-inline-actions">
-    <button type="submit" name="decision" value="allow"{% if tampered %} disabled{% endif %}>Allow</button>
-    <button type="submit" name="decision" value="deny" class="border">Deny</button>
+    <button type="submit" name="decision" value="allow"{% if tampered %} disabled{% endif %}>{% if danger_scopes %}Accept{% else %}Allow{% endif %}</button>
+    <button type="submit" name="decision" value="deny" class="border">Decline</button>
   </div>
   <small class="mw-hint">You can revoke this account later under Settings.</small>
 </form>

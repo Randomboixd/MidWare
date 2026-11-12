@@ -2063,6 +2063,24 @@ class Database:
             (request_id,),
         )
 
+    def get_owned_request(self, request_id: int, account_id: int) -> sqlite3.Row | None:
+        """A request whose API key belongs to ``account_id``.
+
+        Deleted keys null out ``requests.api_key_id``, and such a row must not
+        become readable just because nobody owns it any more.
+        """
+        return self._row(
+            """
+            SELECT r.*, k.name AS api_key_name, rt.name AS route_name
+            FROM requests r
+            JOIN api_keys k ON k.id = r.api_key_id
+            LEFT JOIN routes rt ON rt.id = r.route_id
+            WHERE r.id = ? AND r.api_key_id IS NOT NULL
+              AND k.owner_system_account_id = ?
+            """,
+            (request_id, account_id),
+        )
+
     def purge_requests(self) -> int:
         with self.write() as conn:
             cur = conn.execute("DELETE FROM requests")

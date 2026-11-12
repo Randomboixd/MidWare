@@ -281,6 +281,23 @@ def clear_login_failures(username: str) -> None:
         _FAILURES.pop(_throttle_key(username), None)
 
 
+def verify_with_throttle(username: str, password: str) -> tuple[bool, str]:
+    """Verify credentials, spending the same attempt budget as sign-in.
+
+    Used by flows that re-ask for the password (approving dangerous SMA
+    scopes). Sharing ``login_blocked``/``record_login_failure`` matters: a
+    second, independent budget would let anyone holding a consent link brute
+    force the password without ever tripping the sign-in lockout.
+    """
+    if login_blocked(username):
+        return False, "blocked"
+    if verify(username, password or ""):
+        clear_login_failures(username)
+        return True, "ok"
+    record_login_failure(username)
+    return False, "invalid"
+
+
 def reset_login_throttle() -> None:
     """Test helper: forget every tracked failure."""
     with _FAILURES_LOCK:

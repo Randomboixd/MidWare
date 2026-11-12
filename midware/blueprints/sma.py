@@ -35,6 +35,7 @@ from werkzeug.exceptions import HTTPException
 
 from .. import adminauth, images, sma
 from ..auth import get_db
+from ..conversation import build_conversation
 from ..db import dump_id_list, dump_model_list, parse_iso, to_iso, utcnow
 from ..msq import run_recorder
 
@@ -80,6 +81,21 @@ def scoped(scope: str) -> Callable:
 
     def decorator(view: Callable) -> Callable:
         view.__sma_scope__ = scope  # type: ignore[attr-defined]
+        return view
+
+    return decorator
+
+
+def scoped_any(*scopes: str) -> Callable:
+    """Any one of several scopes opens the endpoint.
+
+    Only for cases where the wider grant strictly contains the narrower one and
+    the narrow one is useless alone — reading content without being able to list
+    the log would be a grant that cannot do its job.
+    """
+
+    def decorator(view: Callable) -> Callable:
+        view.__sma_scopes__ = tuple(scopes)  # type: ignore[attr-defined]
         return view
 
     return decorator
@@ -305,14 +321,24 @@ def _guard() -> Any:
 
         view = current_app.view_functions.get(request.endpoint or "")
         required = getattr(view, "__sma_scope__", None)
-        if required is None:
+        allowed_any = getattr(view, "__sma_scopes__", ())
+        account_scopes = sma.parse_scopes(account["scopes"])
+        if required is None and not allowed_any:
             if request.endpoint not in UNSCOPED_ENDPOINTS:
                 # A route without a declared scope must never become an open door.
                 raise sma.SmaError("endpoint_unscoped", "This endpoint is not available.", 403)
-        elif required not in sma.parse_scopes(account["scopes"]):
+        elif required is not None and required not in account_scopes:
             raise sma.SmaError(
                 "scope_denied",
                 f"This account does not have the '{required}' permission.",
+                403,
+            )
+        elif required is None and not any(scope in account_scopes for scope in allowed_any):
+            raise sma.SmaError(
+                "scope_denied",
+                "This account does not have any of the permissions that endpoint needs: "
+                + ", ".join(f"'{scope}'" for scope in allowed_any)
+                + ".",
                 403,
             )
 
@@ -1247,7 +1273,7 @@ def _request_filters() -> dict[str, Any]:
 
 
 @api_bp.get("/interact/requests")
-@scoped(sma.READ_REQUESTS)
+@scoped_any(sma.READ_REQUESTS, sma.READ_REQUEST_CONTENT)
 def list_requests() -> Any:
     db = get_db()
     limit = _arg_int("limit", 50, minimum=1, maximum=_MAX_REQUEST_PAGE)
@@ -1266,7 +1292,7 @@ def list_requests() -> Any:
 
 
 @api_bp.get("/interact/requests/<int:request_id>")
-@scoped(sma.READ_REQUESTS)
+@scoped_any(sma.READ_REQUESTS, sma.READ_REQUEST_CONTENT)
 def get_request(request_id: int) -> Any:
     db = get_db()
     row = db.get_request(request_id)
@@ -1397,6 +1423,121 @@ def _normalized_host(value: str) -> str:
     return (value or "").strip().rstrip("/").lower()
 
 
+# -- request content (dangerous) ---------------------------------------------
+#
+# Content is reachable by request id only: one read, one audit line naming that
+# id. A bulk form would turn a trail of lines into a single "dumped the log"
+# entry, which is the wrong shape for the sharpest permission here.
+
+_MAX_CONTENT_BYTES = 256 * 1024
+
+
+def _flatten_conversation(conversation: dict[str, Any]) -> str:
+    """One readable transcript, so a caller that only wants to read can."""
+    lines: list[str] = []
+    for block in conversation.get("messages", []):
+        lines.append(f"[{block.get('number')}] {block.get('role')}")
+        if block.get("text"):
+            lines.append(str(block["text"]))
+        if block.get("reasoning"):
+            lines.append(f"(reasoning) {block['reasoning']}")
+        for call in block.get("tool_calls", []) or []:
+            lines.append(f"(tool_call) {call}")
+    return "\n".join(lines)
+
+
+def _bounded_conversation(
+    conversation: dict[str, Any], budget: int
+) -> tuple[dict[str, Any], bool]:
+    """Keep whole messages until the budget runs out."""
+    kept: list[dict[str, Any]] = []
+    used = 0
+    cut = False
+    for block in conversation.get("messages", []):
+        size = len(json.dumps(block, ensure_ascii=False))
+        if used + size > budget:
+            cut = True
+            break
+        kept.append(block)
+        used += size
+    return {**conversation, "messages": kept}, cut
+
+
+@api_bp.get("/interact/requests/<int:request_id>/content")
+@scoped(sma.READ_REQUEST_CONTENT)
+def request_content(request_id: int) -> Any:
+    db = get_db()
+    account_id = int(g.sma_account["id"])
+    row = db.get_owned_request(request_id, account_id)
+    if row is None:
+        # Deliberately identical to a request that never existed. A 403 would
+        # confirm that some other owner's traffic occupies that id.
+        raise sma.SmaError("request_not_found", "No such request.", 404)
+
+    ceiling = int(current_app.config.get("MAX_CAPTURE_BYTES", 8 * 1024 * 1024))
+    max_bytes = _arg_int("max_bytes", _MAX_CONTENT_BYTES, minimum=1024, maximum=ceiling)
+
+    request_body = row["request_body"]
+    response_body = row["response_body"]
+    payload: dict[str, Any] = {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "model": row["model"],
+        "status_code": row["status_code"],
+        "streamed": bool(row["streamed"]),
+        "route_name": row["route_name"],
+        "api_key_name": row["api_key_name"],
+        "max_bytes": max_bytes,
+    }
+
+    if not request_body and not response_body:
+        # The row exists but capture was switched off for it, which is worth
+        # telling the caller instead of answering 404.
+        payload.update(
+            {
+                "conversation": None,
+                "text": None,
+                "raw": None,
+                "reason": "not_captured",
+            }
+        )
+        _audit("requests.content", target=request_id, status=204, detail="not_captured")
+        return jsonify(payload)
+
+    conversation = build_conversation(request_body, response_body)
+    bounded, conversation_cut = _bounded_conversation(conversation, max_bytes)
+    text = _flatten_conversation(conversation)
+    text_cut = len(text) > max_bytes
+
+    def _trim(value: str | None) -> tuple[str | None, bool, int]:
+        if not value:
+            return None, False, 0
+        size = len(value)
+        return (value[:max_bytes], size > max_bytes, size)
+
+    raw_request, request_cut, request_size = _trim(request_body)
+    raw_response, response_cut, response_size = _trim(response_body)
+
+    payload.update(
+        {
+            "conversation": bounded,
+            "conversation_truncated": conversation_cut,
+            "text": text[:max_bytes],
+            "text_truncated": text_cut,
+            "raw": {
+                "request_body": raw_request,
+                "response_body": raw_response,
+                "request_bytes": request_size,
+                "response_bytes": response_size,
+                "truncated": request_cut or response_cut,
+            },
+            "reason": None,
+        }
+    )
+    _audit("requests.content", target=request_id, status=200)
+    return jsonify(payload)
+
+
 @api_bp.get("/interact/msq/<int:recorder_id>/checks")
 @scoped(sma.READ_MSQ)
 def msq_checks(recorder_id: int) -> Any:
@@ -1489,29 +1630,36 @@ def _consent_row(token: str) -> Any:
     return row
 
 
+def _consent_context(row: Any, token: str, *, error: str = "") -> dict[str, Any]:
+    """Everything the consent page renders, so a rejected submit can re-render it."""
+    scopes = sma.parse_scopes(row["scopes"])
+    danger = [scope for scope in scopes if sma.is_dangerous(scope)]
+    return {
+        "token": token,
+        "account": row,
+        "scopes": scopes,
+        "scope_descriptions": sma.SCOPE_DESCRIPTIONS,
+        "scope_labels": sma.SCOPE_LABELS,
+        "scope_danger": {scope: sma.danger_reason(scope) for scope in danger},
+        "scope_consequences": {
+            scope: sma.SCOPE_CONSEQUENCE.get(scope, "") for scope in danger
+        },
+        "danger_scopes": danger,
+        "redirect_host": urlsplit(row["redirect_uri"]).netloc,
+        "csrf": _csrf_token(),
+        "tampered": _recomputed_hash(row) != row["payload_hash"],
+        "transport": row["requested_transport"] or "unknown",
+        "error": error,
+    }
+
+
 @consent_bp.get("/<token>")
 @adminauth.admin_required
 def consent(token: str) -> Any:
     if not adminauth.credentials_configured():
         abort(404)
     row = _consent_row(token)
-    scopes = sma.parse_scopes(row["scopes"])
-    frozen = _recomputed_hash(row)
-    response = render_template(
-        "sma_consent.html",
-        token=token,
-        account=row,
-        scopes=scopes,
-        scope_descriptions=sma.SCOPE_DESCRIPTIONS,
-        scope_labels=sma.SCOPE_LABELS,
-        scope_danger={
-            scope: sma.danger_reason(scope) for scope in scopes if sma.is_dangerous(scope)
-        },
-        redirect_host=urlsplit(row["redirect_uri"]).netloc,
-        csrf=_csrf_token(),
-        tampered=frozen != row["payload_hash"],
-        transport=row["requested_transport"] or "unknown",
-    )
+    response = render_template("sma_consent.html", **_consent_context(row, token))
     return _no_store(response)
 
 
@@ -1540,6 +1688,47 @@ def consent_decide(token: str) -> Any:
     decision = request.form.get("decision", "")
     if decision not in {"allow", "deny"}:
         abort(400, description="Choose Allow or Deny.")
+
+    danger = [scope for scope in sma.parse_scopes(row["scopes"]) if sma.is_dangerous(scope)]
+    if decision == "allow" and danger:
+        # The password is checked here, in the request that would grant, so a
+        # missing or wrong one changes nothing. Budget shared with sign-in.
+        ok, reason = adminauth.verify_with_throttle(
+            adminauth.current_username(), request.form.get("password", "")
+        )
+        if not ok:
+            if reason == "blocked":
+                # Too many guesses through this link: burn it rather than keep
+                # answering, so the page is not a password oracle.
+                with db.write() as conn:
+                    conn.execute(
+                        "UPDATE system_accounts SET activation_token_hash = NULL, "
+                        "activation_expires_at = NULL WHERE id = ? AND state = 'pending'",
+                        (int(row["id"]),),
+                    )
+                db.record_system_event(
+                    int(row["id"]), "consent.danger_lockout", status=429, ip=_client_ip()
+                )
+                return _no_store(
+                    render_template(
+                        "sma_result.html", state="error", account=row, token=token
+                    )
+                ), 429
+            db.record_system_event(
+                int(row["id"]), "consent.danger_denied", status=401, ip=_client_ip()
+            )
+            response = render_template(
+                "sma_consent.html",
+                **_consent_context(row, token, error="Incorrect password. Nothing was approved."),
+            )
+            return _no_store(response), 401
+        db.record_system_event(
+            int(row["id"]),
+            "consent.danger_accept",
+            status=200,
+            ip=_client_ip(),
+            detail=";".join(danger),
+        )
 
     if decision == "allow":
         with db.write() as conn:

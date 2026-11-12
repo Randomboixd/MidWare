@@ -56,6 +56,7 @@ EDIT_MSQ = "midware.edit:msq"
 READ_REQUESTS = "midware.read:requests"
 READ_USAGE = "midware.read:usage"
 READ_MODELS = "midware.read:models"
+READ_REQUEST_CONTENT = "midware.dangerous.read:request_content"
 WRITE_SELF = "midware.write:self"
 
 SCOPES: tuple[str, ...] = (
@@ -73,6 +74,7 @@ SCOPES: tuple[str, ...] = (
     READ_REQUESTS,
     READ_USAGE,
     READ_MODELS,
+    READ_REQUEST_CONTENT,
 )
 
 # Not grantable: every account can shut itself off, and asking for it would only
@@ -101,6 +103,10 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
         "Read usage totals and per-day, per-route, per-key and per-model breakdowns."
     ),
     READ_MODELS: "Read which models each route serves, as cached from the provider.",
+    READ_REQUEST_CONTENT: (
+        "Read the captured text of requests and responses, for keys this account "
+        "created only. This exposes conversation content."
+    ),
 }
 
 # What the consent page says out loud. Scope ids are an implementation detail the
@@ -120,6 +126,7 @@ SCOPE_LABELS: dict[str, str] = {
     READ_REQUESTS: "Read request data",
     READ_USAGE: "Read usage totals",
     READ_MODELS: "Read the model catalogue",
+    READ_REQUEST_CONTENT: "Read message contents",
 }
 
 # Why a scope deserves a warning rather than a line in a list. The consent page
@@ -132,6 +139,23 @@ SCOPE_DANGER: dict[str, str] = {
     EDIT_APIKEYS_OWNED: "Can widen what the keys it minted may reach",
     WRITE_APIKEYS_STATUS: "Can disable every key on the server, including yours",
     EDIT_MSQ: "Can change scoring so failures look like passes",
+    READ_REQUEST_CONTENT: "Can read the text of conversations this app carried",
+}
+
+# The loud sentence for the confirmation gate. Kept apart from SCOPE_DANGER
+# because the summary page needs a short reason and the gate needs the thing
+# that makes an admin stop and read.
+SCOPE_CONSEQUENCE: dict[str, str] = {
+    READ_REQUEST_CONTENT: (
+        "Reads the text of conversations sent through keys this app created. "
+        "Private chats can appear in full."
+    ),
+    WRITE_APIKEYS: "It can create credentials that spend your upstream credit.",
+    WRITE_APIKEYS_STATUS: "It can switch off every API key on this server.",
+    EDIT_ROUTES: "It can redirect your traffic to another host.",
+    WRITE_ROUTES: "It can add a route that points anywhere it likes.",
+    EDIT_MSQ: "It can make failing routes look healthy.",
+    EDIT_APIKEYS_OWNED: "It can widen what the keys it created may reach.",
 }
 
 # Scopes in this namespace are dangerous by naming convention, so the badge does

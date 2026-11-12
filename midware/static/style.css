@@ -326,6 +326,19 @@ code {
   color: var(--error);
 }
 
+.mw-danger-panel {
+  border: 1px solid var(--error-container);
+  border-radius: var(--mw-radius);
+  background: color-mix(in srgb, var(--error-container) 22%, var(--surface-container-low));
+  padding: 0.9rem 1rem;
+  margin-block-end: 1rem;
+}
+
+.mw-danger-panel h3 {
+  margin-block: 0 0.4rem;
+  color: var(--error);
+}
+
 .mw-reference {
   margin-top: 1.5rem;
   border: 1px solid var(--outline-variant);

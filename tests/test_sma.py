@@ -908,7 +908,8 @@ def test_every_sma_endpoint_declares_a_scope():
             continue
         view = app.view_functions[rule.endpoint]
         declared = getattr(view, "__sma_scope__", None)
-        assert declared or rule.endpoint in open_endpoints, rule.endpoint
+        declared_any = getattr(view, "__sma_scopes__", ())
+        assert declared or declared_any or rule.endpoint in open_endpoints, rule.endpoint
 
 
 def test_plain_http_is_refused_by_default(tmp_path):
@@ -1017,8 +1018,8 @@ def _seed_request(
     model: str = "deepseek-v3.2",
     total: int = 120,
     when: str | None = None,
-    prompt: str = "PROMPT SECRET",
-    answer: str = "ANSWER SECRET",
+    prompt: str | None = "PROMPT SECRET",
+    answer: str | None = "ANSWER SECRET",
 ) -> int:
     """Insert a request row directly so ``created_at`` can be backdated."""
     with db.write() as conn:
@@ -1506,3 +1507,228 @@ def test_consent_page_marks_dangerous_scopes(secured):
     assert b"Can mint credentials that spend your upstream quota" in data
     assert b"Read request data" in data
     assert b"midware.read:requests" in data
+
+
+# -- request content: the dangerous scope ------------------------------------
+
+
+CONTENT = sma.READ_REQUEST_CONTENT
+
+
+def _owned_request(db, account_id, *, prompt="PROMPT SECRET", answer="ANSWER SECRET", body=True):
+    """A request made with a key this account owns, with JSON bodies."""
+    route = db.list_routes()[0]
+    db.create_api_key(
+        "owned",
+        restrict_providers=True,
+        allowed_route_ids=[route["id"]],
+        owner_system_account_id=account_id,
+    )
+    key = [row for row in db.list_api_keys() if row["owner_system_account_id"] == account_id][-1]
+    request_body = json.dumps(
+        {"model": "deepseek-v3.2", "messages": [{"role": "user", "content": prompt}]}
+    )
+    response_body = json.dumps(
+        {"choices": [{"message": {"role": "assistant", "content": answer}}]}
+    )
+    return _seed_request(
+        db,
+        route_id=route["id"],
+        api_key_id=key["id"],
+        prompt=request_body if body else None,
+        answer=response_body if body else None,
+    )
+
+
+def test_content_needs_the_dangerous_scope(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[sma.READ_REQUESTS])
+    request_id = _owned_request(db, account_id)
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{request_id}/content"
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "scope_denied"
+
+
+def test_content_reads_only_its_own_keys(sma_env):
+    client, db = sma_env
+    signing_a, account_a, token_a = _active(client, db, scopes=[CONTENT], name="Owner")
+    signing_b, account_b, token_b = _active(client, db, scopes=[CONTENT], name="Stranger")
+
+    mine = _owned_request(db, account_a)
+
+    own = _signed(
+        client, signing_a, account_a, token_a, "GET", f"{BASE}/interact/requests/{mine}/content"
+    )
+    assert own.status_code == 200
+    assert "PROMPT SECRET" in own.get_json()["text"]
+
+    theirs = _signed(
+        client, signing_b, account_b, token_b, "GET", f"{BASE}/interact/requests/{mine}/content"
+    )
+    assert theirs.status_code == 404
+    assert theirs.get_json()["error"]["code"] == "request_not_found"
+
+
+def test_content_refuses_rows_whose_key_was_deleted(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[CONTENT])
+    route = db.list_routes()[0]
+    orphan = _seed_request(db, route_id=route["id"])  # api_key_id is NULL
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{orphan}/content"
+    )
+    assert response.status_code == 404
+
+
+def test_content_returns_conversation_text_and_raw(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[CONTENT])
+    request_id = _owned_request(db, account_id)
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{request_id}/content"
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+
+    assert "PROMPT SECRET" in body["text"]
+    assert "ANSWER SECRET" in body["text"]
+    assert "PROMPT SECRET" in body["raw"]["request_body"]
+    assert "ANSWER SECRET" in body["raw"]["response_body"]
+    assert body["raw"]["truncated"] is False
+    assert body["reason"] is None
+    assert body["conversation"]["messages"]
+
+
+def test_content_reports_uncaptured_rows(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[CONTENT])
+    request_id = _owned_request(db, account_id, body=False)
+    response = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{request_id}/content"
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["reason"] == "not_captured"
+    assert body["raw"] is None and body["conversation"] is None
+
+
+def test_content_honours_max_bytes(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[CONTENT])
+    request_id = _owned_request(db, account_id, prompt="x" * 5000)
+    response = _signed(
+        client,
+        signing,
+        account_id,
+        token,
+        "GET",
+        f"{BASE}/interact/requests/{request_id}/content?max_bytes=1024",
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["max_bytes"] == 1024
+    assert len(body["raw"]["request_body"]) == 1024
+    assert body["raw"]["truncated"] is True
+    assert body["raw"]["request_bytes"] > 1024
+
+
+def test_content_scope_implies_the_log_view(sma_env):
+    client, db = sma_env
+    signing, account_id, token = _active(client, db, scopes=[CONTENT])
+    listed = _signed(client, signing, account_id, token, "GET", f"{BASE}/interact/requests")
+    assert listed.status_code == 200
+
+    detail = _signed(
+        client, signing, account_id, token, "GET", f"{BASE}/interact/requests/{_owned_request(db, account_id)}"
+    )
+    assert detail.status_code == 200
+
+
+# -- consent gate for dangerous scopes --------------------------------------
+
+
+def test_dangerous_approval_needs_the_password(secured):
+    app, client, db = secured
+    signing, account_id, token = _pending(client, scopes=[CONTENT], name="Content Bot")
+    activation = _issue_activation(db, account_id)
+    page = client.get(f"/_midware/authorize/{activation}")
+    assert b"potentially dangerous permissions" in page.data
+    assert b'name="password"' in page.data
+
+    csrf = _extract_csrf(page.data)
+    missing = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": ""},
+    )
+    assert missing.status_code == 401
+    assert db.get_system_account(account_id)["state"] == "pending"
+
+    wrong = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": "not-the-password"},
+    )
+    assert wrong.status_code == 401
+    assert b"Incorrect password" in wrong.data
+    assert db.get_system_account(account_id)["state"] == "pending"
+
+    right = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": "s3cret"},
+    )
+    assert right.status_code == 302
+    assert db.get_system_account(account_id)["state"] == "approved"
+
+    events = db._rows(
+        "SELECT action FROM system_account_events WHERE account_id = ? ORDER BY id", (account_id,)
+    )
+    assert "consent.danger_accept" in {row["action"] for row in events}
+
+
+def test_safe_approval_does_not_ask_for_a_password(secured):
+    app, client, db = secured
+    signing, account_id, token = _pending(client, scopes=[sma.READ_USAGE], name="Safe Bot")
+    activation = _issue_activation(db, account_id)
+    page = client.get(f"/_midware/authorize/{activation}")
+    assert b"potentially dangerous" not in page.data
+
+    csrf = _extract_csrf(page.data)
+    allowed = client.post(
+        f"/_midware/authorize/{activation}", data={"csrf": csrf, "decision": "allow"}
+    )
+    assert allowed.status_code == 302
+    assert db.get_system_account(account_id)["state"] == "approved"
+
+
+def test_repeated_wrong_passwords_burn_the_link(secured):
+    app, client, db = secured
+    app.config["ADMIN_LOGIN_MAX_ATTEMPTS"] = 2
+    adminauth.reset_login_throttle()
+    signing, account_id, token = _pending(client, scopes=[CONTENT], name="Probe Bot")
+    activation = _issue_activation(db, account_id)
+    csrf = _extract_csrf(client.get(f"/_midware/authorize/{activation}").data)
+
+    first = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": "nope"},
+    )
+    assert first.status_code == 401
+
+    second = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": "nope"},
+    )
+    assert second.status_code == 401
+
+    # The budget is now spent; the next attempt is refused and the link dies.
+    third = client.post(
+        f"/_midware/authorize/{activation}",
+        data={"csrf": csrf, "decision": "allow", "password": "nope"},
+    )
+    assert third.status_code == 429
+    assert db.get_system_account(account_id)["state"] == "pending"
+    assert db.get_system_account(account_id)["activation_token_hash"] is None
+    # The link is dead: 410 Gone, the same answer any spent token gets.
+    assert client.get(f"/_midware/authorize/{activation}").status_code == 410
+    adminauth.reset_login_throttle()

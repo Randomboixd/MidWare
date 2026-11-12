@@ -341,6 +341,15 @@ each permission as a sentence with the raw scope id underneath, and marks the
 abusable ones **DANGEROUS** with a one-line reason. Company is self-declared and
 labelled as such; it is not verified.
 
+If the request contains any scope in the dangerous namespace, the page grows a
+red panel listing those scopes with what each one enables, and a password field
+above the buttons; the button reads **Accept** instead of **Allow**. The POST
+carries the password and the server verifies it with the admin account's
+credentials before changing any state. Failures are throttled on the sign-in
+budget, and reaching the lockout invalidates the consent link
+(`410 Gone`) instead of answering further guesses. Password managers are
+welcome: the field is a normal `current-password` input with no length cap.
+
 #### `GET /ActivateSystemAccount/status`
 
 No body. Allowed in every state, so a client can learn its fate.
@@ -675,6 +684,70 @@ reported next to the list rather than left to be discovered.
 
 ---
 
+### 4.10 Request content (dangerous)
+
+`GET /interact/requests/<id>/content` — `midware.dangerous.read:request_content`.
+Query: `max_bytes` (default 262144, minimum 1024, ceiling `MAX_CAPTURE_BYTES`,
+8 MiB).
+
+**Only requests made with a key this account owns are readable.** A request
+whose key belongs to anyone else — including the admin's own keys — answers
+`404 request_not_found`, the same as an id that does not exist. A request whose
+key was deleted (`api_key_id IS NULL`) is not readable either: "nobody owns it"
+is not ownership.
+
+One id per call. There is no bulk form, by design: every read is one audit line
+naming the request.
+
+```json
+{
+  "id": 5902,
+  "created_at": "2026-11-11T09:31:02+00:00",
+  "model": "z-ai/glm-5.3:thinking",
+  "status_code": 200,
+  "streamed": true,
+  "route_name": "NanoGPT-PAID",
+  "api_key_name": "app-key",
+  "max_bytes": 262144,
+  "conversation": {
+    "messages": [
+      {"number": 1, "role": "user", "text": "...", "reasoning": [],
+       "tool_calls": [], "source": "request"}
+    ],
+    "request_meta": {"model": "z-ai/glm-5.3:thinking"},
+    "response_meta": {"usage": {"total_tokens": 11278}},
+    "has_request_messages": true,
+    "raw_available": true
+  },
+  "conversation_truncated": false,
+  "text": "[1] user\n...\n[2] assistant\n...",
+  "text_truncated": false,
+  "raw": {
+    "request_body": "...",
+    "response_body": "...",
+    "request_bytes": 812,
+    "response_bytes": 44031,
+    "truncated": false
+  },
+  "reason": null
+}
+```
+
+- `conversation` is the same normalizer the admin UI uses, so provider dialects,
+  SSE transcripts, reasoning parts and tool calls are already unfolded.
+- `text` is the same content flattened, for callers that just want to read.
+- `raw` is the stored bytes — the ground truth when the parse looks wrong.
+  `request_bytes`/`response_bytes` are the stored sizes, so `truncated: true`
+  says "you are seeing less than was captured".
+- `reason: "not_captured"` arrives with `conversation`/`raw` null when the row
+  was recorded with capture switched off. The row exists; its content never did.
+
+This scope also opens `GET /interact/requests` and `/interact/requests/<id>`:
+reading content is useless without being able to find an id. The reverse is not
+true — `midware.read:requests` never grants content.
+
+---
+
 ## 5. Permissions
 
 Deny by default. Granularity is the resource, not the object; `write` includes
@@ -696,6 +769,7 @@ delete.
 | `midware.read:requests` | Read the request log — metadata only, never prompts or responses |
 | `midware.read:usage` | Read usage totals, daily series and breakdowns |
 | `midware.read:models` | Read the cached model catalogue per route |
+| `midware.dangerous.read:request_content` | Read captured request/response text for keys **this account owns** |
 
 The consent page renders these as sentences, not ids ("Read request data"), and
 marks the ones that can be abused with a **DANGEROUS** badge and a one-line
@@ -703,8 +777,11 @@ reason. It is presentation only: the grant is still the scope list, and the
 tamper hash covers the set.
 
 Scopes in the `midware.dangerous.` namespace are dangerous by naming
-convention. Nothing is granted there today; the first intended resident is
-`midware.dangerous.read:request_content` for reading prompt/response bodies.
+convention. They cannot be granted with a single click: the consent page shows
+them in a red panel and the approval only takes effect when the admin re-types
+their MidWare password in the same form. A wrong or missing password changes
+nothing, and the attempt budget is the *sign-in* budget — a consent link cannot
+be used to brute-force the password, because a lockout burns the link.
 
 Not grantable: `midware.write:self`. Every account can call
 `DisableSystemAccount` and read `interact/self` without asking.
@@ -739,6 +816,7 @@ An untouched enrollment, or an approved one that is never exchanged, becomes
 | Audit retention | 30 days |
 | Request log page | 500 rows maximum |
 | Usage window | 365 days maximum |
+| Request content | 256 KiB per body by default, 8 MiB ceiling |
 
 A denied account keeps its pending token so `status` can report `denied`, but
 nothing else accepts it. An expired enrollment has its token hashes cleared, so
@@ -1017,6 +1095,15 @@ happen:
     scope_denied` after the server adds a capability, the client must re-enroll
     (revoke, enroll again, get a new human Allow). That is the design: nothing
     can expand its own reach without the admin clicking.
+17. **Content is per-key and per-id.** `midware.dangerous.read:request_content`
+    only reads requests made with keys this account created; another owner's id
+    answers `404`, and a deleted key's rows are gone from your reach. There is no
+    bulk read, so loop over ids from the log if you need several, and expect one
+    audit line each.
+18. **A dangerous scope needs the admin's password, not just a click.** Request
+    one and the human gets a red panel plus a password field. Do not retry an
+    approval that came back `401`; a repeated failure burns the link and the
+    client has to mint a new one.
 
 ---
 
