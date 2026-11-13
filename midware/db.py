@@ -1394,9 +1394,14 @@ class Database:
                 (to_iso(expires_at) if expires_at is not None else None, key_id),
             )
 
-    def list_api_keys(self) -> list[sqlite3.Row]:
-        return self._rows(
-            """
+    def list_api_keys(self, exclude_names: tuple[str, ...] = ()) -> list[sqlite3.Row]:
+        """Every key a human manages.
+
+        ``exclude_names`` drops keys the app mints for itself (the Playground's
+        temporary key), so the control panel lists credentials someone chose to
+        create rather than internal plumbing.
+        """
+        sql = """
             SELECT k.*,
                    (SELECT COALESCE(SUM(u.requests), 0) FROM usage_daily u
                     WHERE u.api_key_id = k.id) AS request_count,
@@ -1404,9 +1409,13 @@ class Database:
                     WHERE u.api_key_id = k.id) AS token_count
             FROM api_keys k
             WHERE k.is_system = 0
-            ORDER BY k.id
-            """
-        )
+        """
+        params: list[str] = []
+        if exclude_names:
+            sql += " AND k.name NOT IN (%s)" % ", ".join("?" * len(exclude_names))
+            params = list(exclude_names)
+        sql += " ORDER BY k.id"
+        return self._rows(sql, tuple(params))
 
     def delete_api_key(self, key_id: int) -> list[sqlite3.Row]:
         """Delete a key, returning its stored-image rows so files can be unlinked.

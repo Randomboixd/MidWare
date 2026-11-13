@@ -23,7 +23,7 @@
     <div class="mw-form-grid">
       <div class="field label border">
         <select name="route_id" id="msq-route" required>
-          <option value="">— choose —</option>
+          <option value="">choose one</option>
           {% for r in routes %}
           <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
           {% endfor %}

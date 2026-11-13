@@ -13,26 +13,34 @@
   <article class="stat-card">
     <header>Total tokens</header>
     <div class="value">{{ row['total_tokens'] | comma }}</div>
-    <div class="sub">↑ {{ row['prompt_tokens'] | comma }} · ↓ {{ row['completion_tokens'] | comma }}{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %} · <span title="Estimated locally: the upstream sent no usage block">estimated</span>{% endif %}</div>
+    <div class="sub">{{ row['prompt_tokens'] | comma }} in, {{ row['completion_tokens'] | comma }} out{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %}, <span title="Estimated locally: the upstream sent no usage block">estimated</span>{% endif %}</div>
   </article>
   <article class="stat-card">
     <header>Status</header>
-    <div class="value">{{ row['status_code'] }}</div>
-    <div class="sub">{{ row['latency_ms'] | ms }}{% if row['streamed'] %} · streamed{% endif %}</div>
+    <div class="value{% if row['status_code'] >= 400 %} is-error{% endif %}">{{ row['status_code'] }}</div>
+    <div class="sub">latency {{ row['latency_ms'] | ms }}{% if row['streamed'] %}, streamed{% endif %}</div>
   </article>
   <article class="stat-card">
     <header>When</header>
-    <div class="value" style="font-size:1.1rem">{{ row['created_at'] | datetime }}</div>
-    <div class="sub">{{ row['created_at'] | relative }}</div>
+    {% set stamp = row['created_at'] | datetime %}
+    {% set age = row['created_at'] | relative %}
+    <div class="value value--sm">{{ stamp }}</div>
+    {% if age != stamp[:10] %}<div class="sub">{{ age }}</div>{% endif %}
   </article>
 </section>
 
-<article class="stat-card">
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Details</h2>
+      <span class="mw-meta">What MidWare recorded for this call</span>
+    </div>
+  </div>
   <table class="compact">
     <tbody>
-      <tr><th>Model</th><td class="mono">{{ row['model'] or '—' }}{% if row['model_raw'] and row['model_raw'] != row['model'] %} <small class="mono">(sent as {{ row['model_raw'] }})</small>{% endif %}</td></tr>
-      <tr><th>Route</th><td>{{ row['route_name'] or '—' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
-      <tr><th>API key</th><td>{{ row['api_key_name'] or '—' }}</td></tr>
+      <tr><th>Model</th><td class="mono">{{ row['model'] or 'none' }}{% if row['model_raw'] and row['model_raw'] != row['model'] %} <small class="mono">(sent as {{ row['model_raw'] }})</small>{% endif %}</td></tr>
+      <tr><th>Route</th><td>{{ row['route_name'] or 'none' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
+      <tr><th>API key</th><td>{{ row['api_key_name'] or 'none' }}</td></tr>
       <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
       <tr><th>Token source</th><td>
         {% if row['token_source'] == 'upstream' %}reported by upstream
@@ -40,20 +48,23 @@
         {% else %}<span class="pill warn">estimate</span> counted locally ({{ row['token_source'] }}); the upstream sent no usage block
         {% endif %}
       </td></tr>
-      <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or '—' }}</td></tr>
+      <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or 'none' }}</td></tr>
       {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
     </tbody>
   </table>
-</article>
+</section>
 
 {% if messages_locked %}
-<h2>Messages</h2>
-<article class="mw-form-section">
+<section class="mw-section">
+  <div class="mw-section-head"><div><h2>Messages</h2></div></div>
+  <article class="mw-form-section">
   <p>Message history is protected. Sign in to view the full request and response.</p>
   <p><a class="button" href="{{ url_for('account.signin', next=url_for('dashboard.request_detail', request_id=row['id'], messages=1)) }}">Sign in to view messages</a></p>
-</article>
+  </article>
+</section>
 {% else %}
-<h2>Messages</h2>
+<section class="mw-section">
+  <div class="mw-section-head"><div><h2>Messages</h2></div></div>
 <section id="conversation" class="conversation" data-source="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">
   <div class="conversation-toolbar">
     <button type="button" id="fetch-messages" class="small">Fetch</button>
@@ -61,11 +72,12 @@
     <button type="button" id="collapse-all" class="border small">Collapse all</button>
     <small id="conversation-status">
       {{ conversation.messages | length }} message{{ '' if conversation.messages | length == 1 else 's' }}
-      {%- if conversation.messages %} · last user + assistant opened{% endif %}
+      {%- if conversation.messages %}, last user + assistant opened{% endif %}
     </small>
   </div>
   <noscript><p><small>JavaScript is required to unfold messages. <a href="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">Download the raw JSON</a> instead.</small></p></noscript>
   <div id="message-list" class="message-list"></div>
+</section>
 </section>
 
 <details class="raw-drawer">

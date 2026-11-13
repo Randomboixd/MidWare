@@ -57,11 +57,14 @@ def test_activity_and_requests_pages_render(configured_client):
     assert client.get("/requests").status_code == 200
 
 
-def test_pages_use_beercss_dark_theme(configured_client):
+def test_pages_serve_the_local_design_system(configured_client):
+    """The UI ships its own stylesheet and face: no third-party CSS request."""
     client, _ = configured_client
     html = client.get("/").get_data(as_text=True)
-    assert "beercss@5.0.3" in html
-    assert "picocss" not in html
+    assert 'href="/static/style.css"' in html
+    assert "/static/fonts/geologica-latin-var.woff2" in html
+    assert "cdn.jsdelivr.net" not in html
+    assert "http://" not in html.split("</head>")[0].replace("http://www.w3.org", "")
     assert '<body class="dark">' in html
 
 

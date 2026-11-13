@@ -106,8 +106,12 @@ def test_page_is_linked_from_the_nav(ready):
 def test_keys_page_explains_the_base_url_and_links_the_playground(ready):
     app, client = ready
     html = client.get("/admin/keys").get_data(as_text=True)
-    assert "MidWare API key usage" in html
+    # The base URL is its own one-line strip now; the prose sits behind a disclosure
+    # labelled "How to send a key" instead of a heading that read like usage stats.
+    assert 'class="mw-base-url"' in html
     assert "http://localhost/v1" in html
+    assert "How to send a key" in html
+    assert "data-copy-base" in html
     assert 'href="/admin/playground"' in html
 
 
@@ -276,12 +280,25 @@ def test_disabled_still_wins_over_expired(ready):
 
 def test_an_expiring_key_is_marked_on_the_keys_page(ready):
     app, client = ready
-    mint(client)
+    db = app.extensions["midware_db"]
+    db.create_api_key("trial", expires_at=utcnow() + timedelta(hours=1))
 
     html = client.get("/admin/keys").get_data(as_text=True)
 
     assert 'class="pill warn" title="Expires' in html
-    assert KEY_NAME in html
+    assert "trial" in html
+
+
+def test_the_playgrounds_own_key_is_not_offered_as_a_credential(ready):
+    app, client = ready
+    db = app.extensions["midware_db"]
+    mint(client)
+
+    html = client.get("/admin/keys").get_data(as_text=True)
+
+    assert KEY_NAME not in html
+    # Hidden from the list, still minted: the playground renews it on every visit.
+    assert db.find_api_key_by_name(KEY_NAME) is not None
 
 
 def test_a_plain_key_shows_no_temporary_badge(ready):

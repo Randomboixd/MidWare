@@ -8,43 +8,64 @@
     <p>Model presets bound to a connection. Call one by sending its slug as the
        model: <code>{{ premodel_prefix }}slug</code>.</p>
   </div>
-  <a class="button" href="{{ url_for('admin.premodel_new') }}">New Premodel</a>
+  {% if premodels %}
+  <a class="button" href="{{ url_for('admin.premodel_new') }}">New premodel</a>
+  {% endif %}
 </div>
 
-{% if premodels %}
-<div class="scroll">
-  <table class="compact border">
-    <thead>
-      <tr><th>Name</th><th>Description</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for p in premodels %}
-      <tr>
-        <td><a href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">{{ p['name'] }}</a></td>
-        <td>{{ p['description'] or '—' }}</td>
-        <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
-        <td>{{ route_names.get(p['route_id'], '—') }}</td>
-        <td class="mono">{{ p['model'] }}</td>
-        <td>
-          {% if p['use_workflow'] %}<span class="pill">workflow</span>
-          {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
-        </td>
-        <td style="white-space:nowrap">
-          <a class="button border small" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
-          <form method="post" class="inline-form" onsubmit="return confirm('Delete premodel &quot;{{ p['name'] }}&quot;?')">
-            <input type="hidden" name="action" value="delete">
-            <input type="hidden" name="premodel_id" value="{{ p['id'] }}">
-            <button type="submit" class="border small error-text">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<p>No premodels yet. <a href="{{ url_for('admin.premodel_new') }}">Create one</a>.</p>
-{% endif %}
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Configured premodels</h2>
+      {% if premodels %}
+      <span class="mw-meta">{{ premodels | length }} premodel{{ '' if premodels | length == 1 else 's' }}, addressed as <code>{{ premodel_prefix }}slug</code></span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if premodels %}
+  <div class="scroll">
+    <table class="compact border">
+      <thead>
+        <tr><th>Name</th><th>Description</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th class="num">Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for p in premodels %}
+        <tr class="mw-row">
+          <td class="mw-cell-name">
+            <a class="mw-row-name" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">{{ p['name'] }}</a>
+          </td>
+          <td><span class="mw-row-sub" title="{{ p['description'] or 'none' }}">{{ p['description'] or 'none' }}</span></td>
+          <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
+          <td>{{ route_names.get(p['route_id'], 'none') }}</td>
+          <td class="mono">{{ p['model'] }}</td>
+          <td>
+            {% if p['use_workflow'] %}<span class="pill">workflow</span>
+            {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
+          </td>
+          <td>
+            <div class="mw-row-actions">
+              <a class="mw-row-action" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
+              <form method="post" class="inline-form" onsubmit="return confirm('Delete premodel &quot;{{ p['name'] }}&quot;?')">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="premodel_id" value="{{ p['id'] }}">
+                <button type="submit" class="mw-row-action error-text">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="mw-empty">
+    <p>A premodel pins one connection and one model behind a single slug, with its own system
+       prompt and optional sampling overrides.</p>
+    <a class="button border" href="{{ url_for('admin.premodel_new') }}">New premodel</a>
+  </div>
+  {% endif %}
+</section>
 
 <details class="mw-reference">
   <summary>Calling a premodel</summary>

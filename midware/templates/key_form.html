@@ -23,7 +23,7 @@
 
 <form method="post" id="key-form">
   <section class="mw-form-section">
-    <h3 style="margin-top:0">Basics</h3>
+    <h2 style="margin-top:0">Basics</h2>
     <div class="field label border">
       <input type="text" name="name" id="key-name" value="{{ form.get('name', '') }}" placeholder=" " required>
       <label for="key-name">Name</label>
@@ -68,7 +68,7 @@
         <label class="checkbox">
           <input type="checkbox" name="allowed_premodel_ids" value="{{ p['id'] }}"
                  {% if allowed_pms is none or p['id'] in allowed_pms %}checked{% endif %}>
-          <span><code>{{ premodel_prefix }}{{ p['slug'] }}</code> — {{ p['name'] }}</span>
+          <span><code>{{ premodel_prefix }}{{ p['slug'] }}</code>, {{ p['name'] }}</span>
         </label>
         {% endfor %}
       {% else %}
@@ -210,7 +210,7 @@
       <div class="mw-check-row">
         <div class="mw-check-text">
           Send a HTTPS based URL
-          <span class="mw-hint">Advertises stored image URLs as <code>https://</code> — for when
+          <span class="mw-hint">Advertises stored image URLs as <code>https://</code>, for when
             TLS terminates in front of MidWare.</span>
         </div>
         <label class="switch">

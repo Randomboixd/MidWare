@@ -10,158 +10,199 @@
 </div>
 
 {% if admin_auth_enabled %}
-<h2>Control-panel login</h2>
-{% include "_http_warning.html" %}
-{% if admin_env_override %}
-<article class="flash flash-success" role="status">
-  Credentials come from <code>MIDWARE_ADMIN_USERNAME</code> / <code>MIDWARE_ADMIN_PASSWORD</code>,
-  so the form below is disabled. Unset those to manage the login here.
-</article>
-{% else %}
-<form method="post" class="mw-form-section">
-  <input type="hidden" name="action" value="credentials">
-  <div class="mw-form-grid">
-    <div class="field label border">
-      <input type="text" name="admin_username" id="admin-username" required autocomplete="username" value="{{ admin_username }}" placeholder=" ">
-      <label for="admin-username">Username</label>
-    </div>
-    <div class="field label border">
-      <input type="password" name="current_password" id="admin-current-password" required autocomplete="current-password" placeholder=" ">
-      <label for="admin-current-password">Current password</label>
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Control-panel login</h2>
+      <span class="mw-meta">Who may open this panel</span>
     </div>
   </div>
-  <div class="mw-form-grid">
-    <div class="field label border">
-      <input type="password" name="admin_password" id="admin-password" required autocomplete="new-password" placeholder=" ">
-      <label for="admin-password">New password</label>
+  {% include "_http_warning.html" %}
+  {% if admin_env_override %}
+  <article class="flash flash-success" role="status">
+    Credentials come from <code>MIDWARE_ADMIN_USERNAME</code> / <code>MIDWARE_ADMIN_PASSWORD</code>,
+    so the form below is disabled. Unset those to manage the login here.
+  </article>
+  {% else %}
+  <form method="post" class="mw-form-section">
+    <input type="hidden" name="action" value="credentials">
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="text" name="admin_username" id="admin-username" required autocomplete="username" value="{{ admin_username }}" placeholder=" ">
+        <label for="admin-username">Username</label>
+      </div>
+      <div class="field label border">
+        <input type="password" name="current_password" id="admin-current-password" required autocomplete="current-password" placeholder=" ">
+        <label for="admin-current-password">Current password</label>
+      </div>
     </div>
-    <div class="field label border">
-      <input type="password" name="admin_password_confirm" id="admin-password-confirm" required autocomplete="new-password" placeholder=" ">
-      <label for="admin-password-confirm">Confirm new password</label>
+    <div class="mw-form-grid">
+      <div class="field label border">
+        <input type="password" name="admin_password" id="admin-password" required autocomplete="new-password" placeholder=" ">
+        <label for="admin-password">New password</label>
+      </div>
+      <div class="field label border">
+        <input type="password" name="admin_password_confirm" id="admin-password-confirm" required autocomplete="new-password" placeholder=" ">
+        <label for="admin-password-confirm">Confirm new password</label>
+      </div>
     </div>
-  </div>
-  <div class="mw-inline-actions">
-    <button type="submit">Update login</button>
-  </div>
-  <small class="mw-hint">Changing the password signs out every other browser. This one stays signed in.</small>
-</form>
-{% endif %}
-{% endif %}
-
-<form method="post" class="mw-form-section">
-  <h2 style="margin-top:0">Request logging</h2>
-  <div class="field label border">
-    <input type="number" name="request_log_limit" id="request-log-limit" min="0" max="100000" value="{{ log_limit }}" placeholder=" ">
-    <label for="request-log-limit">Saved requests per API key</label>
-  </div>
-  <small class="mw-hint">Each key keeps its newest N request/response bodies. Older rows are trimmed immediately. Set 0 to keep none.</small>
-
-  <h2>Premodels</h2>
-  <div class="field label border">
-    <input type="text" name="premodel_prefix" id="premodel-prefix" value="{{ premodel_prefix }}" maxlength="32" required placeholder=" ">
-    <label for="premodel-prefix">Premodel prefix</label>
-  </div>
-  <small class="mw-hint">Clients address a premodel as <code>{{ premodel_prefix }}slug</code> in the
-    <code>model</code> field. Default: <code>{{ default_premodel_prefix }}</code>. No spaces, 1-32
-    characters, case-sensitive, and it must match from the very start of the model string
-    (include a trailing separator, e.g. <code>premodels/</code>).</small>
-  <div class="mw-inline-actions">
-    <button type="submit">Save settings</button>
-    <button type="submit" name="action" value="reset_premodel_prefix" class="border">Reset prefix to default</button>
-  </div>
-</form>
-
-<h2>System Management Accounts API</h2>
-<form method="post" class="mw-form-section">
-  <input type="hidden" name="sma_present" value="1">
-  <input type="hidden" name="request_log_limit" value="{{ log_limit }}">
-  {% if premodel_prefix %}<input type="hidden" name="premodel_prefix" value="{{ premodel_prefix }}">{% endif %}
-  <label class="checkbox">
-    <input type="checkbox" name="sma_enabled" value="1" {% if sma_enabled %}checked{% endif %}>
-    <span>System Management Accounts API</span>
-  </label>
-  <small class="mw-hint">Signed, scoped access for automation at <code>/_midware/api/v1</code>.
-    Turning this off refuses every call, including pending activations.</small>
-
-  <label class="checkbox" style="margin-top:1rem">
-    <input type="checkbox" name="sma_allow_plain_http" value="1"
-           {% if sma_allow_plain_http %}checked{% endif %}>
-    <span>Allow over plain HTTP</span>
-  </label>
-  <input type="hidden" name="sma_allow_present" value="1">
-  <small class="mw-hint">Off by default: the API answers over HTTPS, and refuses
-    plain HTTP. Turn this on only if this instance lives on a trusted network
-    without TLS — on plain HTTP an attacker who can watch the connection can
-    relay a signed request while it is fresh.</small>
-  {% if not sma_https %}
-  <small class="mw-hint">This page is being served over plain HTTP.</small>
+    <div class="mw-inline-actions">
+      <button type="submit">Update login</button>
+    </div>
+    <small class="mw-hint">Changing the password signs out every other browser. This one stays signed in.</small>
+  </form>
   {% endif %}
-
-  <div class="mw-inline-actions">
-    <button type="submit">Save settings</button>
-  </div>
-</form>
-
-{% if sma_accounts %}
-<div class="scroll">
-  <table class="compact border">
-    <thead>
-      <tr>
-        <th>Account</th>
-        <th>Company</th>
-        <th>State</th>
-        <th>Permissions</th>
-        <th>Requested</th>
-        <th>Last used</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for entry in sma_accounts %}
-      {% set account = entry.account %}
-      <tr>
-        <td>{{ account.name }}<br><small class="mw-hint"><code>{{ account.key_fingerprint }}</code></small></td>
-        <td>{{ account.company }}</td>
-        <td>{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<br><small class="mw-hint">expires {{ account.expires_at | datetime }}</small>{% endif %}</td>
-        <td><small class="mw-hint">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</small></td>
-        <td>{{ account.created_at | datetime }}</td>
-        <td>{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
-        <td>
-          <form method="post" onsubmit="return confirm('Revoke {{ account.name }}? Keys it created will be deleted.')">
-            <input type="hidden" name="action" value="revoke_system_account">
-            <input type="hidden" name="system_account_id" value="{{ account.id }}">
-            <button type="submit" class="border small error-text">Revoke</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+</section>
 {% endif %}
 
-<h2>Maintenance</h2>
-<form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
-  <input type="hidden" name="action" value="purge">
-  <div class="mw-inline-actions">
-    <button type="submit" class="border error-text">Purge all logged requests</button>
-    <small class="mw-hint">Deletes {{ request_count }} row(s). Keys and routes are untouched.</small>
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Storage and addressing</h2>
+      <span class="mw-meta">What is kept, and how clients name a premodel</span>
+    </div>
   </div>
-</form>
+  <form method="post" class="mw-form-section">
+    <h3>Request logging</h3>
+    <div class="field label border">
+      <input type="number" name="request_log_limit" id="request-log-limit" min="0" max="100000" value="{{ log_limit }}" placeholder=" ">
+      <label for="request-log-limit">Saved requests per API key</label>
+    </div>
+    <small class="mw-hint">Each key keeps its newest N request/response bodies. Older rows are trimmed immediately. Set 0 to keep none.</small>
 
-<h2>Runtime state</h2>
-<div class="scroll">
-  <table class="compact border">
-    <tbody>
-      <tr><th>Configured</th><td>{{ 'yes' if configured else 'no' }}{% if configured_at %} · {{ configured_at | datetime }}{% endif %}</td></tr>
-      <tr><th>Routes</th><td>{{ route_count }}</td></tr>
-      <tr><th>API keys</th><td>{{ key_count }}</td></tr>
-      <tr><th>Logged requests</th><td>{{ request_count }}</td></tr>
-      <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
-      <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
-      <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
-      <tr><th>Admin login</th><td>{% if not admin_auth_enabled %}disabled{% else %}{{ admin_username }}{% if admin_credentials_at %} · changed {{ admin_credentials_at | datetime }}{% endif %}{% endif %}</td></tr>
-    </tbody>
-  </table>
-</div>
+    <h3 class="mw-form-subhead">Premodels</h3>
+    <div class="field label border">
+      <input type="text" name="premodel_prefix" id="premodel-prefix" value="{{ premodel_prefix }}" maxlength="32" required placeholder=" ">
+      <label for="premodel-prefix">Premodel prefix</label>
+    </div>
+    <small class="mw-hint">Clients address a premodel as <code>{{ premodel_prefix }}slug</code> in the
+      <code>model</code> field. Default: <code>{{ default_premodel_prefix }}</code>. No spaces, 1-32
+      characters, case-sensitive, and it must match from the very start of the model string
+      (include a trailing separator, e.g. <code>premodels/</code>).</small>
+    <div class="mw-inline-actions">
+      <button type="submit">Save settings</button>
+      <button type="submit" name="action" value="reset_premodel_prefix" class="border">Reset prefix to default</button>
+    </div>
+  </form>
+</section>
+
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>System Management Accounts API</h2>
+      <span class="mw-meta">Signed, scoped access for automation</span>
+    </div>
+  </div>
+  <form method="post" class="mw-form-section">
+    <input type="hidden" name="sma_present" value="1">
+    <input type="hidden" name="request_log_limit" value="{{ log_limit }}">
+    {% if premodel_prefix %}<input type="hidden" name="premodel_prefix" value="{{ premodel_prefix }}">{% endif %}
+    <label class="checkbox">
+      <input type="checkbox" name="sma_enabled" value="1" {% if sma_enabled %}checked{% endif %}>
+      <span>System Management Accounts API</span>
+    </label>
+    <small class="mw-hint">Signed, scoped access for automation at <code>/_midware/api/v1</code>.
+      Turning this off refuses every call, including pending activations.</small>
+
+    <label class="checkbox" style="margin-top:1rem">
+      <input type="checkbox" name="sma_allow_plain_http" value="1"
+             {% if sma_allow_plain_http %}checked{% endif %}>
+      <span>Allow over plain HTTP</span>
+    </label>
+    <input type="hidden" name="sma_allow_present" value="1">
+    <small class="mw-hint">Off by default: the API answers over HTTPS, and refuses
+      plain HTTP. Turn this on only if this instance lives on a trusted network
+      without TLS, and on plain HTTP an attacker who can watch the connection can
+      relay a signed request while it is fresh.</small>
+    {% if not sma_https %}
+    <small class="mw-hint">This page is being served over plain HTTP.</small>
+    {% endif %}
+
+    <div class="mw-inline-actions">
+      <button type="submit">Save settings</button>
+    </div>
+  </form>
+
+  {% if sma_accounts %}
+  <div class="scroll">
+    <table class="compact border">
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th>Company</th>
+          <th>State</th>
+          <th>Permissions</th>
+          <th>Requested</th>
+          <th>Last used</th>
+          <th class="num">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in sma_accounts %}
+        {% set account = entry.account %}
+        <tr class="mw-row">
+          <td class="mw-cell-name">
+            <span class="mw-row-name">{{ account.name }}</span>
+            <span class="mw-row-sub mono">{{ account.key_fingerprint }}</span>
+          </td>
+          <td>{{ account.company }}</td>
+          <td>{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<span class="mw-row-sub">expires {{ account.expires_at | datetime }}</span>{% endif %}</td>
+          <td><span class="mw-row-sub" title="{{ entry.scopes | join(', ') if entry.scopes else 'none' }}">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</span></td>
+          <td>{{ account.created_at | datetime }}</td>
+          <td>{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
+          <td>
+            <div class="mw-row-actions">
+              <form method="post" class="inline-form" onsubmit="return confirm('Revoke {{ account.name }}? Keys it created will be deleted.')">
+                <input type="hidden" name="action" value="revoke_system_account">
+                <input type="hidden" name="system_account_id" value="{{ account.id }}">
+                <button type="submit" class="mw-row-action error-text">Revoke</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Maintenance</h2>
+      <span class="mw-meta">Destructive, and confirmed before it runs</span>
+    </div>
+  </div>
+  <form method="post" onsubmit="return confirm('Delete ALL logged requests? Usage history is lost.')">
+    <input type="hidden" name="action" value="purge">
+    <div class="mw-inline-actions">
+      <button type="submit" class="border error-text">Purge all logged requests</button>
+      <small class="mw-hint">Deletes {{ request_count }} row(s). Keys and routes are untouched.</small>
+    </div>
+  </form>
+</section>
+
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Runtime state</h2>
+      <span class="mw-meta">Read-only, as the process sees it</span>
+    </div>
+  </div>
+  <div class="scroll">
+    <table class="compact border">
+      <tbody>
+        <tr><th>Configured</th><td>{{ 'yes' if configured else 'no' }}{% if configured_at %}, {{ configured_at | datetime }}{% endif %}</td></tr>
+        <tr><th>Routes</th><td>{{ route_count }}</td></tr>
+        <tr><th>API keys</th><td>{{ key_count }}</td></tr>
+        <tr><th>Logged requests</th><td>{{ request_count }}</td></tr>
+        <tr><th>Upstream timeout</th><td>{{ upstream_timeout }}s</td></tr>
+        <tr><th>Verify upstream TLS</th><td>{{ 'yes' if verify_tls else 'no' }}</td></tr>
+        <tr><th>Body capture cap</th><td>{{ max_capture | comma }} bytes</td></tr>
+        <tr><th>Admin login</th><td>{% if not admin_auth_enabled %}disabled{% else %}{{ admin_username }}{% if admin_credentials_at %}, changed {{ admin_credentials_at | datetime }}{% endif %}{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

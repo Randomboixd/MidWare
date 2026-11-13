@@ -64,7 +64,7 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/blueprints/playground.py` | The Playground (`/admin/playground` + `POST /admin/playground/key`): mints/extends the temporary key the page chats with. Model traffic never passes through it. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
 | `midware/blueprints/account.py` | Public `/signin` (GET/POST) and `/signout` (POST) pages for the control-panel session. |
-| `midware/templates/`, `midware/static/` | Jinja2 templates (BeerCSS v5 from CDN, dark-orange Material theme) and `style.css` / `request_detail.js` / `workflow.js` / `playground.js` / `clipboard.js`. |
+| `midware/templates/`, `midware/static/` | Jinja2 templates and the local design system: `tokens.css` (Vantage palette and app scale), `base.css` (reset + primitives: `.field`, `.checkbox`, `.switch`, `table`), `style.css` (shell and components), vendored Geologica in `static/fonts/`. Scripts: `request_detail.js` / `workflow.js` / `playground.js` / `clipboard.js`. No third-party CSS or font request at runtime. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
 | `run.py`, `wsgi.py` | Entrypoints; both read `HOST`/`PORT`, `wsgi.py` is used in the container. |
 | `Dockerfile`, `docker-compose.yml` | Container build; DB lives in the `/data` volume. |
@@ -278,9 +278,9 @@ Do not break these; several have regression tests.
   snippets and the body Generate posts both come from a single `buildPayload()` in
   `playground.js`, so a copied snippet is the call that ran; the API base is
   rendered server-side from `request.url_root` (not `window.location`) so a path
-  prefix or TLS terminator still yields a URL that works. Controls are BeerCSS
-  fields (`div.field.border.small > select`), never bare selects — see the
-  `beercss` skill.
+  prefix or TLS terminator still yields a URL that works. Controls are `.field`
+  wrappers (`div.field.border.small > select`), never bare selects: `base.css`
+  draws the well, the label, the chevron and the focus ring.
 - **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
   `/v1/embeddings`): already-forwarded endpoints made first-class by
   `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
@@ -692,8 +692,8 @@ Do not break these; several have regression tests.
   `APIRequest` subclass, sandbox-accurate globals from the mini-racer probe,
   and the ABSENT APIs (`URL`, `TextEncoder`, `fetch`, …) offered with an
   "Not available in this sandbox" info tooltip. Theme and syntax colours
-  come from BeerCSS variables (`beerEditorTheme`), so the editor follows
-  the site theme — including the search panel (`cm-panels`/`cm-search`),
+  resolve through the CSS variable aliases in `base.css` (`beerEditorTheme`), so
+  the editor follows the site theme — including the search panel (`cm-panels`/`cm-search`),
   matching/non-matching bracket marks, and search-match highlights.
   `makeDraggable` drops the card's `draggable` flag on mousedown
   over any
@@ -816,15 +816,19 @@ Do not break these; several have regression tests.
   approve accounts directly through `db.update_system_account`; tests that go
   through the consent page use the `secured` fixture (credentials + `/signin`).
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `574 passed` — **update this number whenever the test count changes.**
+  `577 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 
-- UI: BeerCSS v5 (pinned CDN) with the dark-orange Material palette in `style.css`.
-  Form controls use `.field` + `placeholder=" "` (or `label.active` for selects);
-  checkbox/radio/switch marks are drawn in CSS, so the icon font is never fetched.
-  BeerCSS sets `display` on articles, buttons and labels, so `[hidden]` is forced
-  to `display:none !important` — keep that guard when adding new hidden panels.
+- UI: a local design system, no framework and nothing fetched at runtime. Colour,
+  type and spacing live only in `tokens.css`; `base.css` holds the reset and the
+  primitives the templates already speak; `style.css` holds the shell and the
+  components. Form controls use `.field` + `placeholder=" "` with the label
+  element after the input; every state of a control (hover, focus, checked,
+  disabled) is drawn in CSS. `[hidden]` is forced to `display:none !important`
+  because several components set `display` — keep that guard.
+- Type: Geologica, vendored in `static/fonts/` (latin + latin-ext). Never link a
+  font or stylesheet from a CDN: this app is meant to run with no network.
 - Type hints and `from __future__ import annotations` in modules; docstrings explain
   *why*, not *what*.
 - Snake_case functions, small helpers prefixed `_` for module-private.

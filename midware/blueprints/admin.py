@@ -456,7 +456,11 @@ def keys():
                 )
         return redirect(url_for("admin.keys"))
 
-    return render_template("keys.html", api_keys=db.list_api_keys())
+    from .playground import KEY_NAME as PLAYGROUND_KEY_NAME
+
+    return render_template(
+        "keys.html", api_keys=db.list_api_keys(exclude_names=(PLAYGROUND_KEY_NAME,))
+    )
 
 
 def _form_str(name: str, default: str = "") -> str:

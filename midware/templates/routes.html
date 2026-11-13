@@ -5,188 +5,222 @@
 <div class="mw-page-head">
   <div>
     <h1>Routes</h1>
-    <p>Upstream LLM providers.</p>
+    <p>Upstream LLM providers. One route answers by default; a client reaches the others by
+       prefixing the model name.</p>
   </div>
-</div>
-
-<div class="mw-page-head">
-  <div>
-    <h2 style="margin:0">Model catalogue</h2>
-    <p>
-      {{ model_slugs | length }} slug(s) across {{ model_summary | length }} route(s).
-      {% if models_refreshed_at %}Last refreshed {{ models_refreshed_at | datetime }}.{% else %}Never refreshed.{% endif %}
-    </p>
-  </div>
-  <form method="post">
-    <input type="hidden" name="action" value="refresh">
-    <button type="submit" class="border">Refresh models</button>
-  </form>
 </div>
 
 {% if models_refresh_error %}
 <article class="flash flash-error" role="alert">Last refresh error: {{ models_refresh_error }}</article>
 {% endif %}
 
-{% if model_slugs %}
-<details class="edit-drawer" style="margin-top:0.6rem">
-  <summary>View model slugs</summary>
-  <div class="scroll" style="margin:0.5rem 0.6rem">
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Configured routes</h2>
+      {% if routes %}
+      <span class="mw-meta">{{ routes | length }} route{{ '' if routes | length == 1 else 's' }}{% if active_route_id %}, one answering by default{% endif %}; the bracketed name is the model prefix</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not routes %}
+  <p class="mw-section-empty">No routes yet. Add the first one below, or
+     <a href="{{ url_for('admin.setup') }}">run setup</a>.</p>
+  {% endif %}
+
+  <div class="scroll">
     <table class="compact border">
-      <thead><tr><th>Route</th><th>Slug to send</th></tr></thead>
+      {% if routes %}
+      <thead><tr><th>Name</th><th>Target</th><th>Auth Type</th><th class="num">Models</th><th>Role</th><th class="num">Actions</th></tr></thead>
+      {% endif %}
       <tbody>
-        {% for m in model_slugs %}
-        <tr>
-          <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
-          <td class="mono">{{ m.slug }}</td>
+        {% for r in routes %}
+        {% set is_default = r['id'] == active_route_id %}
+        <tr class="mw-row">
+          <td>
+            <span class="mw-row-name">{{ r['name'] }}</span>
+            <span class="mw-row-sub mono" title="Model-name prefix for this route">[{{ r['name'] }}]</span>
+            {% if r['provider'] %}
+            <small class="route-balance" data-balance-url="{{ url_for('admin.route_balance', route_id=r['id']) }}"></small>
+            {% endif %}
+          </td>
+          <td>
+            <span class="mw-row-target mono" title="{{ r['target_host'] }}">{{ r['target_host'] }}</span>
+          </td>
+          <td>
+            {% set provider = signin_providers.get(r['provider']) if r['provider'] else none %}
+            {% if provider %}
+              <span class="pill blue">OAuth · {{ provider['label'] }}</span>
+            {% elif r['upstream_key'] %}
+              <span class="pill ok">API key</span>
+            {% else %}
+              <span class="pill warn">none</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {% set summary = model_summary.get(r['id']) %}
+            {% if summary and summary.count %}
+              {{ summary.count }}
+            {% else %}
+              <span class="pill warn">0</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if is_default %}
+              <span class="pill ok">default</span>
+            {% else %}
+              <span class="pill">secondary</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="mw-row-actions">
+              {% if not is_default %}
+              <form method="post" class="inline-form">
+                <input type="hidden" name="action" value="activate">
+                <input type="hidden" name="route_id" value="{{ r['id'] }}">
+                <button type="submit" class="mw-row-action">Make default</button>
+              </form>
+              {% endif %}
+              <button type="button" class="mw-row-action"
+                      onclick="document.getElementById('edit-{{ r['id'] }}').open = true">Edit</button>
+              <form method="post" class="inline-form" onsubmit="return confirm('Delete route &quot;{{ r['name'] }}&quot;?')">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="route_id" value="{{ r['id'] }}">
+                <button type="submit" class="mw-row-action error-text">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        <tr class="mw-panel-row">
+          <td colspan="6" class="mw-row-panel">
+            <details id="edit-{{ r['id'] }}" class="edit-drawer">
+              <summary class="visually-hidden">Edit {{ r['name'] }}</summary>
+              <form method="post">
+                <input type="hidden" name="action" value="update">
+                <input type="hidden" name="route_id" value="{{ r['id'] }}">
+                <p class="mw-panel-title">{{ r['name'] }}</p>
+                <div class="mw-form-grid">
+                  <div class="field label border">
+                    <input type="text" name="name" id="edit-name-{{ r['id'] }}" value="{{ r['name'] }}" placeholder=" " required>
+                    <label for="edit-name-{{ r['id'] }}">Name</label>
+                  </div>
+                  <div class="field label border">
+                    <input type="url" name="target_host" id="edit-host-{{ r['id'] }}" value="{{ r['target_host'] }}" placeholder=" " required>
+                    <label for="edit-host-{{ r['id'] }}">Target host</label>
+                  </div>
+                </div>
+                <div class="field label border">
+                  <input type="password" name="upstream_key" id="edit-key-{{ r['id'] }}" autocomplete="off"
+                         placeholder=" ">
+                  <label for="edit-key-{{ r['id'] }}">Upstream API key</label>
+                </div>
+                <small class="mw-hint">Leave blank to keep the stored key.</small>
+                <input type="hidden" name="provider" value="">
+                {% include "_signin.html" %}
+                <div class="mw-check-row">
+                  <div class="mw-check-text">Test the connection before saving</div>
+                  <label class="switch">
+                    <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection before saving">
+                    <span></span>
+                  </label>
+                </div>
+                <div class="mw-inline-actions">
+                  <button type="submit">Save changes</button>
+                  <button type="button" class="border"
+                          onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+                </div>
+              </form>
+            </details>
+          </td>
         </tr>
         {% endfor %}
+        <tr>
+          <td colspan="6">
+            <details class="mw-open-row" id="add-route"{% if not routes %} open{% endif %}>
+              <summary>Add a route</summary>
+              <form method="post">
+                <input type="hidden" name="action" value="create">
+                <div class="mw-form-grid">
+                  <div class="field label border">
+                    <input type="text" name="name" id="route-name" placeholder=" " required>
+                    <label for="route-name">Name</label>
+                  </div>
+                  <div class="field label border">
+                    <input type="url" name="target_host" id="route-host" placeholder=" " required>
+                    <label for="route-host">Target host</label>
+                  </div>
+                </div>
+                <small class="mw-hint">Example host: <code>https://nano-gpt.com/subscription/v1</code></small>
+
+                <div class="field label border">
+                  <input type="password" name="upstream_key" id="route-key" autocomplete="off" placeholder=" ">
+                  <label for="route-key">Upstream API key</label>
+                </div>
+                <input type="hidden" name="provider" value="">
+                {% include "_signin.html" %}
+
+                <div class="mw-check-row">
+                  <div class="mw-check-text">
+                    Test the connection and fetch models before saving
+                    <span class="mw-hint">MidWare calls the host’s <code>/v1/models</code>. If it fails, the route is not added.</span>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection and fetch models before saving" checked>
+                    <span></span>
+                  </label>
+                  <input type="hidden" name="test_connection" value="0">
+                </div>
+
+                <div class="mw-inline-actions">
+                  <button type="submit">Add route</button>
+                </div>
+              </form>
+            </details>
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>
-</details>
-{% endif %}
+</section>
 
-<h2>Add a route</h2>
-<form method="post">
-  <input type="hidden" name="action" value="create">
-  <div class="mw-form-grid">
-    <div class="field label border">
-      <input type="text" name="name" id="route-name" placeholder=" " required>
-      <label for="route-name">Name</label>
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Model catalogue</h2>
+      <span class="mw-meta">
+        {{ model_slugs | length }} slug{{ '' if model_slugs | length == 1 else 's' }} across
+        {{ model_summary | length }} route{{ '' if model_summary | length == 1 else 's' }},
+        {% if models_refreshed_at %}refreshed {{ models_refreshed_at | datetime }}{% else %}never refreshed{% endif %}
+      </span>
     </div>
-    <div class="field label border">
-      <input type="url" name="target_host" id="route-host" placeholder=" " required>
-      <label for="route-host">Target host</label>
+    <form method="post">
+      <input type="hidden" name="action" value="refresh">
+      <button type="submit" class="border small">Refresh models</button>
+    </form>
+  </div>
+
+  {% if model_slugs %}
+  <details class="mw-disclosure">
+    <summary>View model slugs</summary>
+    <div class="scroll mw-open-body">
+      <table class="compact border">
+        <thead><tr><th>Route</th><th>Slug to send</th></tr></thead>
+        <tbody>
+          {% for m in model_slugs %}
+          <tr>
+            <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
+            <td class="mono">{{ m.slug }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-  </div>
-  <small class="mw-hint">Example host: <code>https://nano-gpt.com/subscription/v1</code></small>
-
-  <div class="field label border">
-    <input type="password" name="upstream_key" id="route-key" autocomplete="off" placeholder=" ">
-    <label for="route-key">Upstream API key</label>
-  </div>
-  <input type="hidden" name="provider" value="">
-  {% include "_signin.html" %}
-
-  <div class="mw-check-row">
-    <div class="mw-check-text">
-      Test the connection and fetch models before saving
-      <span class="mw-hint">MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not added.</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection and fetch models before saving" checked>
-      <span></span>
-    </label>
-    <input type="hidden" name="test_connection" value="0">
-  </div>
-
-  <div class="mw-inline-actions">
-    <button type="submit">Add route</button>
-  </div>
-</form>
-
-<h2>Configured routes</h2>
-{% if routes %}
-<div class="scroll">
-  <table class="compact border">
-    <thead><tr><th>Name</th><th>Target</th><th>Auth Type</th><th class="num">Models</th><th>Role</th><th></th></tr></thead>
-    <tbody>
-      {% for r in routes %}
-      {% set is_default = r['id'] == active_route_id %}
-      <tr>
-        <td>
-          {{ r['name'] }}
-          <br><small class="mono">[{{ r['name'] }}]</small>
-          {% if r['provider'] %}
-          <small class="route-balance" data-balance-url="{{ url_for('admin.route_balance', route_id=r['id']) }}"></small>
-          {% endif %}
-        </td>
-        <td class="mono">{{ r['target_host'] }}</td>
-        <td>
-          {% set provider = signin_providers.get(r['provider']) if r['provider'] else none %}
-          {% if provider %}
-            <span class="pill blue">OAuth · {{ provider['label'] }}</span>
-          {% elif r['upstream_key'] %}
-            <span class="pill ok">API key</span>
-          {% else %}
-            <span class="pill warn">none</span>
-          {% endif %}
-        </td>
-        <td class="num">
-          {% set summary = model_summary.get(r['id']) %}
-          {% if summary and summary.count %}
-            <span class="pill ok">{{ summary.count }}</span>
-          {% else %}
-            <span class="pill warn">0</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if is_default %}
-            <span class="pill ok">default</span>
-          {% else %}
-            <form method="post" class="inline-form">
-              <input type="hidden" name="action" value="activate">
-              <input type="hidden" name="route_id" value="{{ r['id'] }}">
-              <button type="submit" class="border small">Make default</button>
-            </form>
-          {% endif %}
-        </td>
-        <td style="white-space:nowrap">
-          <form method="post" class="inline-form" onsubmit="return confirm('Delete route &quot;{{ r['name'] }}&quot;?')">
-            <input type="hidden" name="action" value="delete">
-            <input type="hidden" name="route_id" value="{{ r['id'] }}">
-            <button type="submit" class="border small error-text">Delete</button>
-          </form>
-        </td>
-      </tr>
-      <tr>
-        <td colspan="6" style="padding:0">
-          <details id="edit-{{ r['id'] }}" class="edit-drawer">
-            <summary>Edit route</summary>
-            <form method="post" style="padding:0.5rem 0.6rem 1rem">
-              <input type="hidden" name="action" value="update">
-              <input type="hidden" name="route_id" value="{{ r['id'] }}">
-              <div class="mw-form-grid">
-                <div class="field label border">
-                  <input type="text" name="name" id="edit-name-{{ r['id'] }}" value="{{ r['name'] }}" placeholder=" " required>
-                  <label for="edit-name-{{ r['id'] }}">Name</label>
-                </div>
-                <div class="field label border">
-                  <input type="url" name="target_host" id="edit-host-{{ r['id'] }}" value="{{ r['target_host'] }}" placeholder=" " required>
-                  <label for="edit-host-{{ r['id'] }}">Target host</label>
-                </div>
-              </div>
-              <div class="field label border">
-                <input type="password" name="upstream_key" id="edit-key-{{ r['id'] }}" autocomplete="off"
-                       placeholder=" " >
-                <label for="edit-key-{{ r['id'] }}">Upstream API key</label>
-              </div>
-              <small class="mw-hint">Leave blank to keep the stored key.</small>
-              <input type="hidden" name="provider" value="">
-              {% include "_signin.html" %}
-              <div class="mw-check-row">
-                <div class="mw-check-text">Test the connection before saving</div>
-                <label class="switch">
-                  <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection before saving">
-                  <span></span>
-                </label>
-              </div>
-              <div class="mw-inline-actions">
-                <button type="submit">Save changes</button>
-                <button type="button" class="border"
-                        onclick="this.closest('details').removeAttribute('open')">Cancel</button>
-              </div>
-            </form>
-          </details>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<p>No routes yet. <a href="{{ url_for('admin.setup') }}">Run setup</a>.</p>
-{% endif %}
+  </details>
+  {% else %}
+  <p class="mw-section-empty">Nothing catalogued yet. Refresh once a route is configured.</p>
+  {% endif %}
+</section>
 
 <details class="mw-reference">
   <summary>API reference</summary>
@@ -203,9 +237,9 @@
   "model": "[NanoGPT]xiaomi/mimo-v2.5-pro:thinking",
   "messages": [...]
 }</pre>
-  <p><code>GET /v1/models</code> returns MidWare's own catalogue rather than the upstream's, so one
-     request covers every configured host. The default route's models are bare; every other
-     route's are prefixed with <code>[Name]</code>:</p>
+  <p><code>GET /v1/models</code> returns MidWare’s own catalogue rather than the upstream's, so one
+     request covers every configured host. The default route’s models are bare; every other
+     route’s are prefixed with <code>[Name]</code>:</p>
   <pre class="mono">{
   "object": "list",
   "data": [

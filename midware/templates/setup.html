@@ -11,7 +11,7 @@
 
 {% if routes %}
 <article class="flash flash-success" role="status">
-  MidWare already has an upstream route. This page only manages the admin login —
+  MidWare already has an upstream route. This page only manages the admin login,
   add or edit upstreams on the <a href="{{ url_for('admin.routes') }}">Routes page</a>.
 </article>
 {% endif %}
@@ -71,7 +71,7 @@
     <div class="mw-check-row">
       <div class="mw-check-text">
         Test the connection and fetch models before saving
-        <span class="mw-hint">MidWare calls the host's <code>/v1/models</code>. If it fails, the route is not saved.</span>
+        <span class="mw-hint">MidWare calls the host’s <code>/v1/models</code>. If it fails, the route is not saved.</span>
       </div>
       <label class="switch">
         <input type="checkbox" name="test_connection" value="1" aria-label="Test the connection and fetch models before saving"

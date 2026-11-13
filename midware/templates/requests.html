@@ -5,7 +5,7 @@
 <div class="mw-page-head">
   <div>
     <h1>Requests</h1>
-    <p>{{ total }} logged · keeping the newest {{ log_limit }} per key</p>
+    <p>{{ total }} logged, keeping the newest {{ log_limit }} per key</p>
   </div>
   <form method="get" action="{{ url_for('dashboard.requests_page') }}" class="mw-filters">
     <div class="field label border small">
@@ -34,18 +34,21 @@
   <table class="compact border">
     <thead>
       <tr>
-        <th>When</th><th>Host</th><th>Model</th><th>Key</th><th>Path</th>
+        <th>When</th><th>Host</th><th>Model</th><th>Key</th>
         <th>Status</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Total</th><th class="num">Latency</th>
       </tr>
     </thead>
     <tbody>
       {% for r in requests %}
-      <tr>
-        <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
+      <tr class="mw-row">
+        <td><a class="mw-row-name" href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}"
+               title="{{ r['created_at'] | datetime }}">{{ r['created_at'] | relative }}</a></td>
         <td>{% if r['host_prefix'] %}<span class="pill ok">[{{ r['host_prefix'] }}]</span>{% else %}<span class="pill">default</span>{% endif %}</td>
-        <td class="mono">{{ r['model'] or '—' }}</td>
-        <td>{{ r['api_key_name'] or '—' }}</td>
-        <td class="mono">/{{ r['request_path'] }}</td>
+        <td>
+          <span class="mw-row-name mono">{{ r['model'] or 'none' }}</span>
+          <span class="mw-row-sub mono">/{{ r['request_path'] }}</span>
+        </td>
+        <td>{{ r['api_key_name'] or 'none' }}</td>
         <td>
           <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">{{ r['status_code'] }}</span>
           {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
@@ -63,15 +66,15 @@
 {% if pages > 1 %}
 <nav class="mw-pager" aria-label="Request pages">
   {% if page > 1 %}
-    <a class="button border small" href="{{ url_for('dashboard.requests_page', page=page-1, key=selected_key, route=selected_route) }}">← Newer</a>
+    <a class="button border small" href="{{ url_for('dashboard.requests_page', page=page-1, key=selected_key, route=selected_route) }}">Newer</a>
   {% else %}
-    <button class="border small" type="button" disabled>← Newer</button>
+    <button class="border small" type="button" disabled>Newer</button>
   {% endif %}
   <small>Page {{ page }} / {{ pages }}</small>
   {% if page < pages %}
-    <a class="button border small" href="{{ url_for('dashboard.requests_page', page=page+1, key=selected_key, route=selected_route) }}">Older →</a>
+    <a class="button border small" href="{{ url_for('dashboard.requests_page', page=page+1, key=selected_key, route=selected_route) }}">Older</a>
   {% else %}
-    <button class="border small" type="button" disabled>Older →</button>
+    <button class="border small" type="button" disabled>Older</button>
   {% endif %}
 </nav>
 {% endif %}

@@ -32,7 +32,7 @@
       <div>
         <a href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}"><strong>{{ r['name'] }}</strong></a>
         <div class="msq-sub mono">
-          {{ card.route_name or 'no route' }} · {{ r['model'] or '—' }}
+          {{ card.route_name or 'no route' }}, {{ r['model'] or 'none' }}
           {% if not r['enabled'] %}<span class="pill warn">paused</span>{% endif %}
         </div>
       </div>
@@ -52,15 +52,15 @@
 
     <div class="msq-metrics">
       <div><span class="msq-metric-label">Score</span>
-        <span class="msq-metric-value">{{ '%.0f' | format(latest['score']) if latest else '—' }}</span></div>
+        <span class="msq-metric-value">{{ '%.0f' | format(latest['score']) if latest else 'no data' }}</span></div>
       <div><span class="msq-metric-label">Avg</span>
-        <span class="msq-metric-value">{{ '%.0f' | format(ev.average_score) if ev.average_score is not none else '—' }}</span></div>
+        <span class="msq-metric-value">{{ '%.0f' | format(ev.average_score) if ev.average_score is not none else 'no data' }}</span></div>
       <div><span class="msq-metric-label">TTFT</span>
-        <span class="msq-metric-value">{{ latest['ttft_ms'] | ms if latest else '—' }}</span></div>
+        <span class="msq-metric-value">{{ latest['ttft_ms'] | ms if latest else 'no data' }}</span></div>
       <div><span class="msq-metric-label">Total</span>
-        <span class="msq-metric-value">{{ latest['total_ms'] | ms if latest else '—' }}</span></div>
+        <span class="msq-metric-value">{{ latest['total_ms'] | ms if latest else 'no data' }}</span></div>
       <div><span class="msq-metric-label">Tok/s</span>
-        <span class="msq-metric-value">{{ '%.1f' | format(latest['tokens_per_second']) if latest and latest['tokens_per_second'] else '—' }}</span></div>
+        <span class="msq-metric-value">{{ '%.1f' | format(latest['tokens_per_second']) if latest and latest['tokens_per_second'] else 'no data' }}</span></div>
     </div>
 
     <div class="msq-chart" data-recorder="{{ r['id'] }}" data-threshold="{{ threshold }}">
@@ -103,7 +103,7 @@
   <p>Recorders with <strong>hardcore checks</strong> enabled can turn <strong>Failing</strong>
      immediately: a truncated stream, malformed chunk, leaked template token, repetition loop or
      missed long-context needle is not a statistical question. Enable them per recorder under
-     the form's Advanced section.</p>
+     the form’s Advanced section.</p>
 </details>
 {% endblock %}
 

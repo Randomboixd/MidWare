@@ -5,7 +5,7 @@
 <div class="mw-page-head">
   <div>
     <h1>Activity</h1>
-    <p>{{ heatmap.start }} → {{ heatmap.end }} · {{ heatmap.total_tokens | comma }} tokens over {{ heatmap.active_days }} active days</p>
+    <p>{{ heatmap.start }} to {{ heatmap.end }}, {{ heatmap.total_tokens | comma }} tokens over {{ heatmap.active_days }} active days</p>
   </div>
   <form method="get" action="{{ url_for('dashboard.activity') }}" class="mw-filters">
     <div class="field label border small">
@@ -42,12 +42,12 @@
 </div>
 <div class="heat-legend">
   <span>Peak day: {{ heatmap.peak | comma }} tokens</span>
-  <span style="margin-left:auto">Less</span>
-  <span class="swatch" style="background:#5c2e00"></span>
-  <span class="swatch" style="background:#8a4500"></span>
-  <span class="swatch" style="background:#c26a00"></span>
-  <span class="swatch" style="background:#ffa94d"></span>
-  <span>More</span>
+  <span class="heat-scale">fewer</span>
+  <span class="swatch" data-level="1"></span>
+  <span class="swatch" data-level="2"></span>
+  <span class="swatch" data-level="3"></span>
+  <span class="swatch" data-level="4"></span>
+  <span class="heat-scale">more tokens</span>
 </div>
 
 <h2>Last 30 days</h2>

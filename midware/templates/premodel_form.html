@@ -14,7 +14,7 @@
 
 <form method="post" id="premodel-form">
   <section class="mw-form-section">
-    <h3 style="margin-top:0">Basics</h3>
+    <h2 style="margin-top:0">Basics</h2>
     <div class="mw-form-grid">
       <div class="field label border">
         <input type="text" id="premodel-name" name="name" value="{{ form.get('name', '') }}" placeholder=" " required>
@@ -37,7 +37,7 @@
     <div class="mw-form-grid">
       <div class="field label border">
         <select name="route_id" id="premodel-route">
-          <option value="">— choose —</option>
+          <option value="">choose one</option>
           {% for r in routes %}
           <option value="{{ r['id'] }}" {% if form.get('route_id') | string == r['id'] | string %}selected{% endif %}>{{ r['name'] }}</option>
           {% endfor %}
@@ -92,7 +92,7 @@
   </div>
 
   <section id="limits-panel" class="mw-form-section" {% if not limits_open %}hidden{% endif %}>
-    <h3 style="margin-top:0">Token limits</h3>
+    <h2 style="margin-top:0">Token limits</h2>
     <div class="mw-check-row">
       <div class="mw-check-text">Set maximum tokens</div>
       <label class="switch">

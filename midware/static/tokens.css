@@ -1,0 +1,90 @@
+/* MidWare design tokens — Hallmark theme Vantage (app scope).
+   Palette, faces and surfaces come from the theme; the scale is the fixed
+   app scale (ratio 1.2). No literal colour lives outside this file. */
+
+:root {
+  color-scheme: dark;
+
+  /* -- palette (Vantage, colourway steel) ------------------------------- */
+  --color-paper: oklch(13.5% 0.012 235);
+  --color-paper-2: oklch(17% 0.014 235);
+  --color-paper-3: oklch(21% 0.016 235);
+  --color-ink: oklch(95% 0.006 230);
+  --color-ink-2: oklch(82% 0.012 230);
+  --color-muted: oklch(66% 0.016 230);
+  --color-rule: oklch(27% 0.014 235);
+  --color-rule-2: oklch(34% 0.016 235);
+  --color-accent: oklch(89% 0.19 126);
+  --color-accent-hi: oklch(93% 0.17 126);
+  --color-accent-ink: oklch(19% 0.04 126);
+  --color-focus: oklch(89% 0.19 126);
+  --point-lo: oklch(42% 0.04 245);
+  --point-mid: oklch(70% 0.04 232);
+  --point-hi: oklch(96% 0.02 215);
+  --color-slot: oklch(21% 0.016 235);
+  --color-error: oklch(72% 0.15 27);
+  --color-success: oklch(76% 0.13 150);
+
+  /* -- type ------------------------------------------------------------- */
+  --font-display: "Geologica", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Geologica", ui-sans-serif, system-ui, sans-serif;
+  --text-xs: 0.75rem;      /* 12 — captions, table heads */
+  --text-sm: 0.8125rem;    /* 13 — labels, nav, meta */
+  --text-data: 0.875rem;   /* 14 — table cells, dense controls */
+  --text-md: 1rem;         /* 16 — body */
+  --text-lg: 1.2rem;       /* 19.2 — section heads */
+  --text-xl: 1.44rem;      /* 23 — page heads */
+  --text-2xl: 1.728rem;    /* 27.6 — statement figures */
+  --text-3xl: 2.074rem;
+  --tracking-display: -0.03em;
+  --display-weight: 300;
+
+  /* -- space ------------------------------------------------------------ */
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+
+  /* -- form ------------------------------------------------------------- */
+  --radius-card: 4px;
+  --radius-pill: 999px;
+  --rule-hair: 1px;
+  --tick: 10px;
+  --shadow-card: none;
+  --control-h: 40px;
+  --control-h-sm: 32px;
+
+  /* -- shell ------------------------------------------------------------ */
+  --container: 1440px;
+  --gutter: 32px;
+  --gap-columns: 24px;
+  --section-gap: 40px;
+
+  /* -- motion ----------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  /* -- depth ------------------------------------------------------------ */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky-nav: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+}
+
+@media (max-width: 60rem) {
+  :root { --gutter: 20px; --gap-columns: 16px; --section-gap: 32px; }
+}
+
+@media (max-width: 40rem) {
+  :root { --gutter: 14px; --section-gap: 28px; }
+}

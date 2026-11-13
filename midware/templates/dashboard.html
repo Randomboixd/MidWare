@@ -38,28 +38,28 @@
 <section class="stat-grid">
   <article class="stat-card highlight">
     <header>Today</header>
-    <div class="value">{{ overview.day.total_tokens | tokens }}</div>
-    <div class="sub">↑ {{ overview.day.prompt_tokens | tokens }} · ↓ {{ overview.day.completion_tokens | tokens }} · {{ overview.day.requests }} req</div>
+    <div class="value">{{ overview.day.total_tokens | tokens }}<span class="u">tokens</span></div>
+    <div class="sub">{{ overview.day.prompt_tokens | tokens }} in, {{ overview.day.completion_tokens | tokens }} out, {{ overview.day.requests }} requests</div>
   </article>
   <article class="stat-card">
     <header>This month</header>
-    <div class="value">{{ overview.month.total_tokens | tokens }}</div>
-    <div class="sub">↑ {{ overview.month.prompt_tokens | tokens }} · ↓ {{ overview.month.completion_tokens | tokens }} · {{ overview.month.requests }} req</div>
+    <div class="value">{{ overview.month.total_tokens | tokens }}<span class="u">tokens</span></div>
+    <div class="sub">{{ overview.month.prompt_tokens | tokens }} in, {{ overview.month.completion_tokens | tokens }} out, {{ overview.month.requests }} requests</div>
   </article>
   <article class="stat-card">
     <header>This year</header>
-    <div class="value">{{ overview.year.total_tokens | tokens }}</div>
-    <div class="sub">↑ {{ overview.year.prompt_tokens | tokens }} · ↓ {{ overview.year.completion_tokens | tokens }} · {{ overview.year.requests }} req</div>
+    <div class="value">{{ overview.year.total_tokens | tokens }}<span class="u">tokens</span></div>
+    <div class="sub">{{ overview.year.prompt_tokens | tokens }} in, {{ overview.year.completion_tokens | tokens }} out, {{ overview.year.requests }} requests</div>
   </article>
   <article class="stat-card">
     <header>All time</header>
-    <div class="value">{{ overview.all_time.total_tokens | tokens }}</div>
-    <div class="sub">{{ overview.all_time.requests }} req · avg {{ overview.all_time.avg_latency_ms | ms }}</div>
+    <div class="value">{{ overview.all_time.total_tokens | tokens }}<span class="u">tokens</span></div>
+    <div class="sub">{{ overview.all_time.requests }} requests, {{ overview.all_time.avg_latency_ms | ms }} average</div>
   </article>
 </section>
 
 <section>
-  <h2>Last 52 weeks <small><a href="{{ url_for('dashboard.activity') }}">Activity →</a></small></h2>
+  <h2>Last 52 weeks <small><a href="{{ url_for('dashboard.activity') }}">activity</a></small></h2>
   <div class="heatmap-wrap">
     <div class="heatmap">
       {% for week in heatmap.weeks %}
@@ -76,12 +76,12 @@
   </div>
   <div class="heat-legend">
     <span>{{ heatmap.active_days }} active days</span>
-    <span style="margin-left:auto">Less</span>
-    <span class="swatch" style="background:#5c2e00"></span>
-    <span class="swatch" style="background:#8a4500"></span>
-    <span class="swatch" style="background:#c26a00"></span>
-    <span class="swatch" style="background:#ffa94d"></span>
-    <span>More</span>
+    <span class="heat-scale">fewer</span>
+    <span class="swatch" data-level="1"></span>
+    <span class="swatch" data-level="2"></span>
+    <span class="swatch" data-level="3"></span>
+    <span class="swatch" data-level="4"></span>
+    <span class="heat-scale">more tokens</span>
   </div>
 </section>
 
@@ -92,14 +92,14 @@
     <div class="scroll">
       <table class="compact border">
         <thead>
-          <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th class="num">Total</th><th class="num">Latency</th></tr>
+          <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th class="num">Tokens</th><th class="num">Latency</th></tr>
         </thead>
         <tbody>
           {% for r in recent %}
           <tr>
             <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
-            <td class="mono">{{ r['model'] or '—' }}</td>
-            <td>{{ r['api_key_name'] or '—' }}</td>
+            <td class="mono">{{ r['model'] or 'none' }}</td>
+            <td>{{ r['api_key_name'] or 'none' }}</td>
             <td>
               <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">
                 {{ r['status_code'] }}
@@ -113,7 +113,7 @@
         </tbody>
       </table>
     </div>
-    <p><a href="{{ url_for('dashboard.requests_page') }}">View all requests →</a></p>
+    <p><a href="{{ url_for('dashboard.requests_page') }}">View all requests</a></p>
     {% else %}
     <p>No requests recorded yet.</p>
     {% endif %}
@@ -122,6 +122,7 @@
   <section>
     <h2>Top hosts</h2>
     {% if hosts %}
+    {% set host_max = (hosts | map(attribute='total_tokens') | max) or 1 %}
     <div class="scroll">
       <table class="compact border">
         <thead><tr><th>Host</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
@@ -130,7 +131,7 @@
           <tr>
             <td>{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
             <td class="num">{{ h.requests }}</td>
-            <td class="num">{{ h.total_tokens | tokens }}</td>
+            <td class="num">{{ h.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * h.total_tokens / host_max) | round(1) }}%"></i></span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -142,6 +143,7 @@
 
     <h2>Top models</h2>
     {% if models %}
+    {% set model_max = (models | map(attribute='total_tokens') | max) or 1 %}
     <div class="scroll">
       <table class="compact border">
         <thead><tr><th>Model</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
@@ -150,7 +152,7 @@
           <tr>
             <td class="mono">{{ m.model }}</td>
             <td class="num">{{ m.requests }}</td>
-            <td class="num">{{ m.total_tokens | tokens }}</td>
+            <td class="num">{{ m.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * m.total_tokens / model_max) | round(1) }}%"></i></span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -163,7 +165,7 @@
     <h2>Available models</h2>
     {% if model_slugs %}
     <p><small>{{ model_slugs | length }} slug(s); copy one straight into your client.
-       The default route's models have no prefix.</small></p>
+       The default route’s models have no prefix.</small></p>
     <div class="scroll">
       <table class="compact border">
         <thead><tr><th>Route</th><th>Model</th></tr></thead>
@@ -178,7 +180,7 @@
       </table>
     </div>
     {% if model_slugs | length > 12 %}
-    <p><a href="{{ url_for('admin.routes') }}">See all {{ model_slugs | length }} models →</a></p>
+    <p><a href="{{ url_for('admin.routes') }}">See all {{ model_slugs | length }} models</a></p>
     {% endif %}
     {% else %}
     <p>No models discovered yet.
