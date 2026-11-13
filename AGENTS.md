@@ -61,9 +61,10 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/blueprints/sma.py` | System Management API (`/_midware/api/v1`) and the admin consent page (`/_midware/authorize`). |
 | `midware/blueprints/admin.py` | Write surfaces: `/admin/setup`, `/admin/routes`, `/admin/keys` (+ `new`/`edit`), `/admin/settings`. |
 | `midware/blueprints/msq.py` | MSQ control panel: `/admin/msq` list + `new`/`edit`/`delete`/`run`. |
+| `midware/blueprints/playground.py` | The Playground (`/admin/playground` + `POST /admin/playground/key`): mints/extends the temporary key the page chats with. Model traffic never passes through it. |
 | `midware/blueprints/dashboard.py` | Read-only UI: `/`, `/activity`, `/requests`, request detail + `messages.json`. |
 | `midware/blueprints/account.py` | Public `/signin` (GET/POST) and `/signout` (POST) pages for the control-panel session. |
-| `midware/templates/`, `midware/static/` | Jinja2 templates (BeerCSS v5 from CDN, dark-orange Material theme) and `style.css` / `request_detail.js` / `workflow.js`. |
+| `midware/templates/`, `midware/static/` | Jinja2 templates (BeerCSS v5 from CDN, dark-orange Material theme) and `style.css` / `request_detail.js` / `workflow.js` / `playground.js` / `clipboard.js`. |
 | `tests/` | pytest suite. See "Testing" below before adding tests. |
 | `run.py`, `wsgi.py` | Entrypoints; both read `HOST`/`PORT`, `wsgi.py` is used in the container. |
 | `Dockerfile`, `docker-compose.yml` | Container build; DB lives in the `/data` volume. |
@@ -98,7 +99,8 @@ this development environment, so Docker changes are verified by reading only.
   limit_tokens_enabled, limit_tokens_{hour,day,week}, max_tokens_{hour,day,week},
   limit_requests_enabled, limit_requests_{minute,hour,day,week},
   max_requests_{minute,hour,day,week}, image_response_mode, image_retention_days,
-  image_url_https, log_requests, log_message_contents, created_at, last_used_at)` —
+  image_url_https, log_requests, log_message_contents, expires_at, created_at,
+  last_used_at)` —
   `is_system`
   rows (the auto-created `MSQ Measurements` owner) are skipped by
   `list_api_keys`/`count_api_keys` but still name rows in the request log.
@@ -259,6 +261,23 @@ Do not break these; several have regression tests.
   are deliberately **global** rather than `...owned`: they reach any real key,
   which the consent page states outright. `is_system` keys are never toggleable
   (`404 api_key_not_found`).
+- **Key expiry + the Playground** (`api_keys.expires_at`, `blueprints/playground.py`):
+  `expires_at` is nullable (`NULL` = permanent), and `auth.authenticate()` refuses
+  a past one with `403 api_key_expired` **after** the `enabled` check — a key that
+  is both disabled and stale still reads as disabled. Expiry never deletes the
+  row, so request history keeps its owner. The Playground (`/admin/playground`,
+  admin-guarded, and never a proxy path: model traffic goes browser → `/v1`) chats
+  with this instance's own `/v1/chat/completions`. `POST /admin/playground/key`
+  mints or re-reads **one** key named `Midware Playground Temporary API Key`
+  (`db.find_api_key_by_name`), gives it a 2 h expiry and a 120 req/hour cap, and
+  switches it back on if an admin disabled it there. Reuse is deliberate: a row
+  per visit would scatter the request log across hundreds of dead keys, and
+  deleting the row is the documented way to force a fresh token. The cURL /
+  Python / JS snippets and the body Generate posts both come from a single
+  `buildPayload()` in `playground.js`, so a copied snippet is the call that ran;
+  the API base is rendered server-side from `request.url_root` (not
+  `window.location`) so a path prefix or TLS terminator still yields a URL that
+  works.
 - **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
   `/v1/embeddings`): already-forwarded endpoints made first-class by
   `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
@@ -779,6 +798,12 @@ Do not break these; several have regression tests.
 - Per-key request/message logging coverage lives in
   `tests/test_logging_settings.py` (skipped-row accounting, metadata-only rows,
   form round-trip); the DB-level switches are in `tests/test_db.py`.
+- Playground coverage lives in `tests/test_playground.py`: key mint/reuse/expiry
+  sliding, the 120 req/hour cap being restored on reuse, `api_key_expired` refused
+  before any upstream call (assert the stub saw nothing), `enabled` winning over a
+  stale expiry, the `temporary` pill, and the admin-session gate. The page's
+  JavaScript is not unit-tested (it is all DOM wiring); verify it by loading
+  `/admin/playground` in a browser and generating once.
 - System Management Account coverage lives in `tests/test_sma.py`: enrollment
   validation, signature replay/path-transplant/stale-clock, scope denial, route
   redaction, key-minting constraints and ownership isolation, the consent
@@ -787,7 +812,7 @@ Do not break these; several have regression tests.
   approve accounts directly through `db.update_system_account`; tests that go
   through the consent page use the `secured` fixture (credentials + `/signin`).
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `508 passed` — **update this number whenever the test count changes.**
+  `574 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

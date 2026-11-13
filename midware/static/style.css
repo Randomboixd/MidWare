@@ -1579,3 +1579,396 @@ code.wf-var {
 .wf-drop-after {
   box-shadow: 0 3px 0 0 var(--primary);
 }
+
+/* -- playground ---------------------------------------------------------- */
+
+.pg-keyline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pg-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--mw-gap);
+  align-items: start;
+}
+
+.pg-left,
+.pg-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.pg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pg-toolbar h2 {
+  margin: 0;
+  flex: 1;
+}
+
+.pg-model {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.pg-model-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--on-surface-variant);
+}
+
+.pg-model select {
+  margin: 0;
+  max-width: 22rem;
+}
+
+.pg-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.pg-block {
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--mw-radius);
+  background: color-mix(in srgb, var(--surface-container) 55%, transparent);
+  overflow: hidden;
+}
+
+.pg-block-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.pg-index {
+  font-size: 0.7rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
+}
+
+.pg-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.pg-role:hover,
+.pg-del:hover {
+  background: var(--surface-container-high);
+}
+
+.pg-caret {
+  font-size: 0.65rem;
+  opacity: 0.75;
+}
+
+.pg-spacer {
+  flex: 1;
+}
+
+.pg-drag {
+  cursor: grab;
+  color: var(--on-surface-variant);
+  user-select: none;
+  padding: 0 0.25rem;
+  letter-spacing: -0.15em;
+}
+
+.pg-drag:active {
+  cursor: grabbing;
+}
+
+.pg-del {
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0.1rem 0.4rem;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  font-size: 0.85rem;
+  border-radius: 0.4rem;
+}
+
+.pg-text {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+  padding: 0.55rem 0.7rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--on-surface);
+  min-height: 2.6rem;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.pg-text:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--surface-container-high) 40%, transparent);
+}
+
+.pg-dragging {
+  opacity: 0.55;
+}
+
+.pg-drop-before {
+  box-shadow: 0 -3px 0 0 var(--primary);
+}
+
+.pg-drop-after {
+  box-shadow: 0 3px 0 0 var(--primary);
+}
+
+.pg-add {
+  align-self: center;
+  width: 2.8rem;
+  height: 2rem;
+  margin: 0.1rem 0 0.2rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.6rem;
+  background: var(--surface-container-high);
+  border: 1px solid var(--outline-variant);
+  color: var(--on-surface);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pg-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.pg-response-card,
+.pg-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--mw-radius);
+  background: color-mix(in srgb, var(--surface-container) 55%, transparent);
+  padding: 0.7rem 0.8rem;
+}
+
+.pg-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.pg-panel-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  flex: 1;
+}
+
+.pg-meta {
+  font-size: 0.72rem;
+  color: var(--on-surface-variant);
+}
+
+.pg-response {
+  margin: 0;
+  min-height: 7rem;
+  max-height: 45vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.6rem;
+  background: var(--surface-container-lowest, #0d0906);
+  color: var(--on-surface);
+}
+
+.pg-error {
+  color: var(--error);
+}
+
+.pg-extras summary {
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+}
+
+.pg-extras textarea {
+  width: 100%;
+  min-height: 4.2rem;
+  margin: 0.4rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.pg-extras small {
+  display: block;
+  margin-top: 0.3rem;
+}
+
+.pg-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pg-generate {
+  flex: 1;
+  margin: 0;
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.6rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: var(--primary);
+  color: var(--on-primary);
+  cursor: pointer;
+}
+
+.pg-generate[disabled] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.pg-keybox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.6rem;
+  background: var(--surface-container-high);
+}
+
+.pg-keybox-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--on-surface-variant);
+}
+
+.pg-keybox-head span {
+  flex: 1;
+}
+
+.pg-key {
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.pg-keybox small {
+  font-size: 0.72rem;
+}
+
+.pg-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.pg-tab {
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+}
+
+.pg-tab:hover {
+  background: var(--surface-container-high);
+}
+
+.pg-tab.active {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  font-weight: 600;
+}
+
+.pg-copy {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--on-surface);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.pg-code {
+  margin: 0;
+  max-height: 58vh;
+  overflow: auto;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.6rem;
+  background: var(--surface-container-lowest, #0d0906);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  /* Never wrap code: a bearer token split across lines is a snippet that fails
+     when pasted. Long lines scroll instead. */
+  white-space: pre;
+}
+
+.pg-note {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--on-surface-variant);
+}
+
+.pg-note code {
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  .pg-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

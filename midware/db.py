@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     image_url_https     INTEGER NOT NULL DEFAULT 0,
     log_requests        INTEGER NOT NULL DEFAULT 1,
     log_message_contents INTEGER NOT NULL DEFAULT 1,
+    expires_at  TEXT,
     created_at  TEXT    NOT NULL,
     last_used_at TEXT
 );
@@ -562,6 +563,7 @@ class Database:
                     "log_requests": "INTEGER NOT NULL DEFAULT 1",
                     "log_message_contents": "INTEGER NOT NULL DEFAULT 1",
                     "owner_system_account_id": "INTEGER",
+                    "expires_at": "TEXT",
                     "enabled": "INTEGER NOT NULL DEFAULT 1",
                 },
             )
@@ -1237,6 +1239,7 @@ class Database:
         log_requests: bool = True,
         log_message_contents: bool = True,
         owner_system_account_id: int | None = None,
+        expires_at: datetime | None = None,
     ) -> str:
         token = self.generate_token()
         if image_response_mode not in IMAGE_RESPONSE_MODES:
@@ -1254,10 +1257,11 @@ class Database:
                     limit_requests_hour, max_requests_hour, limit_requests_day,
                     max_requests_day, limit_requests_week, max_requests_week,
                     image_response_mode, image_retention_days, image_url_https,
-                    log_requests, log_message_contents, owner_system_account_id
+                    log_requests, log_message_contents, owner_system_account_id,
+                    expires_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?)
+                          ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -1294,6 +1298,7 @@ class Database:
                     int(bool(log_requests)),
                     int(bool(log_message_contents)),
                     owner_system_account_id,
+                    to_iso(expires_at) if expires_at is not None else None,
                 ),
             )
         return token
@@ -1368,6 +1373,26 @@ class Database:
 
     def get_api_key(self, key_id: int) -> sqlite3.Row | None:
         return self._row("SELECT * FROM api_keys WHERE id = ?", (key_id,))
+
+    def find_api_key_by_name(self, name: str) -> sqlite3.Row | None:
+        """The first user-managed key with this exact name, if any.
+
+        Used to reuse a self-renewing key (the Playground's temporary one)
+        instead of minting a new row on every visit. ``is_system`` rows are
+        excluded so a hidden MSQ key can never be handed to a browser.
+        """
+        return self._row(
+            "SELECT * FROM api_keys WHERE name = ? AND is_system = 0 ORDER BY id LIMIT 1",
+            (name,),
+        )
+
+    def set_api_key_expiry(self, key_id: int, expires_at: datetime | None) -> None:
+        """Set or clear a key's expiry; ``None`` makes it permanent again."""
+        with self.write() as conn:
+            conn.execute(
+                "UPDATE api_keys SET expires_at = ? WHERE id = ?",
+                (to_iso(expires_at) if expires_at is not None else None, key_id),
+            )
 
     def list_api_keys(self) -> list[sqlite3.Row]:
         return self._rows(

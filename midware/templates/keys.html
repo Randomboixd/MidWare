@@ -11,6 +11,18 @@
   <a class="button" href="{{ url_for('admin.key_new') }}">Create API key</a>
 </div>
 
+<div class="mw-key-intro">
+  <h2>MidWare API key usage</h2>
+  <p>Point any OpenAI-compatible client (cURL, SillyTavern, Hermes, whatever) at
+     <code class="mw-base-url">{{ request.url_root.rstrip('/') }}/v1</code>
+     <button type="button" class="border small" data-copy-base>Copy</button>
+     and send one of the keys below as the API key
+     (<code>Authorization: Bearer &lt;key&gt;</code>).</p>
+  <p>Developing an app? The <a href="{{ url_for('playground.index') }}">Playground</a>
+     chats with any model through this MidWare, on a temporary key, and writes the
+     matching call for you as you type.</p>
+</div>
+
 <h2>Existing keys</h2>
 {% if api_keys %}
 <div class="scroll">
@@ -27,6 +39,9 @@
         <td>
           {% if k['enabled'] %}<span class="pill ok">enabled</span>
           {% else %}<span class="pill bad">disabled</span>{% endif %}
+          {% if k['expires_at'] %}
+          <span class="pill warn" title="Expires {{ k['expires_at'] | datetime }} UTC">temporary</span>
+          {% endif %}
         </td>
         <td class="num">{{ k['request_count'] }}</td>
         <td class="num">{{ k['token_count'] | tokens }}</td>
@@ -54,4 +69,23 @@
 {% else %}
 <p>No keys yet.</p>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='clipboard.js') }}"></script>
+<script>
+(function () {
+  "use strict";
+  var button = document.querySelector("[data-copy-base]");
+  var code = document.querySelector(".mw-base-url");
+  if (!button || !code) {
+    return;
+  }
+  button.addEventListener("click", function () {
+    window.mwCopy(code.textContent.trim()).then(function (ok) {
+      window.mwFlash(button, ok ? "Copied" : "Copy failed");
+    });
+  });
+})();
+</script>
 {% endblock %}

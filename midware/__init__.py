@@ -72,6 +72,7 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     from .blueprints.admin import bp as admin_bp
     from .blueprints.dashboard import bp as dashboard_bp
     from .blueprints.msq import bp as msq_bp
+    from .blueprints.playground import bp as playground_bp
     from .blueprints.proxy import bp as proxy_bp
     from .blueprints.sma import api_bp as sma_api_bp
     from .blueprints.sma import consent_bp as sma_consent_bp
@@ -81,6 +82,7 @@ def create_app(database_path: str | None = None, config_overrides: dict | None =
     app.register_blueprint(account_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(msq_bp)
+    app.register_blueprint(playground_bp)
     app.register_blueprint(proxy_bp)
     app.register_blueprint(sma_api_bp)
     app.register_blueprint(sma_consent_bp)

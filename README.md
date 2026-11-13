@@ -121,6 +121,9 @@ this section first. :3
   calling key.
 - Keys can be switched off without deleting them. Usage, history and limits stay;
   the token just stops working until you turn it back on.
+- Keys can also carry an expiry (`expires_at`). An expired key is refused with
+  `api_key_expired`, and its row stays behind so its request history keeps an
+  owner.
 - Real upstream provider keys never leave the server.
 
 **Accounting and history**
@@ -155,6 +158,40 @@ this section first. :3
   text-forensics checks and long-context needle tests.
 - A signed, permissioned System Management API for automation.
 - Docker deployment, SQLite storage and a private-friendly setup.
+
+**Trying it out**
+
+- A Playground page that chats with any configured model through this instance's
+  own `/v1`, on a temporary key, and generates the matching cURL / Python /
+  JavaScript call from the messages you build.
+
+## Playground
+
+The Keys page tells you where to point a client (`<your MidWare>/v1`) and which
+key to use. The Playground is the other half of that: instead of leaving MidWare
+to try something, you build the request in the browser and watch it go through
+the proxy.
+
+- **Blocks, not a chat box.** A system block, a user block, add as many as you
+  like, drag them into order, click a role to cycle system → user → assistant →
+  developer. Empty blocks are dropped from the payload.
+- **The docs are the request.** The cURL, Python and JavaScript panel is rendered
+  from the same payload the Generate button posts, so a copied snippet is the
+  call that just ran. Extra parameters (temperature, `max_tokens`, anything else)
+  go in as JSON and are merged in.
+- **It really is the proxy.** Requests go to `/v1/chat/completions` with a normal
+  MidWare key, so they appear in Requests, count against usage, show up in your
+  route's logs, and are subject to rate limits and model permissions.
+- **A temporary key, not a permanent one.** The page mints (or reuses)
+  `Midware Playground Temporary API Key`: expiring two hours after each visit,
+  capped at 120 requests/hour, and visible in the Keys list with a `temporary`
+  pill. Delete it there to cut the Playground off; the next visit mints a fresh
+  one. It is not a real credential and should not be shipped in an app.
+- Model list comes from `GET /v1/models`, so it includes `[Route]model` prefixes
+  and premodel slugs without a second catalogue to keep in sync.
+
+Everything happens in your browser; the server only hands over the key and the
+page itself.
 
 ## Premodels
 

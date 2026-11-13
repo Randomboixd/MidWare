@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from flask import current_app, request
 
-from .db import Database
+from .db import Database, parse_iso, utcnow
 
 
 def extract_client_token(headers=None) -> str | None:
@@ -79,6 +79,22 @@ def authenticate() -> tuple[dict | None, tuple | None]:
                     "message": "This MidWare API key is disabled.",
                     "type": "midware_authentication_error",
                     "code": "api_key_disabled",
+                }
+            },
+            403,
+        )
+
+    expires_at = parse_iso(row["expires_at"])
+    if expires_at is not None and expires_at <= utcnow():
+        # Expiry is checked after ``enabled`` so a key that is both disabled and
+        # stale still reads as "disabled" — the reversible state wins. The row is
+        # never deleted here: request history keeps its owner.
+        return None, (
+            {
+                "error": {
+                    "message": "This MidWare API key expired and can no longer be used.",
+                    "type": "midware_authentication_error",
+                    "code": "api_key_expired",
                 }
             },
             403,
