@@ -80,13 +80,7 @@ def _ensure_key(db):
 
 @bp.get("/admin/playground")
 def index():
-    return render_template(
-        "playground.html",
-        api_base=_api_base(),
-        key_name=KEY_NAME,
-        ttl_minutes=KEY_TTL_SECONDS // 60,
-        hour_limit=KEY_MAX_REQUESTS_PER_HOUR,
-    )
+    return render_template("playground.html", api_base=_api_base())
 
 
 @bp.post("/admin/playground/key")

@@ -6,25 +6,22 @@
   <div>
     <h1>Playground</h1>
     <p>Chat with any model on this MidWare through its own <code>/v1</code> API. Every
-       generate is a real proxied request, logged like any other — so the snippets on
-       the right are the ones that just ran.</p>
+       generate is a real proxied request, logged like any other — so the snippets
+       beside it are the ones that just ran.</p>
   </div>
-  <div class="pg-keyline">
-    <span class="pill warn" id="pg-key-state">fetching temporary key…</span>
-    <a class="button border small" href="{{ url_for('admin.keys') }}">Manage keys</a>
-  </div>
+  <a class="button border small" href="{{ url_for('admin.keys') }}">Manage keys</a>
 </div>
 
 <div class="pg-grid" id="pg-grid" data-api-base="{{ api_base }}">
   <section class="pg-left">
     <div class="pg-toolbar">
       <h2>Messages</h2>
-      <label class="pg-model" title="Model slug, exactly as GET /v1/models reports it">
-        <span class="pg-model-label">model</span>
+      <div class="field label border small pg-model">
         <select id="pg-model">
           <option value="">loading models…</option>
         </select>
-      </label>
+        <label for="pg-model" class="active">Model</label>
+      </div>
     </div>
 
     <div class="pg-blocks" id="pg-blocks"></div>
@@ -36,11 +33,21 @@
         <span class="pg-meta" id="pg-meta"></span>
       </header>
       <pre class="pg-response" id="pg-response">Hit Generate to send these messages through MidWare.</pre>
-      <details class="pg-extras">
-        <summary>Extra request parameters (JSON)</summary>
-        <textarea id="pg-extras" spellcheck="false" placeholder='{"temperature": 0.8, "max_tokens": 512}'></textarea>
-        <small>Merged into the request body. Invalid JSON stops the send with an error.</small>
-      </details>
+      <div class="pg-extras">
+        <button type="button" class="pg-extras-toggle" id="pg-extras-toggle"
+                aria-expanded="false" aria-controls="pg-extras-panel">
+          <span class="pg-extras-caret" aria-hidden="true">▸</span>
+          Extra request parameters (JSON)
+        </button>
+        <div class="pg-extras-panel" id="pg-extras-panel" hidden>
+          <div class="field border">
+            <textarea id="pg-extras" spellcheck="false" placeholder=" "></textarea>
+            <label for="pg-extras" class="active">Extra parameters (JSON)</label>
+          </div>
+          <small>Merged into the request body, e.g. <code>{"temperature": 0.8}</code>.
+            Invalid JSON stops the send with an error.</small>
+        </div>
+      </div>
       <div class="pg-actions">
         <button type="button" class="pg-generate" id="pg-generate">Generate</button>
         <button type="button" class="border small" id="pg-stop" hidden>Stop</button>
@@ -54,27 +61,16 @@
     <article class="pg-docs">
       <header class="pg-panel-head">
         <h2>Docs</h2>
-        <span class="pg-meta">generated live from your messages</span>
+        <span class="pg-meta">built from the messages above</span>
       </header>
 
-      <div class="pg-keybox">
-        <div class="pg-keybox-head">
-          <span>Temporary API key</span>
-          <button type="button" class="border small" id="pg-key-copy">Copy</button>
-        </div>
-        <code class="pg-key mono token" id="pg-key">…</code>
-        <small id="pg-key-note">A fresh key exists only while this page is in use;
-          it expires {{ ttl_minutes }} minutes after this page opens and is capped at
-          {{ hour_limit }} requests/hour. Mint a real one on the Keys page for an app.</small>
-      </div>
-
-      <div class="pg-tabs" role="tablist" id="pg-tabs">
-        <button type="button" class="pg-tab active" data-tab="curl" role="tab" aria-selected="true">cURL</button>
-        <button type="button" class="pg-tab" data-tab="python" role="tab" aria-selected="false">Python</button>
-        <button type="button" class="pg-tab" data-tab="js" role="tab" aria-selected="false">JavaScript</button>
-        <button type="button" class="pg-tab" data-tab="body" role="tab" aria-selected="false">Body</button>
+      <nav class="pg-tabs" id="pg-tabs" aria-label="Snippet language">
+        <button type="button" class="pg-tab active" data-tab="curl">cURL</button>
+        <button type="button" class="pg-tab" data-tab="python">Python</button>
+        <button type="button" class="pg-tab" data-tab="js">JavaScript</button>
+        <button type="button" class="pg-tab" data-tab="body">Body</button>
         <button type="button" class="pg-copy" id="pg-copy">Copy</button>
-      </div>
+      </nav>
       <pre class="pg-code" id="pg-code"></pre>
       <p class="pg-note">Base URL for any OpenAI-compatible client:
         <code id="pg-base">{{ api_base }}</code></p>

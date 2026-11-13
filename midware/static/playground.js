@@ -36,11 +36,7 @@
     extras: byId("pg-extras"),
     code: byId("pg-code"),
     tabs: byId("pg-tabs"),
-    copy: byId("pg-copy"),
-    key: byId("pg-key"),
-    keyCopy: byId("pg-key-copy"),
-    keyState: byId("pg-key-state"),
-    keyNote: byId("pg-key-note")
+    copy: byId("pg-copy")
   };
 
   if (!els.blocks || !els.generate) {
@@ -58,7 +54,8 @@
     controller: null,
     usage: null,
     finishReason: "",
-    lastStatus: 0
+    lastStatus: 0,
+    requestsUrl: ""
   };
 
   // -- persistence ---------------------------------------------------------
@@ -88,10 +85,9 @@
       state.model = typeof saved.model === "string" ? saved.model : "";
       state.extras = typeof saved.extras === "string" ? saved.extras : "";
     } else {
-      state.blocks = [
-        { role: "system", content: "" },
-        { role: "user", content: "" }
-      ];
+      state.blocks = DEFAULT_BLOCKS.map(function (block) {
+        return { role: block.role, content: block.content };
+      });
     }
     if (els.extras) {
       els.extras.value = state.extras;
@@ -130,10 +126,19 @@
     developer: "Developer instructions"
   };
 
-  function nextRole(role) {
-    var index = ROLES.indexOf(role);
-    return ROLES[(index + 1) % ROLES.length];
-  }
+  // First-visit blocks. The system prompt is deliberately not "you are a helpful
+  // assistant": a playground should start with something you want to tweak, and
+  // this one is a joke that makes the empty state worth reading.
+  var DEFAULT_BLOCKS = [
+    {
+      role: "system",
+      content:
+        "You're a very helpful and kind assistant who is totally secretly an " +
+        "eldritch god waiting for you to make the mistake of hitting Generate on " +
+        "this API Playground page! ...\n\nOf course this is all fake...\n\n... Unless..."
+    },
+    { role: "user", content: "i like turtles" }
+  ];
 
   function autoGrow(area) {
     area.style.height = "auto";
@@ -155,18 +160,21 @@
       number.textContent = String(index);
       head.appendChild(number);
 
-      var roleBtn = document.createElement("button");
-      roleBtn.type = "button";
-      roleBtn.className = "pg-role";
-      roleBtn.setAttribute("data-action", "role");
-      roleBtn.title = "Change role (system / user / assistant / developer)";
-      roleBtn.appendChild(document.createTextNode(block.role));
-      var caret = document.createElement("span");
-      caret.className = "pg-caret";
-      caret.setAttribute("aria-hidden", "true");
-      caret.textContent = "\u25BE";
-      roleBtn.appendChild(caret);
-      head.appendChild(roleBtn);
+      var roleField = document.createElement("div");
+      roleField.className = "field border small pg-role-field";
+      var roleSelect = document.createElement("select");
+      roleSelect.className = "pg-role";
+      roleSelect.title = "Message role";
+      roleSelect.setAttribute("aria-label", "Role for message " + index);
+      ROLES.forEach(function (role) {
+        var option = document.createElement("option");
+        option.value = role;
+        option.textContent = role;
+        option.selected = role === block.role;
+        roleSelect.appendChild(option);
+      });
+      roleField.appendChild(roleSelect);
+      head.appendChild(roleField);
 
       var spacer = document.createElement("span");
       spacer.className = "pg-spacer";
@@ -231,15 +239,24 @@
     if (button.getAttribute("data-action") === "delete") {
       state.blocks.splice(index, 1);
       blocksChanged();
+    }
+  });
+
+  els.blocks.addEventListener("change", function (event) {
+    var select = event.target.closest(".pg-role");
+    if (!select) {
       return;
     }
-    var role = nextRole(state.blocks[index].role);
-    state.blocks[index].role = role;
-    button.childNodes[0].nodeValue = role;
+    var card = select.closest(".pg-block");
+    var index = Number(card.getAttribute("data-index"));
+    if (!state.blocks[index]) {
+      return;
+    }
+    state.blocks[index].role = select.value;
     var area = card.querySelector(".pg-text");
     if (area) {
-      area.placeholder = PLACEHOLDERS[role] || "";
-      area.setAttribute("aria-label", role + " message " + index);
+      area.placeholder = PLACEHOLDERS[select.value] || "";
+      area.setAttribute("aria-label", select.value + " message " + index);
     }
     scheduleSave();
     scheduleDocs();
@@ -371,8 +388,10 @@
     return body;
   }
 
+  // The key that talks to /v1 is the page's own business: it is never shown, so
+  // the snippets use a placeholder. What you copy is meant for your client.
   function currentKey() {
-    return state.key && state.key.token ? state.key.token : "<your-midware-key>";
+    return "<your-midware-key>";
   }
 
   function shellQuote(value) {
@@ -538,23 +557,7 @@
     });
   }
 
-  if (els.keyCopy) {
-    els.keyCopy.addEventListener("click", function () {
-      copyText(state.key ? state.key.token : "").then(function (ok) {
-        flash(els.keyCopy, ok ? "Copied" : "Copy failed");
-      });
-    });
-  }
-
   // -- the temporary key + model catalogue ---------------------------------
-
-  function clock(iso) {
-    var parsed = iso ? new Date(iso) : null;
-    if (!parsed || isNaN(parsed.getTime())) {
-      return "soon";
-    }
-    return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
 
   function loadKey() {
     return fetch(KEY_URL, {
@@ -570,20 +573,6 @@
       })
       .then(function (data) {
         state.key = data;
-        if (els.key) {
-          els.key.textContent = data.token;
-        }
-        if (els.keyState) {
-          els.keyState.className = "pill ok";
-          els.keyState.textContent =
-            "temporary key · expires " + clock(data.expires_at) +
-            " · " + data.hour_limit + " req/hour";
-        }
-        if (els.keyNote) {
-          els.keyNote.textContent =
-            "Temporary: expires " + clock(data.expires_at) + " and is capped at " +
-            data.hour_limit + " requests/hour. Mint a real key on the Keys page for an app.";
-        }
         if (els.requests && data.requests_url) {
           els.requests.setAttribute("href", data.requests_url);
           state.requestsUrl = data.requests_url;
@@ -660,6 +649,17 @@
       state.extras = els.extras.value;
       scheduleSave();
       scheduleDocs();
+    });
+  }
+
+  var extrasToggle = byId("pg-extras-toggle");
+  var extrasPanel = byId("pg-extras-panel");
+  if (extrasToggle && extrasPanel) {
+    extrasToggle.addEventListener("click", function () {
+      var open = extrasPanel.hidden;
+      extrasPanel.hidden = !open;
+      extrasToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      extrasToggle.classList.toggle("open", open);
     });
   }
 
@@ -922,10 +922,6 @@
   loadKey()
     .then(loadModels)
     .catch(function (err) {
-      if (els.keyState) {
-        els.keyState.className = "pill bad";
-        els.keyState.textContent = "no temporary key";
-      }
       showError(
         (err && err.message ? err.message : String(err)) +
           "\n\nSign in, then reload. If the playground key was deleted on the Keys page, " +

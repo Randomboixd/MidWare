@@ -272,12 +272,15 @@ Do not break these; several have regression tests.
   (`db.find_api_key_by_name`), gives it a 2 h expiry and a 120 req/hour cap, and
   switches it back on if an admin disabled it there. Reuse is deliberate: a row
   per visit would scatter the request log across hundreds of dead keys, and
-  deleting the row is the documented way to force a fresh token. The cURL /
-  Python / JS snippets and the body Generate posts both come from a single
-  `buildPayload()` in `playground.js`, so a copied snippet is the call that ran;
-  the API base is rendered server-side from `request.url_root` (not
-  `window.location`) so a path prefix or TLS terminator still yields a URL that
-  works.
+  deleting the row is the documented way to force a fresh token. The page never
+  renders that token — the docs snippets carry a `<your-midware-key>` placeholder,
+  because the credential belongs in the caller's client. The cURL / Python / JS
+  snippets and the body Generate posts both come from a single `buildPayload()` in
+  `playground.js`, so a copied snippet is the call that ran; the API base is
+  rendered server-side from `request.url_root` (not `window.location`) so a path
+  prefix or TLS terminator still yields a URL that works. Controls are BeerCSS
+  fields (`div.field.border.small > select`), never bare selects — see the
+  `beercss` skill.
 - **Image generation & embeddings** (`/v1/images/generations|edits|variations`,
   `/v1/embeddings`): already-forwarded endpoints made first-class by
   `_endpoint_family(path)` (`IMAGE_PATH_RE` / `embeddings` / default `chat`).
@@ -801,7 +804,8 @@ Do not break these; several have regression tests.
 - Playground coverage lives in `tests/test_playground.py`: key mint/reuse/expiry
   sliding, the 120 req/hour cap being restored on reuse, `api_key_expired` refused
   before any upstream call (assert the stub saw nothing), `enabled` winning over a
-  stale expiry, the `temporary` pill, and the admin-session gate. The page's
+  stale expiry, the `temporary` pill, that the page never prints the key at all,
+  the seeded first-visit prompt, and the admin-session gate. The page's
   JavaScript is not unit-tested (it is all DOM wiring); verify it by loading
   `/admin/playground` in a browser and generating once.
 - System Management Account coverage lives in `tests/test_sma.py`: enrollment

@@ -1582,13 +1582,6 @@ code.wf-var {
 
 /* -- playground ---------------------------------------------------------- */
 
-.pg-keyline {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 .pg-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
@@ -1616,22 +1609,20 @@ code.wf-var {
 }
 
 .pg-model {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
   margin: 0;
-}
-
-.pg-model-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--on-surface-variant);
+  min-inline-size: 18rem;
+  max-inline-size: 24rem;
+  flex: 0 1 auto;
 }
 
 .pg-model select {
-  margin: 0;
-  max-width: 22rem;
+  max-inline-size: 100%;
+}
+
+.pg-model label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .pg-blocks {
@@ -1667,29 +1658,21 @@ code.wf-var {
   color: var(--on-surface-variant);
 }
 
-.pg-role {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  background: none;
-  border: 0;
+.pg-role-field {
   margin: 0;
-  padding: 0.1rem 0.4rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--primary);
-  cursor: pointer;
-  border-radius: 0.4rem;
+  inline-size: 8.5rem;
+  flex: 0 0 auto;
 }
 
-.pg-role:hover,
+.pg-role-field select {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--primary);
+  text-transform: lowercase;
+}
+
 .pg-del:hover {
   background: var(--surface-container-high);
-}
-
-.pg-caret {
-  font-size: 0.65rem;
-  opacity: 0.75;
 }
 
 .pg-spacer {
@@ -1808,7 +1791,7 @@ code.wf-var {
 
 .pg-response {
   margin: 0;
-  min-height: 7rem;
+  min-height: 6rem;
   max-height: 45vh;
   overflow: auto;
   white-space: pre-wrap;
@@ -1826,18 +1809,48 @@ code.wf-var {
   color: var(--error);
 }
 
-.pg-extras summary {
+.pg-extras-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.35rem;
+  inline-size: 100%;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.5rem;
+  background: none;
   font-size: 0.78rem;
   color: var(--on-surface-variant);
   cursor: pointer;
 }
 
+.pg-extras-toggle:hover {
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+}
+
+.pg-extras-caret {
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.pg-extras-toggle.open .pg-extras-caret {
+  transform: rotate(90deg);
+}
+
+.pg-extras-panel {
+  margin-top: 0.5rem;
+}
+
 .pg-extras textarea {
-  width: 100%;
   min-height: 4.2rem;
-  margin: 0.4rem 0 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
+}
+
+.pg-extras .field {
+  margin: 0.4rem 0 0;
 }
 
 .pg-extras small {
@@ -1852,12 +1865,17 @@ code.wf-var {
   flex-wrap: wrap;
 }
 
+.pg-actions > * {
+  block-size: 2.5rem;
+  min-block-size: 2.5rem;
+  margin: 0;
+}
+
 .pg-generate {
   flex: 1;
-  margin: 0;
   border: 0;
   border-radius: 0.6rem;
-  padding: 0.6rem 1rem;
+  padding: 0 1rem;
   font-size: 0.95rem;
   font-weight: 600;
   background: var(--primary);
@@ -1868,39 +1886,6 @@ code.wf-var {
 .pg-generate[disabled] {
   opacity: 0.6;
   cursor: progress;
-}
-
-.pg-keybox {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--outline-variant);
-  border-radius: 0.6rem;
-  background: var(--surface-container-high);
-}
-
-.pg-keybox-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--on-surface-variant);
-}
-
-.pg-keybox-head span {
-  flex: 1;
-}
-
-.pg-key {
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.pg-keybox small {
-  font-size: 0.72rem;
 }
 
 .pg-tabs {
@@ -1965,6 +1950,15 @@ code.wf-var {
 .pg-note code {
   font-size: 0.74rem;
   overflow-wrap: anywhere;
+}
+
+@media (min-width: 981px) {
+  /* The docs follow you while the message list scrolls; a two-column page where
+     the right side is abandoned a screen early feels broken. */
+  .pg-right {
+    position: sticky;
+    top: 1rem;
+  }
 }
 
 @media (max-width: 980px) {

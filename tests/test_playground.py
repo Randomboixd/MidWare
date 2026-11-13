@@ -71,9 +71,30 @@ def chat(client, token, model: str = "gpt-4o-mini"):
 def test_page_renders_with_the_base_url_of_this_request(ready):
     app, client = ready
     html = client.get("/admin/playground").get_data(as_text=True)
-    assert "Temporary API key" in html
     assert 'data-api-base="http://localhost/v1"' in html
-    assert "generated live from your messages" in html
+    assert 'id="pg-code"' in html
+    assert "Manage keys" in html
+
+
+def test_page_never_shows_the_key(ready):
+    """The temporary key lives in the page's own JS call, not in front of the user."""
+    app, client = ready
+    html = client.get("/admin/playground").get_data(as_text=True)
+
+    assert "Temporary API key" not in html
+    assert "temporary key" not in html
+    assert "Temporary:" not in html
+    assert "req/hour" not in html
+
+
+def test_page_starts_with_the_playground_prompt(ready):
+    app, client = ready
+    html = client.get("/admin/playground").get_data(as_text=True)
+    assert "eldritch" not in html  # seeded by JS, not baked into the template
+
+    js = client.get("/static/playground.js").get_data(as_text=True)
+    assert "eldritch god" in js
+    assert "i like turtles" in js
 
 
 def test_page_is_linked_from_the_nav(ready):

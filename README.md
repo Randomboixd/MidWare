@@ -173,12 +173,16 @@ to try something, you build the request in the browser and watch it go through
 the proxy.
 
 - **Blocks, not a chat box.** A system block, a user block, add as many as you
-  like, drag them into order, click a role to cycle system → user → assistant →
-  developer. Empty blocks are dropped from the payload.
+  like, drag them into order, and change a block's role from its dropdown
+  (system → user → assistant → developer). Empty blocks are dropped from the
+  payload. A first visit is pre-filled with a system prompt and a user message, so
+  Generate does something immediately.
 - **The docs are the request.** The cURL, Python and JavaScript panel is rendered
   from the same payload the Generate button posts, so a copied snippet is the
   call that just ran. Extra parameters (temperature, `max_tokens`, anything else)
-  go in as JSON and are merged in.
+  go in as JSON and are merged in. The key in the snippets is a
+  `<your-midware-key>` placeholder — the temporary key the page itself uses is
+  never displayed, because that credential belongs in your client, not on screen.
 - **It really is the proxy.** Requests go to `/v1/chat/completions` with a normal
   MidWare key, so they appear in Requests, count against usage, show up in your
   route's logs, and are subject to rate limits and model permissions.
