@@ -51,7 +51,7 @@
           <td>
             {% set provider = signin_providers.get(r['provider']) if r['provider'] else none %}
             {% if provider %}
-              <span class="pill blue">OAuth · {{ provider['label'] }}</span>
+              <span class="pill blue">Sign-in · {{ provider['label'] }}</span>
             {% elif r['upstream_key'] %}
               <span class="pill ok">API key</span>
             {% else %}
@@ -256,7 +256,8 @@
 <script>
   window.MidWareSignin = {
     start: {{ url_for('admin.signin_start') | tojson }},
-    poll: {{ url_for('admin.signin_poll') | tojson }}
+    poll: {{ url_for('admin.signin_poll') | tojson }},
+    key: {{ url_for('admin.signin_key') | tojson }}
   };
 </script>
 <script src="{{ url_for('static', filename='signin.js') }}"></script>

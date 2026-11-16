@@ -50,6 +50,37 @@
     };
   }
 
+  // OpenCode Go and Zen share one widget but not one panel: Go opens a warning
+  // first, Zen goes straight to its key, and each key panel carries its own
+  // copy. Everything is looked up by provider so a widget can hold both.
+  function panels(widget, provider) {
+    var key = widget.querySelector('[data-signin-key="' + (provider || "") + '"]');
+    return {
+      menu: widget.querySelector("[data-signin-menu]"),
+      warning: widget.querySelector("[data-signin-warning]"),
+      accept: widget.querySelector("[data-signin-accept]"),
+      back: widget.querySelector("[data-signin-back]"),
+      cont: widget.querySelector("[data-signin-continue]"),
+      keys: widget.querySelectorAll("[data-signin-key]"),
+      key: key,
+      input: key ? key.querySelector("[data-signin-key-input]") : null,
+      submit: key ? key.querySelector("[data-signin-key-submit]") : null,
+      keyBack: key ? key.querySelector("[data-signin-key-cancel]") : null
+    };
+  }
+
+  function show(widget, name, provider) {
+    var parts = panels(widget, provider);
+    if (!parts.menu) return;
+    parts.menu.hidden = name !== "menu";
+    parts.warning.hidden = name !== "warning";
+    Array.prototype.forEach.call(parts.keys, function (panel) {
+      panel.hidden = !(name === "key" && panel === parts.key);
+    });
+    var status = widget.querySelector("[data-signin-status]");
+    if (status) status.hidden = true;
+  }
+
   function setBusy(widget, busy) {
     var buttons = widget.querySelectorAll("[data-signin-provider]");
     Array.prototype.forEach.call(buttons, function (button) {
@@ -114,7 +145,9 @@
   function saveRoute(widget, data) {
     fillForm(widget, data);
     var form = formOf(widget);
-    var who = data.label || "the provider";
+    // ``detail`` carries anything the provider said about the account (Go's
+    // remaining quota), so the confirmation reads as more than "signed in".
+    var who = (data.label || "the provider") + (data.detail ? " \u2014 " + data.detail : "");
     if (!form) {
       setStatus(widget, "Signed in with " + who + " — the key is in the form. Save the route to finish.");
       return;
@@ -240,14 +273,111 @@
     }
   });
 
+  function openWarning(widget, provider) {
+    show(widget, "warning", provider);
+    var parts = panels(widget, provider);
+    if (parts.accept) parts.accept.checked = false;
+    if (parts.cont) parts.cont.disabled = true;
+  }
+
+  function openKeyPanel(widget, provider) {
+    show(widget, "key", provider);
+    var parts = panels(widget, provider);
+    if (parts.input) {
+      parts.input.value = "";
+      parts.input.focus();
+    }
+    if (parts.submit) parts.submit.disabled = false;
+  }
+
+  // The key is verified before the form sees it: a key OpenCode rejects, or one
+  // from a workspace without the plan the button names, must never be tagged as
+  // that gateway's route.
+  function connectKey(widget, provider) {
+    var parts = panels(widget, provider);
+    var key = parts.input ? parts.input.value.trim() : "";
+    if (!key) {
+      setError(widget, "Paste an OpenCode API key first.");
+      return;
+    }
+    parts.submit.disabled = true;
+    setStatus(widget, "Checking the key with OpenCode\u2026");
+    post(config.key, {
+      provider: provider,
+      key: key,
+      route_id: formRouteId(formOf(widget))
+    })
+      .then(function (data) {
+        if (parts.input) parts.input.value = "";
+        data.detail = data.quota || "";
+        saveRoute(widget, data);
+      })
+      .catch(function (error) {
+        parts.submit.disabled = false;
+        setError(widget, error.message);
+      });
+  }
+
+  // One control set per widget; the two key panels are wired by provider, so no
+  // widget has to remember which one is open.
+  function wireKeyPanel(widget, provider) {
+    var parts = panels(widget, provider);
+    if (!parts.key) return;
+    if (parts.keyBack) {
+      parts.keyBack.addEventListener("click", function () { show(widget, "menu"); });
+    }
+    if (parts.submit) {
+      parts.submit.addEventListener("click", function () { connectKey(widget, provider); });
+    }
+    if (parts.input) {
+      parts.input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          connectKey(widget, provider);
+        }
+      });
+    }
+  }
+
+  function keyControls(widget) {
+    var base = panels(widget);
+    if (base.accept && base.cont) {
+      base.accept.addEventListener("change", function () {
+        base.cont.disabled = !base.accept.checked;
+      });
+      // Only Go routes through the warning, so that is the panel it opens.
+      base.cont.addEventListener("click", function () { openKeyPanel(widget, "opencode-go"); });
+      if (base.back) base.back.addEventListener("click", function () { show(widget, "menu"); });
+    }
+    wireKeyPanel(widget, "opencode-go");
+    wireKeyPanel(widget, "opencode-zen");
+
+    // A form submitted while a key panel is open must not carry untrimmed input.
+    var form = formOf(widget);
+    if (form) {
+      form.addEventListener("submit", function () {
+        Array.prototype.forEach.call(
+          widget.querySelectorAll("[data-signin-key-input]"),
+          function (input) { input.value = input.value.trim(); }
+        );
+      });
+    }
+  }
+
   var widgets = document.querySelectorAll("[data-signin]");
   Array.prototype.forEach.call(widgets, function (widget) {
+    keyControls(widget);
     var buttons = widget.querySelectorAll("[data-signin-provider]");
     Array.prototype.forEach.call(buttons, function (button) {
       button.addEventListener("click", function () {
         var provider = button.getAttribute("data-signin-provider");
         if (provider === "openrouter") {
           startOpenRouter(widget);
+        } else if (provider === "opencode-go") {
+          openWarning(widget, provider);
+        } else if (provider === "opencode-zen") {
+          // Nothing to warn about: Zen bills credits per request, no plan risks.
+          openKeyPanel(widget, provider);
         } else {
           startNanoGPT(widget, provider);
         }

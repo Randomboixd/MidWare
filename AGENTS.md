@@ -46,12 +46,12 @@ this development environment, so Docker changes are verified by reading only.
 | `midware/usage.py` | Parse token usage from JSON (`usage_from_response`) and SSE (`usage_from_stream`/`parse_sse_events`); multipart text fields (`parse_multipart_fields`); `truncate`, `strip_ansi`, `model_from_request_body`. |
 | `midware/conversation.py` | Normalize request/response bodies (JSON, multipart or streamed) into display blocks for the viewer, including image/embedding `data` arrays. |
 | `midware/models.py` | Fetch/dedupe/refresh upstream model catalogues; `probe_route` for connection tests. |
-| `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets) and OpenRouter OAuth PKCE. |
+| `midware/signin.py` | Sign-in-with-service flows for the route form: Nano-GPT device login (pay-as-you-go + subscription presets), OpenRouter OAuth PKCE, and OpenCode Go's paste-and-verify Console key. |
 | `midware/balance.py` | Provider balance lookups for sign-in-tagged routes (NanoGPT check-balance, OpenRouter credits/key), with a short in-memory cache. |
 | `midware/sma.py` | System Management Accounts: Ed25519 request signing, the canonical signing payload, scope names, enrollment validation, route/key redaction. |
 | `midware/premodels.py` | Premodel overlays: slugging, configurable prefix parsing (`prefix_regex`/`normalize_prefix`), SillyTavern preset normalization, MWVAR macros, message merging. |
 | `midware/workflow.py` | Premodel workflows: `normalize_workflow` validation, `WorkflowScope` variable expansion, `run_workflow` sub-call chain (Origin → API Request nodes → Final Request). |
-| `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url` (used by proxy + workflow; keeps `workflow.py` out of an import cycle with the blueprint). |
+| `midware/upstream.py` | Shared upstream wire helpers: `HOP_BY_HOP`, `split_target`, `upstream_url`, and `apply_provider_headers` / `opencode_session_id` (provider-required headers; used by the proxy, workflow sub-calls and MSQ probes; keeps `workflow.py` out of an import cycle with the blueprint). |
 | `midware/tokens.py` | Local token estimation fallback (tiktoken or char heuristic) when upstream sends no `usage`; `prompt_estimate` for prompt-only counting. |
 | `midware/images.py` | Server-side image storage for URL-mode keys: magic-byte sniffing, `store_image`/`load_image`/`sweep`, and the `b64_json` → `/img/` URL response rewrite. |
 | `midware/msq.py` | Model Service Quality: probe scoring, symbol/slop detection, probe runner, in-process scheduler, Working/Failing/Degraded evaluation. |
@@ -117,9 +117,10 @@ this development environment, so Docker changes are verified by reading only.
   `log_requests`/`log_message_contents` (`INTEGER NOT NULL DEFAULT 1`) are the
   per-key logging switches (see "Per-key logging" below).
 - `routes(id, name, target_host, upstream_key, api_key_id, is_active, provider, created_at)`
-  — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter`,
-  `''` when hand-configured); it is what later proves which service's balance
-  API a route may be queried against.
+  — `provider` is the sign-in tag (`nanogpt` / `nanogpt-sub` / `openrouter` /
+  `opencode-go` / `opencode-zen`, `''` when hand-configured); it is what later proves which
+  service's balance API a route may be queried against, and it is what makes
+  the proxy add the headers that service requires.
 - `requests(id, created_at, request_path, method, model, model_raw, host_prefix,
   status_code, latency_ms, streamed, prompt_tokens, completion_tokens, total_tokens,
   token_source, upstream_request_id, error, request_body, response_body, route_id,
@@ -425,22 +426,44 @@ Do not break these; several have regression tests.
   The edit drawer tests only when its checkbox is ticked. Unchecking the
   create/setup box skips the probe **and** the `/v1/models` refresh; those forms
   carry a hidden `test_connection=0` because an unchecked checkbox submits nothing.
+- **Provider-required headers** (`upstream.apply_provider_headers`): a route
+  tagged `opencode-go` or `opencode-zen` (`OPENCODE_GATEWAYS`) gets
+  `x-opencode-session` on every forwarded request. Go answers
+  `400 MissingSessionID` **before** it checks the bearer, so a Go route without
+  that header is dead on arrival; Zen does not require it but asks for one for
+  the same routing reason. The same value is the gateway's routing and
+  prompt-cache affinity key on both. The value is `mw-` +
+  `sha256("<seed>|<route_id>|<model>")[:32]`, where the seed is the MidWare key
+  id (proxy), the recorder id (MSQ) or the node name (workflow sub-call) —
+  deliberately never message content: clients trim and compact their history
+  mid-conversation, and an id derived from it would change and cost both the
+  session and its cache. A session header the client sent itself always wins,
+  and `User-Agent` is only replaced by `MidWare/<version>` when the client sent
+  none or a bare HTTP-library default (`_GENERIC_AGENTS`) — OpenCode asks
+  clients to identify themselves, and impersonating `opencode/*` is both
+  unnecessary for Go and exactly what its terms forbid. Untagged routes gain
+  neither header.
 - **Sign in with service** (`signin.py`): the route forms (create, edit drawer and
   first-run setup) offer a "Sign in with service" dropdown — a Nano-GPT device
   login (`client_name` = `NANOGPT_CLIENT_NAME`, default "Midware Request
   Middleware") under two route presets (pay-as-you-go `nanogpt`, host
   `https://api.nano-gpt.com/api/v1`, and `nanogpt-sub`, host
-  `https://nano-gpt.com/subscription/v1` — same handshake, different prefill)
-  or an OpenRouter OAuth PKCE popup. Both flows **open their approval page in a
+  `https://nano-gpt.com/subscription/v1` — same handshake, different prefill),
+  an OpenRouter OAuth PKCE popup, or **OpenCode Go / OpenCode Zen**, which have
+  no key-handout endpoint (their device login ends in a rotating OAuth token,
+  not a key) and are therefore paste-and-verify flows. Both redirect flows **open their approval page in a
   tab automatically** (popup opened synchronously, aimed once the server hands
   back a URL; the manual link stays as the popup-blocked fallback). Half-finished
   flows live in a
   module-level `_pending` table keyed by an unguessable token with a 10-minute
-  TTL; the three `/admin/signin/*` endpoints bypass the login guard **only while
+  TTL; the four `/admin/signin/*` endpoints bypass the login guard **only while
   no admin account exists** (the bootstrap setup page offers them too) and demand
-  a signed-in session once claimed. The acquired key never touches the server: `signin.js`
+  a signed-in session once claimed. The acquired key is never *stored*
+  server-side (OpenCode Go's key does pass through the verifier call, the only
+  way to prove it): `signin.js`
   fills the route form (key, provider host, and a suggested route name —
-  `OpenRouter (OAuth)` / `NanoGPT` / `NanoGPT (Subscription)`, suffixed ` (n)` on
+  `OpenRouter (OAuth)` / `NanoGPT` / `NanoGPT (Subscription)` / `OpenCode Go`,
+  suffixed ` (n)` on
   collision, computed
   server-side in `admin._suggest_route_name` while excluding the route being
   edited), writes the hidden `provider` field with the provider id, and
@@ -452,8 +475,20 @@ Do not break these; several have regression tests.
   postMessage as a bonus channel. The result page itself never renders the
   key — it is a "You can close this tab now" confirmation, and the key travels
   only inside the payload the form consumes.
+  The OpenCode pair skips the tab entirely and shares one endpoint,
+  `POST /admin/signin/key` with `{provider, key, route_id}`: Go first shows an
+  inline **risk panel** (acknowledge to enable Continue), Zen goes straight to
+  its own key panel, and each panel carries the copy for its gateway. The key is
+  proven before anything is tagged — Go with
+  `GET https://opencode.ai/inference/go/v1/usage` (401 not a key, 403 no
+  subscription), Zen with the model catalogue (public anonymously, 401 to a bad
+  bearer), because Zen has no usage meter at all. Both refusals answer `400`
+  (`SignInError.status`) so the message reaches the human, while a transport
+  failure stays `502`. Neither check can see a zero balance without spending
+  money, so neither tries. That check matters because the tag is what
+  authorises the session header and, for Go, the quota lookup.
   The routes table's **Auth Type** column turns the tag into a blue
-  `OAuth · <service>` pill (hand-configured routes show green `API key`,
+  `Sign-in · <service>` pill (hand-configured routes show green `API key`,
   keyless ones yellow `none`).
 - **Balance lines** (`balance.py` + `GET /admin/routes/<id>/balance`): the routes
   page renders a small money-left line under each **tagged** route's name
@@ -464,7 +499,13 @@ Do not break these; several have regression tests.
   for the daily (then weekly) remaining-token quota and fall back to the cash
   line when no quota applies, and OpenRouter tries `GET /api/v1/credits`
   (management keys) before falling back to `GET /api/v1/key`
-  (`limit_remaining`). Failures and untagged routes show
+  (`limit_remaining`). `opencode-go` routes read `GET /inference/go/v1/usage`,
+  whose `rolling`/`weekly`/`monthly` windows report the share **spent**, and
+  render it inverted as `5h 63% · 7d 41% · 30d 12% left` (`parse_go_usage`,
+  shared with the sign-in confirmation). `opencode-zen` has no meter — every
+  plausible balance path answers 404 — so a Zen route shows no line at all; a
+  local spend ledger read from each response's `usage.cost` is the intended
+  follow-up. Failures and untagged routes show
   nothing (`{"ok": false}`), never an error; results are cached for 60 s keyed
   by a digest of the upstream key.
 - **Premodels** (`premodels.py`): a premodel bundles a route, a model and a prompt
@@ -808,6 +849,12 @@ Do not break these; several have regression tests.
   the seeded first-visit prompt, and the admin-session gate. The page's
   JavaScript is not unit-tested (it is all DOM wiring); verify it by loading
   `/admin/playground` in a browser and generating once.
+- OpenCode coverage lives in `tests/test_opencode_gateways.py`: session-header
+  injection on both gateways and its stability across context edits,
+  per-model/per-key distinctness, client-supplied passthrough, `User-Agent`
+  replacement, and that untagged routes gain nothing. The sign-in flows, the
+  401/403 distinction and the quota line live in `tests/test_signin.py` /
+  `tests/test_balance.py`.
 - System Management Account coverage lives in `tests/test_sma.py`: enrollment
   validation, signature replay/path-transplant/stale-clock, scope denial, route
   redaction, key-minting constraints and ownership isolation, the consent
@@ -816,7 +863,7 @@ Do not break these; several have regression tests.
   approve accounts directly through `db.update_system_account`; tests that go
   through the consent page use the `secured` fixture (credentials + `/signin`).
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `577 passed` — **update this number whenever the test count changes.**
+  `602 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

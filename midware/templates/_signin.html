@@ -1,10 +1,70 @@
 <details class="signin" data-signin>
   <summary>Sign in with service</summary>
-  <div class="signin-menu">
+  <div class="signin-menu" data-signin-menu>
     <button type="button" class="border small" data-signin-provider="nanogpt">Sign in with Nano-GPT</button>
     <button type="button" class="border small" data-signin-provider="nanogpt-sub">Sign in with Nano-GPT (Subscription)</button>
     <button type="button" class="border small" data-signin-provider="openrouter">Sign in with OpenRouter</button>
+    <button type="button" class="border small" data-signin-provider="opencode-go">Sign in with OpenCode Go</button>
+    <button type="button" class="border small" data-signin-provider="opencode-zen">Sign in with OpenCode Zen</button>
   </div>
+
+  <div class="signin-warning" data-signin-warning hidden>
+    <p class="signin-warning-title">OpenCode Go usage in MidWare may be against the terms of service.</p>
+    <p>Depending on your usage, connecting OpenCode Go to your MidWare may not be a good idea.</p>
+    <p>OpenCode Go is a plan designed for agentic usage: the OpenCode app, and other agentic
+      apps such as Hermes Agent. OpenCode lists harnesses like Hermes as supported clients and asks
+      every client to send a stable session id, so MidWare sends one on every request. Go rejects
+      the request outright without it, and the same header is what keeps prompt caching working.</p>
+    <p>What is not promised: the plan is sold for coding traffic, Go says traffic is monitored for
+      abuse that degrades the experience for other users, and the terms reserve the right to suspend
+      an account at their discretion. There is no published rule against other kinds of use, and no
+      promise that other kinds of use are safe.</p>
+    <p>MidWare identifies itself as <code>MidWare/{{ app_version }}</code> when a client sends no
+      user agent of its own. It never impersonates OpenCode, and it cannot reach the free models,
+      which only the OpenCode client can use.</p>
+    <p>I (RandombXYZ/Randomboixd) am not responsible if your account is suspended.</p>
+    <label class="checkbox">
+      <input type="checkbox" data-signin-accept>
+      <span>I accept the risk</span>
+    </label>
+    <div class="mw-inline-actions">
+      <button type="button" class="border" data-signin-back>Back</button>
+      <button type="button" data-signin-continue disabled>Continue</button>
+    </div>
+  </div>
+
+  <div class="signin-key" data-signin-key="opencode-go" hidden>
+    <p>Create a <strong>personal API key</strong> in the
+      <a href="https://opencode.ai/console/account" target="_blank" rel="noopener noreferrer">OpenCode Console</a>
+      (Account › Personal API keys) and paste it here. MidWare checks it against your Go quota before
+      the route is saved, and never stores it server-side.</p>
+    <div class="field label border">
+      <input type="password" data-signin-key-input autocomplete="off" spellcheck="false" placeholder=" ">
+      <label>OpenCode API key</label>
+    </div>
+    <div class="mw-inline-actions">
+      <button type="button" data-signin-key-submit>Connect</button>
+      <button type="button" class="border" data-signin-key-cancel>Back</button>
+    </div>
+  </div>
+
+  <div class="signin-key" data-signin-key="opencode-zen" hidden>
+    <p>Create a <strong>personal API key</strong> in the
+      <a href="https://opencode.ai/console/account" target="_blank" rel="noopener noreferrer">OpenCode Console</a>
+      (Account › Personal API keys) and paste it here. Zen bills each request to your workspace credit
+      balance, so the route is only as full as your credits are.</p>
+    <p class="mw-hint">Free models are not reachable from MidWare: OpenCode serves them to its own
+      client only, and answers everything else with HTTP 403. MidWare never fakes that client.</p>
+    <div class="field label border">
+      <input type="password" data-signin-key-input autocomplete="off" spellcheck="false" placeholder=" ">
+      <label>OpenCode API key</label>
+    </div>
+    <div class="mw-inline-actions">
+      <button type="button" data-signin-key-submit>Connect</button>
+      <button type="button" class="border" data-signin-key-cancel>Back</button>
+    </div>
+  </div>
+
   <p class="signin-status" data-signin-status hidden>
     <span data-signin-text></span>
     <a data-signin-link target="_blank" rel="noopener" hidden></a>

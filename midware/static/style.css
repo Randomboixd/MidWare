@@ -1108,6 +1108,45 @@ details.signin > summary {
 
 .signin-menu button { margin-block: var(--space-xs) 0; }
 
+/* The OpenCode Go panel: a warning the human must acknowledge before MidWare
+   will touch a subscription key, then the key itself. Both stay inside the
+   widget so the route form's flow (fill, then auto-save) is unchanged. */
+.signin-warning,
+.signin-key {
+  display: grid;
+  gap: var(--space-2xs);
+  margin: var(--space-xs) var(--space-sm) var(--space-sm);
+  padding: var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-card);
+  background: var(--color-paper-3);
+  font-size: var(--text-sm);
+  color: var(--color-ink-2);
+}
+
+.signin-warning[hidden],
+.signin-key[hidden] { display: none; }
+
+.signin-warning p,
+.signin-key p { margin: 0; }
+
+.signin-warning-title {
+  color: var(--color-ink);
+  font-size: var(--text-data);
+}
+
+.signin-warning code {
+  padding: 0 var(--space-3xs);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+}
+
+.signin-key a { color: var(--color-accent); text-decoration: underline; }
+
+.signin-warning .checkbox,
+.signin-key .field { margin-block-start: var(--space-2xs); }
+
 .signin-status {
   padding: 0 var(--space-sm);
   margin: var(--space-xs) 0 var(--space-sm);

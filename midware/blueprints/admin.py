@@ -45,6 +45,7 @@ _LIMIT_MAX = 1_000_000_000_000
 _SIGNIN_ENDPOINTS = {
     "admin.signin_start",
     "admin.signin_poll",
+    "admin.signin_key",
     "admin.signin_openrouter_callback",
 }
 
@@ -356,6 +357,21 @@ def signin_poll():
     if result.get("status") == "approved":
         route_id = result.pop("route_id", None)
         result["name"] = _suggest_route_name(get_db(), result["name"], route_id)
+    return jsonify(ok=True, **result)
+
+
+@bp.route("/signin/key", methods=["POST"])
+def signin_key():
+    """Verify a pasted OpenCode key; it comes back to the browser only."""
+    payload = request.get_json(silent=True) or {}
+    provider = (payload.get("provider") or "").strip().lower()
+    route_id = _form_route_id(payload)
+    client = current_app.extensions["midware_http"]
+    try:
+        result = signin.connect_key(client, provider, str(payload.get("key") or ""), route_id)
+    except signin.SignInError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+    result["name"] = _suggest_route_name(get_db(), result["name"], route_id)
     return jsonify(ok=True, **result)
 
 

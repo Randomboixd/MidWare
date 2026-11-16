@@ -21,12 +21,19 @@ from __future__ import annotations
 import hashlib
 import time
 
+from .upstream import OPENCODE_GO
+
 NANOGPT_CHECK_URL = "https://api.nano-gpt.com/api/check-balance"
 NANOGPT_SUB_USAGE_URL = "https://api.nano-gpt.com/api/subscription/v1/usage"
 OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+OPENCODE_GO_USAGE_URL = "https://opencode.ai/inference/go/v1/usage"
 
 BALANCE_TTL_SECONDS = 60
+
+# Go publishes three rolling meters instead of a cash balance; they are the only
+# numbers that say how much of the subscription is actually left.
+GO_WINDOWS = (("rolling", "5h"), ("weekly", "7d"), ("monthly", "30d"))
 
 # (provider, key digest) -> (expires_at, formatted text)
 _cache: dict[tuple[str, str], tuple[float, str]] = {}
@@ -124,9 +131,54 @@ def _openrouter_balance(client, key: str) -> str | None:
     return None
 
 
+def parse_go_usage(body: dict) -> str | None:
+    """Go's three meters as a "how much is left" line, or None when unusable.
+
+    The API reports the share *spent*, so the line reports the remainder: it
+    sits under a route name next to lines like "$12.50 left" and must read the
+    same way. Windows the payload omits are simply skipped — an older key may
+    answer with fewer of them.
+    """
+    usage = body.get("usage") if isinstance(body, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    parts: list[str] = []
+    for key, label in GO_WINDOWS:
+        window = usage.get(key)
+        if not isinstance(window, dict):
+            continue
+        percent = window.get("percent")
+        if percent is None:
+            continue
+        try:
+            used = float(percent)
+        except (TypeError, ValueError):
+            continue
+        if used < 0:
+            used = 0.0
+        if used > 100:
+            used = 100.0
+        parts.append(f"{label} {100 - used:.0f}%")
+    if not parts:
+        return None
+    return " \u00b7 ".join(parts) + " left"
+
+
+def _opencode_go_balance(client, key: str) -> str | None:
+    status, body = _request(
+        client,
+        "get",
+        OPENCODE_GO_USAGE_URL,
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    if 200 <= status < 300:
+        return parse_go_usage(body)
+    return None
+
+
 def fetch_balance(client, provider: str, key: str) -> str | None:
     """Return a formatted "money left" line, or None when nothing can be shown."""
-    if provider not in {"nanogpt", "nanogpt-sub", "openrouter"} or not key:
+    if provider not in {"nanogpt", "nanogpt-sub", "openrouter", OPENCODE_GO} or not key:
         return None
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
     cache_key = (provider, digest)
@@ -138,6 +190,8 @@ def fetch_balance(client, provider: str, key: str) -> str | None:
         text = _openrouter_balance(client, key)
     elif provider == "nanogpt-sub":
         text = _nanogpt_sub_balance(client, key)
+    elif provider == OPENCODE_GO:
+        text = _opencode_go_balance(client, key)
     else:
         text = _nanogpt_balance(client, key)
     if text is not None:

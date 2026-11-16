@@ -112,7 +112,8 @@ export OPENAI_API_KEY="&lt;the MidWare key you just created&gt;"</pre>
 <script>
   window.MidWareSignin = {
     start: {{ url_for('admin.signin_start') | tojson }},
-    poll: {{ url_for('admin.signin_poll') | tojson }}
+    poll: {{ url_for('admin.signin_poll') | tojson }},
+    key: {{ url_for('admin.signin_key') | tojson }}
   };
 </script>
 <script src="{{ url_for('static', filename='signin.js') }}"></script>

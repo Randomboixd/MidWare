@@ -31,6 +31,7 @@ from .msq_checks import (
     text_forensics_findings,
 )
 from .tokens import completion_text, count_text, estimate_usage
+from .upstream import apply_provider_headers
 from .usage import truncate, usage_from_response, usage_from_stream
 
 EXAMINING = "examining"
@@ -191,7 +192,7 @@ def _chat_url(route) -> str:
     return f"{target}/v1/chat/completions"
 
 
-def _headers(route, stream: bool = True) -> dict[str, str]:
+def _headers(route, stream: bool = True, seed: str = "", model: str = "") -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
@@ -204,6 +205,9 @@ def _headers(route, stream: bool = True) -> dict[str, str]:
             headers["anthropic-version"] = "2023-06-01"
         else:
             headers["Authorization"] = f"Bearer {key}"
+    # Probes are requests like any other: OpenCode Go answers 400 before it looks
+    # at the bearer, so a Go recorder needs the session header too.
+    apply_provider_headers(headers, route, seed=seed or "msq", model=model)
     return headers
 
 
@@ -243,7 +247,10 @@ def run_recorder(app, recorder) -> dict[str, Any]:
     started = time.perf_counter()
     try:
         request = client.build_request(
-            "POST", _chat_url(route), content=payload, headers=_headers(route)
+            "POST",
+            _chat_url(route),
+            content=payload,
+            headers=_headers(route, seed=f"msq:{recorder['id']}", model=model),
         )
         response = client.send(request, stream=True)
     except Exception as exc:  # a probe must never escape into the scheduler
@@ -448,7 +455,12 @@ def _run_needle(app, route, recorder, hardcore) -> tuple[list[dict[str, Any]], b
             "POST",
             _chat_url(route),
             content=payload,
-            headers=_headers(route, stream=False),
+            headers=_headers(
+                route,
+                stream=False,
+                seed=f"msq:{recorder['id']}:needle",
+                model=recorder["model"] or "",
+            ),
         )
         response = client.send(request, stream=False)
     except Exception as exc:

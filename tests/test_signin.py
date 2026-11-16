@@ -45,6 +45,16 @@ class FakeUpstream:
             "data": {"total_credits": 100.5, "total_usage": 25.75}
         }
         self.openrouter_key: dict | None = {"data": {"limit_remaining": 12.5}}
+        # OpenCode Go's three meters report the share *spent*.
+        self.opencode_usage: dict | None = {
+            "usage": {
+                "rolling": {"status": "ok", "percent": 63, "resetsAt": "2026-11-16T21:00:00Z"},
+                "weekly": {"status": "ok", "percent": 41, "resetsAt": "2026-11-20T00:00:00Z"},
+                "monthly": {"status": "ok", "percent": 12, "resetsAt": "2026-12-01T00:00:00Z"},
+            }
+        }
+        self.opencode_plan = True
+        self.opencode_key_valid = True
         self.raise_on_balance = False
 
     def post(self, url, json=None, headers=None):
@@ -85,6 +95,31 @@ class FakeUpstream:
             if self.openrouter_key is None:
                 return StubResponse(status_code=401, json_body={})
             return StubResponse(json_body=dict(self.openrouter_key))
+        if url.endswith("/models"):
+            if not self.opencode_key_valid:
+                return StubResponse(
+                    status_code=401,
+                    json_body={
+                        "type": "error",
+                        "error": {"type": "authentication_error", "message": "Invalid credential"},
+                    },
+                )
+            return StubResponse(json_body={"object": "list", "data": []})
+        if "/go/v1/usage" in url:
+            if self.opencode_usage is None:
+                return StubResponse(
+                    status_code=401,
+                    json_body={"type": "error", "error": {"type": "AuthError", "message": "Unauthorized"}},
+                )
+            if not self.opencode_plan:
+                return StubResponse(
+                    status_code=403,
+                    json_body={
+                        "type": "error",
+                        "error": {"type": "EntitlementError", "message": "No Go subscription"},
+                    },
+                )
+            return StubResponse(json_body=dict(self.opencode_usage))
         raise AssertionError(f"unexpected upstream call: {url}")
 
 
@@ -162,6 +197,12 @@ def test_signin_requires_login_once_claimed(secured_app):
     locked = client.post("/admin/signin/start", json={"provider": "nanogpt"})
     assert locked.status_code == 401
     assert locked.get_json()["error"]["code"] == "authentication_required"
+
+    locked_go = client.post(
+        "/admin/signin/key", json={"provider": "opencode-go", "key": "oc_sk_live_abc"}
+    )
+    assert locked_go.status_code == 401
+    assert locked_go.get_json()["error"]["code"] == "authentication_required"
 
     login(client)
     opened = client.post("/admin/signin/start", json={"provider": "nanogpt"})
@@ -260,6 +301,7 @@ def test_routes_page_offers_service_signin(configured_client):
     assert html.count("Sign in with service") == 2  # create form + edit drawer
     assert 'data-signin-provider="nanogpt"' in html
     assert 'data-signin-provider="openrouter"' in html
+    assert 'data-signin-provider="opencode-go"' in html
     assert "window.MidWareSignin" in html
     assert "signin.js" in html
 
@@ -413,8 +455,8 @@ def test_routes_page_auth_type_column_shows_how_the_key_arrived(client, app):
 
     assert "<th>Auth Type</th>" in html
     assert "<th>Key</th>" not in html
-    assert '<span class="pill blue">OAuth · OpenRouter</span>' in html
-    assert '<span class="pill blue">OAuth · Nano-GPT (Subscription)</span>' in html
+    assert '<span class="pill blue">Sign-in · OpenRouter</span>' in html
+    assert '<span class="pill blue">Sign-in · Nano-GPT (Subscription)</span>' in html
     assert '<span class="pill ok">API key</span>' in html
     assert '<span class="pill warn">none</span>' in html
 
@@ -436,3 +478,177 @@ def test_setup_route_stores_the_provider_tag(client, app):
     routes = app.extensions["midware_db"].list_routes()
     assert len(routes) == 1
     assert routes[0]["provider"] == "openrouter"
+
+
+# -- OpenCode Go: paste a Console key, prove it with the quota endpoint ------
+
+OPENCODE_GO_USAGE = "https://opencode.ai/inference/go/v1/usage"
+OPENCODE_GO_HOST = "https://opencode.ai/inference/go/openai/v1"
+
+
+def connect_key(client, provider: str = "opencode-go", key: str = "oc_sk_live_abc"):
+    return client.post("/admin/signin/key", json={"provider": provider, "key": key})
+
+
+def test_opencode_go_signin_verifies_the_key_and_prefills_the_go_route(client, app):
+    fake = install(app)
+
+    response = connect_key(client, key="  oc_sk_live_abc  ")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["ok"] is True
+    assert body["provider"] == "opencode-go"
+    assert body["label"] == "OpenCode Go"
+    assert body["name"] == "OpenCode Go"
+    assert body["host"] == OPENCODE_GO_HOST
+    assert body["key"] == "oc_sk_live_abc"  # trimmed, and handed back only here
+    # The meters report what was spent; the line reports what is left.
+    assert body["quota"] == "5h 37% \u00b7 7d 59% \u00b7 30d 88% left"
+    url, headers = fake.header_log[0]
+    assert url == OPENCODE_GO_USAGE
+    assert headers["Authorization"] == "Bearer oc_sk_live_abc"
+
+
+def test_opencode_go_signin_reports_a_rejected_key(client, app):
+    fake = install(app)
+    fake.opencode_usage = None  # OpenCode answers 401
+
+    response = connect_key(client)
+
+    assert response.status_code == 400
+    assert "rejected that key" in response.get_json()["error"]
+
+
+def test_opencode_go_signin_will_not_tag_a_key_without_a_subscription(client, app):
+    fake = install(app)
+    fake.opencode_plan = False  # 403: the key is real, the plan is not
+
+    response = connect_key(client)
+
+    assert response.status_code == 400
+    assert "no OpenCode Go subscription" in response.get_json()["error"]
+
+
+def test_opencode_go_signin_refuses_a_pasted_url_without_calling_out(client, app):
+    fake = install(app)
+
+    for pasted in ("https://opencode.ai/console/account", "oc_sk_live abc", ""):
+        response = connect_key(client, key=pasted)
+        assert response.status_code == 400
+        assert response.get_json()["error"]
+    assert fake.calls == []
+
+
+def test_opencode_go_signin_survives_without_an_admin_account(secured_client):
+    install(secured_client.application)
+    assert secured_client.get("/admin/keys").status_code == 302
+
+    response = connect_key(secured_client)
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+
+def test_opencode_go_route_name_dedups(client, app):
+    app.extensions["midware_db"].create_route(
+        name="OpenCode Go", target_host=OPENCODE_GO_HOST, upstream_key="oc_sk_old"
+    )
+    install(app)
+
+    assert connect_key(client).get_json()["name"] == "OpenCode Go (2)"
+
+
+def test_opencode_go_signin_keeps_the_edited_route_name(client, app):
+    db = app.extensions["midware_db"]
+    route_id = db.create_route(
+        name="OpenCode Go", target_host=OPENCODE_GO_HOST, upstream_key="oc_sk_old"
+    )
+    install(app)
+
+    response = client.post(
+        "/admin/signin/key",
+        json={"provider": "opencode-go", "key": "oc_sk_live_abc", "route_id": route_id},
+    )
+
+    assert response.get_json()["name"] == "OpenCode Go"
+
+
+def test_routes_page_offers_the_opencode_go_warning_and_key_panel(configured_client):
+    client, _ = configured_client
+    html = client.get("/admin/routes").get_data(as_text=True)
+
+    assert "OpenCode Go usage in MidWare may be against the terms of service." in html
+    assert "I accept the risk" in html
+    # Continue stays shut until the box is ticked; signin.js is what opens it.
+    assert "data-signin-continue disabled" in html
+    assert "https://opencode.ai/console/account" in html
+    assert "RandombXYZ/Randomboixd" in html
+    assert "MidWare/" in html
+
+
+# -- OpenCode Zen: same paste, a cheaper way to prove the key ----------------
+
+OPENCODE_ZEN_HOST = "https://opencode.ai/inference/openai/v1"
+
+
+def test_opencode_zen_signin_verifies_the_key_against_the_catalogue(client, app):
+    fake = install(app)
+
+    body = connect_key(client, "opencode-zen").get_json()
+
+    assert body["ok"] is True
+    assert body["provider"] == "opencode-zen"
+    assert body["label"] == "OpenCode Zen"
+    assert body["name"] == "OpenCode Zen"
+    assert body["host"] == OPENCODE_ZEN_HOST
+    # No meter exists for Zen, so nothing may claim a quota it cannot read.
+    assert body["quota"] is None
+    url, headers = fake.header_log[0]
+    assert url == f"{OPENCODE_ZEN_HOST}/models"
+    assert headers["Authorization"] == "Bearer oc_sk_live_abc"
+
+
+def test_opencode_zen_signin_never_touches_the_go_quota_endpoint(client, app):
+    fake = install(app)
+
+    connect_key(client, "opencode-zen")
+
+    assert [url for url, _ in fake.calls] == [f"{OPENCODE_ZEN_HOST}/models"]
+
+
+def test_opencode_zen_signin_reports_a_rejected_key(client, app):
+    fake = install(app)
+    fake.opencode_key_valid = False
+
+    response = connect_key(client, "opencode-zen")
+
+    assert response.status_code == 400
+    assert "rejected that key" in response.get_json()["error"]
+
+
+def test_opencode_key_signin_rejects_an_unknown_provider(client, app):
+    fake = install(app)
+
+    response = connect_key(client, "opencode-nonsense")
+
+    assert response.status_code == 400
+    assert "Unknown sign-in provider" in response.get_json()["error"]
+    assert fake.calls == []
+
+
+def test_opencode_zen_route_name_dedups(client, app):
+    app.extensions["midware_db"].create_route(
+        name="OpenCode Zen", target_host=OPENCODE_ZEN_HOST, upstream_key="oc_sk_old"
+    )
+    install(app)
+
+    assert connect_key(client, "opencode-zen").get_json()["name"] == "OpenCode Zen (2)"
+
+
+def test_routes_page_offers_the_opencode_zen_button(configured_client):
+    client, _ = configured_client
+    html = client.get("/admin/routes").get_data(as_text=True)
+
+    assert 'data-signin-provider="opencode-zen"' in html
+    assert 'data-signin-key="opencode-zen"' in html
+    assert "Free models are not reachable from MidWare" in html

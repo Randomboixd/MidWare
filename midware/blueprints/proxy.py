@@ -29,7 +29,12 @@ from ..db import (
 from ..images import IMAGE_CONTENT_TYPES, load_image, rewrite_image_body
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage, prompt_estimate
-from ..upstream import HOP_BY_HOP, split_target, upstream_url
+from ..upstream import (
+    HOP_BY_HOP,
+    apply_provider_headers,
+    split_target,
+    upstream_url,
+)
 from ..usage import (
     model_from_request_body,
     parse_sse_events,
@@ -748,6 +753,9 @@ def _forward(ctx: dict, path: str) -> Response:
     if multipart_content_type:
         # The client's header carries the old boundary; the rebuilt body does not.
         headers["Content-Type"] = multipart_content_type
+    apply_provider_headers(
+        headers, route, seed=f"key:{ctx['api_key']['id']}", model=model or ""
+    )
 
     url = f"{base_url}/{upstream_path.lstrip('/')}"
     if request.query_string:

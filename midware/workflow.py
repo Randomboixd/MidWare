@@ -28,7 +28,7 @@ import httpx
 
 from .conversation import _collect_reasoning
 from .premodels import FALLBACK_MACRO_RE, MACRO_RE
-from .upstream import HOP_BY_HOP, upstream_url
+from .upstream import HOP_BY_HOP, apply_provider_headers, upstream_url
 
 WORKFLOW_MAX_INTERMEDIATE = 8
 WORKFLOW_MAX_FINAL_BLOCKS = 20
@@ -717,11 +717,14 @@ def _assistant_text(data: Any) -> str:
     return ""
 
 
-def _node_headers(route) -> dict[str, str]:
+def _node_headers(route, *, seed: str = "", model: str = "") -> dict[str, str]:
     key = (route["upstream_key"] or "").strip()
     headers = {"Content-Type": "application/json", "Accept": "identity"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
+    # A sub-call is a request like any other: OpenCode Go answers 400 before it
+    # looks at the bearer, so the session header has to ride along here too.
+    apply_provider_headers(headers, route, seed=seed or "workflow", model=model)
     return headers
 
 
@@ -823,7 +826,9 @@ def _post_chat(
         response = http.post(
             upstream_url(route, "chat/completions"),
             json=payload,
-            headers=_node_headers(route),
+            headers=_node_headers(
+                route, seed=f"wf:{node['name']}", model=str(payload.get("model") or "")
+            ),
             timeout=float(node["timeout_seconds"]),
         )
     except httpx.HTTPError as exc:
@@ -1379,7 +1384,9 @@ def _make_js_chat(
             response = http.post(
                 upstream_url(route, "chat/completions"),
                 json=payload,
-                headers=_node_headers(route),
+                headers=_node_headers(
+                    route, seed=f"wf:{node.get('name') or ''}", model=str(model)
+                ),
                 timeout=float(node.get("timeout_seconds") or JS_NODE_TIMEOUT_DEFAULT),
             )
         except httpx.HTTPError as exc:
@@ -1469,7 +1476,9 @@ def _make_js_image(
             response = http.post(
                 upstream_url(route, "images/generations"),
                 json=payload,
-                headers=_node_headers(route),
+                headers=_node_headers(
+                    route, seed=f"wf:{node.get('name') or ''}", model=str(model)
+                ),
                 timeout=float(node.get("timeout_seconds") or JS_NODE_TIMEOUT_DEFAULT),
             )
         except httpx.HTTPError as exc:

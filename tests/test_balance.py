@@ -174,3 +174,36 @@ def test_balance_requires_login_once_claimed(secured_app):
     login(client)
     opened = client.get(f"/admin/routes/{route_id}/balance")
     assert opened.status_code == 200
+
+
+def test_opencode_go_balance_shows_the_remaining_windows(client, app):
+    fake = install(app)
+    route_id = _tagged_route(app, "opencode-go", "oc_sk_live_abc")
+
+    body = _get_balance(client, route_id)
+
+    assert body == {"ok": True, "text": "5h 37% \u00b7 7d 59% \u00b7 30d 88% left"}
+    assert any(
+        url == "https://opencode.ai/inference/go/v1/usage"
+        and (headers or {}).get("Authorization") == "Bearer oc_sk_live_abc"
+        for url, headers in fake.header_log
+    )
+
+
+def test_opencode_go_balance_is_silent_without_a_go_plan(client, app):
+    fake = install(app)
+    fake.opencode_plan = False
+
+    # A distinct key: the balance cache is keyed by (provider, key digest).
+    assert _get_balance(client, _tagged_route(app, "opencode-go", "oc_sk-no-plan")) == {
+        "ok": False
+    }
+
+
+def test_opencode_go_balance_skips_windows_the_payload_omits(client, app):
+    fake = install(app)
+    fake.opencode_usage = {"usage": {"rolling": {"status": "rate-limited", "percent": 100}}}
+
+    body = _get_balance(client, _tagged_route(app, "opencode-go", "oc_sk-omitted"))
+
+    assert body == {"ok": True, "text": "5h 0% left"}
