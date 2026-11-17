@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -14,9 +16,13 @@ from flask import (
     url_for,
 )
 
+from .. import __version__
 from .. import adminauth
 from ..auth import get_db
 from ..conversation import build_conversation
+from ..db import to_iso
+from ..inspector import TRUNCATION_MARKER
+from ..inspector import build_page as build_inspector
 
 bp = Blueprint("dashboard", __name__)
 
@@ -110,11 +116,13 @@ def request_detail(request_id: int):
         if locked
         else build_conversation(row["request_body"], row["response_body"])
     )
+    route = db.get_route(row["route_id"]) if row["route_id"] else None
     return render_template(
         "request_detail.html",
         row=row,
         conversation=conversation,
         messages_locked=locked,
+        page=build_inspector(row, route=route),
     )
 
 
@@ -133,6 +141,102 @@ def request_messages(request_id: int):
         payload,
         mimetype="application/json",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+#: Columns copied verbatim into an archive: the row's own record, nothing that
+#: is derived (the usage detail and the conversation are rebuilt below).
+ARCHIVE_COLUMNS = (
+    "id",
+    "created_at",
+    "request_path",
+    "method",
+    "model",
+    "model_raw",
+    "host_prefix",
+    "status_code",
+    "latency_ms",
+    "streamed",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "token_source",
+    "upstream_request_id",
+    "error",
+    "route_id",
+    "api_key_id",
+)
+
+
+def _as_dict(row) -> dict[str, Any]:
+    """sqlite3.Row to a plain dict; ``abort`` never returns but checkers can't know."""
+    return dict(row) if row is not None else {}
+
+
+@bp.get("/requests/<int:request_id>/archive.json")
+@adminauth.admin_required
+def request_archive(request_id: int):
+    """Everything stored for one request, as one downloadable JSON file.
+
+    Bodies are included whole: the archive is the copy an operator keeps when
+    they need to hand a call to someone else or diff it later. What capture
+    dropped stays dropped — a truncated body carries its own marker, and
+    ``bodies.truncated`` says so without pretending the rest exists.
+    """
+    db = get_db()
+    row = db.get_request(request_id)
+    if row is None:
+        abort(404)
+    record = _as_dict(row)
+    route = db.get_route(record["route_id"]) if record["route_id"] else None
+    inspector = build_inspector(record, route=route)
+    request_body = record["request_body"] or ""
+    response_body = record["response_body"] or ""
+    payload = {
+        "midware": {"version": __version__, "exported_at": to_iso(datetime.now(timezone.utc))},
+        "request": {column: record[column] for column in ARCHIVE_COLUMNS if column in record},
+        "route": (
+            {
+                "id": route["id"],
+                "name": route["name"],
+                "provider": route["provider"],
+                "target_host": route["target_host"],
+                "is_active": bool(route["is_active"]),
+            }
+            if route is not None
+            else None
+        ),
+        "api_key": (
+            {"id": record["api_key_id"], "name": record["api_key_name"]} if record["api_key_id"] else None
+        ),
+        # Headers are not captured by this version. The key is stated rather
+        # than omitted so a reader knows the difference between "empty" and
+        # "never recorded" — and so a future capture can fill it in place.
+        "headers": {
+            "request": None,
+            "response": None,
+            "captured": False,
+            "note": "This MidWare version does not record headers.",
+        },
+        "usage": inspector["usage"],
+        "cache_split": inspector["cache_split"],
+        "request_facts": inspector["request"],
+        "response_facts": inspector["response"],
+        "conversation": build_conversation(request_body, response_body),
+        "bodies": {
+            "request": request_body,
+            "response": response_body,
+            "truncated": {
+                "request": TRUNCATION_MARKER in request_body,
+                "response": TRUNCATION_MARKER in response_body,
+            },
+        },
+    }
+    filename = f"midware-request-{request_id}.json"
+    return Response(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

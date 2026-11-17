@@ -281,6 +281,24 @@ def test_detail_signin_redirects_then_shows(secured_app):
     assert 'id="conversation-data"' in shown.get_data(as_text=True)
 
 
+def test_archive_requires_login(secured_app):
+    db = seed(secured_app)
+    request_id = record_message(db)
+    client = secured_app.test_client()
+
+    locked = client.get(
+        f"/requests/{request_id}/archive.json", headers={"Accept": "application/json"}
+    )
+    assert locked.status_code == 401
+    assert locked.get_json()["error"]["code"] == "authentication_required"
+    assert "SECRETPROMPT" not in locked.get_data(as_text=True)
+
+    login(client)
+    shown = client.get(f"/requests/{request_id}/archive.json")
+    assert shown.status_code == 200
+    assert "SECRETPROMPT" in shown.get_data(as_text=True)
+
+
 def test_messages_json_requires_login(secured_app):
     db = seed(secured_app)
     request_id = record_message(db)

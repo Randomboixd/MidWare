@@ -71,4 +71,48 @@ def register_template_helpers(app: Flask) -> None:
     def fmt_preview(value) -> str:
         return truncate(value, 220) or ""
 
+    @app.template_filter("size")
+    def fmt_size(value) -> str:
+        """A byte count as a short human figure (the payload block's caption)."""
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            return "0 B"
+        if number < 1024:
+            return f"{number} B"
+        for unit in ("KB", "MB"):
+            number /= 1024.0
+            if number < 1024 or unit == "MB":
+                return f"{number:,.1f} {unit}"
+        return f"{number:,.1f} MB"
+
+    @app.template_filter("money")
+    def fmt_money(value, currency: str | None = "USD") -> str:
+        """A cost with its symbol: sub-dollar figures keep four decimals.
+
+        Four decimals because a single proxied call routinely costs less than a
+        cent, and rounding that to ``$0.00`` is the same as not showing it.
+        """
+        if value is None:
+            return "none"
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return "none"
+        digits = 4 if 0 < abs(amount) < 1 else 2
+        code = (currency or "USD").upper()
+        symbol = {"USD": "$", "EUR": "€", "GBP": "£"}.get(code)
+        if symbol:
+            return f"{symbol}{amount:,.{digits}f}"
+        return f"{amount:,.{digits}f} {code}"
+
+    @app.template_filter("pct")
+    def fmt_pct(value) -> str:
+        if value is None:
+            return "none"
+        try:
+            return f"{float(value):.1f}%"
+        except (TypeError, ValueError):
+            return "none"
+
     app.jinja_env.globals["app_version"] = __version__

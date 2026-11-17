@@ -10,7 +10,7 @@ number in a coloured tile, and one quiet surface beats a stack of boxes.
 | --- | --- |
 | `midware/static/tokens.css` | every colour, face, size and space step. No literal colour may exist outside this file. |
 | `midware/static/base.css` | reset, the vendored face, the primitives the templates speak (`.field`, `.checkbox`, `.radio`, `.switch`, `table`, `.scroll`, buttons), and the CSS-variable aliases `workflow.js` reads. |
-| `midware/static/style.css` | the shell and the components, in sections: shell, messages, page furniture, figures, tables, the 52-week scan, conversation viewer, premodel presets, MSQ, sign-in, workflow editor, playground. |
+| `midware/static/style.css` | the shell and the components, in sections: shell, messages, page furniture, figures, tables, the 52-week scan, conversation viewer, request inspector, premodel presets, MSQ, sign-in, workflow editor, playground. |
 | `midware/static/fonts/` | Geologica, latin and latin-ext, self-hosted. Nothing is fetched from a CDN. |
 
 The stylesheet opens with a stamp (what was built, on what theme, what was
@@ -32,6 +32,20 @@ waived); keep it true when the system changes.
   and the last four characters; clicking reveals, `Copy` copies the whole key.
 - **Figures are tabular and carry units.** `.num` right-aligns, `.value .u` sets
   the unit a step smaller in muted. A share of a total is a `.bar`, never a pie.
+- **A detail page opens with its verdict.** `.mw-figures` is one ruled row of
+  figures with a caption under each: what happened, what it cost, how much came
+  from cache. It answers the question the page was opened for; everything below
+  it is evidence, so the row never folds and never repeats a fold's own table.
+- **A fold carries its own digest.** `.mw-fold` + `.mw-fold-head` keeps the key
+  figure of its contents in the summary, right aligned. A closed section that
+  says nothing is a section nobody opens. The mechanical reader that keeps
+  `requests` small pays for it later in clicks.
+- **One box per page: the payload.** `.payload` is the only bordered container
+  in the inspector, because a body is a document rather than a figure. Inside it
+  the syntax colours are tokens (`--color-accent` keys, `--point-hi` figures),
+  never literals, and a body over the inline limit says what was left out.
+- **A detail row that belongs to the row above it is indented.** `.is-child` on a
+  ledger row: cached input is part of the prompt, not a peer of it.
 - **Disclosure markers are chevrons.** A `+` means "create" and appears only on
   an add row.
 - **Empty states say what belongs here and offer the one action that fills it**

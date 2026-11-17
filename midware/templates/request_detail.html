@@ -1,99 +1,263 @@
 {% extends "base.html" %}
 {% block title %}Request #{{ row['id'] }} - MidWare{% endblock %}
 
+{% set u = page.usage %}
+{% set rf = page.request %}
+{% set sf = page.response %}
+
+{% macro fold(id, title, digest, is_open=False) %}
+<details class="mw-fold" id="{{ id }}"{% if is_open %} open{% endif %}>
+  <summary class="mw-fold-head">
+    <h2 class="mw-fold-title">{{ title }}</h2>
+    <span class="mw-fold-digest">{{ digest }}</span>
+  </summary>
+  <div class="mw-fold-body">
+    {{ caller() }}
+  </div>
+</details>
+{% endmacro %}
+
+{% macro payload_block(side, label, text, kind, size, clipped, reformatted) %}
+<figure class="payload" data-kind="{{ kind }}">
+  <figcaption class="payload-head">
+    <span class="payload-name">{{ label }}</span>
+    <span class="pill">{{ kind }}</span>
+    <span class="payload-size">{{ size | size }}</span>
+    {% if clipped %}<span class="pill warn">first {{ page.inline_limit | size }}</span>{% endif %}
+    <button type="button" class="small border payload-copy" data-copy="payload-{{ side }}">Copy</button>
+  </figcaption>
+  <pre class="payload-code" id="payload-{{ side }}" data-lang="{{ kind }}"><code>{{ text }}</code></pre>
+  {% if clipped or reformatted %}
+  <p class="payload-note">
+    {%- if clipped %}Showing the first {{ page.inline_limit | size }} of {{ size | size }}.{% endif %}
+    {%- if reformatted %} Indented for reading; the archive holds the bytes as sent.{% endif %}
+  </p>
+  {% endif %}
+</figure>
+{% endmacro %}
+
 {% block content %}
 <div class="mw-page-head">
   <div>
+    <p class="mw-back"><a href="{{ url_for('dashboard.requests_page') }}">All requests</a></p>
     <h1>Request #{{ row['id'] }}</h1>
-    <p><a href="{{ url_for('dashboard.requests_page') }}">← Back to requests</a></p>
+    <p class="mw-ident">
+      <span class="mono">{{ row['model'] or 'no model' }}</span>
+      {%- if row['host_prefix'] and row['host_prefix'] != row['route_name'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}
+      {%- if row['route_name'] %} through {{ row['route_name'] }}{% endif %}
+      {%- if row['api_key_name'] %}, key {{ row['api_key_name'] }}{% endif %}
+    </p>
   </div>
+  {% if not messages_locked %}
+  <a class="button" href="{{ url_for('dashboard.request_archive', request_id=row['id']) }}" download>Download archive</a>
+  {% endif %}
 </div>
 
-<section class="stat-grid">
-  <article class="stat-card">
-    <header>Total tokens</header>
-    <div class="value">{{ row['total_tokens'] | comma }}</div>
-    <div class="sub">{{ row['prompt_tokens'] | comma }} in, {{ row['completion_tokens'] | comma }} out{% if row['token_source'] and row['token_source'] not in ('upstream', 'none') %}, <span title="Estimated locally: the upstream sent no usage block">estimated</span>{% endif %}</div>
-  </article>
-  <article class="stat-card">
-    <header>Status</header>
-    <div class="value{% if row['status_code'] >= 400 %} is-error{% endif %}">{{ row['status_code'] }}</div>
-    <div class="sub">latency {{ row['latency_ms'] | ms }}{% if row['streamed'] %}, streamed{% endif %}</div>
-  </article>
-  <article class="stat-card">
-    <header>When</header>
+<section class="mw-figures" aria-label="Request at a glance">
+  <div class="mw-figure">
+    <span class="mw-figure-label">Status</span>
+    <span class="mw-figure-value{{ ' is-error' if row['status_code'] >= 400 }}">{{ row['status_code'] }}</span>
+    <span class="mw-figure-note">{{ row['latency_ms'] | ms }}{% if row['streamed'] %}, streamed{% endif %}</span>
+  </div>
+  <div class="mw-figure">
+    <span class="mw-figure-label">Tokens</span>
+    <span class="mw-figure-value">{{ u.total | comma }}</span>
+    <span class="mw-figure-note">{{ u.prompt | comma }} in, {{ u.completion | comma }} out</span>
+  </div>
+  <div class="mw-figure">
+    <span class="mw-figure-label">Read from cache</span>
+    {% if u.cached is not none %}
+    <span class="mw-figure-value">{{ u.cached | comma }}</span>
+    <span class="mw-figure-note">{{ u.cache_hit | pct }} of the prompt</span>
+    {% else %}
+    <span class="mw-figure-value is-quiet">none</span>
+    <span class="mw-figure-note">no cache read reported</span>
+    {% endif %}
+  </div>
+  <div class="mw-figure">
+    <span class="mw-figure-label">Cost</span>
+    {% if u.list_cost is not none %}
+    <span class="mw-figure-value">{{ u.list_cost | money(u.currency) }}</span>
+    <span class="mw-figure-note">list price{% if u.billing_source == 'go' %}, covered by the Go plan{% endif %}</span>
+    {% elif u.cost is not none %}
+    <span class="mw-figure-value">{{ u.cost | money(u.currency) }}</span>
+    <span class="mw-figure-note">charged by the upstream</span>
+    {% else %}
+    <span class="mw-figure-value is-quiet">none</span>
+    <span class="mw-figure-note">no cost in the response</span>
+    {% endif %}
+  </div>
+  <div class="mw-figure">
+    <span class="mw-figure-label">When</span>
     {% set stamp = row['created_at'] | datetime %}
-    {% set age = row['created_at'] | relative %}
-    <div class="value value--sm">{{ stamp }}</div>
-    {% if age != stamp[:10] %}<div class="sub">{{ age }}</div>{% endif %}
-  </article>
+    <span class="mw-figure-value is-small">{{ stamp }}</span>
+    <span class="mw-figure-note">{{ row['created_at'] | relative }}</span>
+  </div>
 </section>
 
-<section class="mw-section">
-  <div class="mw-section-head">
-    <div>
-      <h2>Details</h2>
-      <span class="mw-meta">What MidWare recorded for this call</span>
-    </div>
-  </div>
-  <table class="compact">
-    <tbody>
-      <tr><th>Model</th><td class="mono">{{ row['model'] or 'none' }}{% if row['model_raw'] and row['model_raw'] != row['model'] %} <small class="mono">(sent as {{ row['model_raw'] }})</small>{% endif %}</td></tr>
-      <tr><th>Route</th><td>{{ row['route_name'] or 'none' }}{% if row['host_prefix'] %} <span class="pill ok">[{{ row['host_prefix'] }}]</span>{% endif %}</td></tr>
-      <tr><th>API key</th><td>{{ row['api_key_name'] or 'none' }}</td></tr>
-      <tr><th>Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
-      <tr><th>Token source</th><td>
-        {% if row['token_source'] == 'upstream' %}reported by upstream
-        {% elif row['token_source'] == 'none' %}not available
-        {% else %}<span class="pill warn">estimate</span> counted locally ({{ row['token_source'] }}); the upstream sent no usage block
+{% call fold('fold-usage', 'Usage', (u.total | comma) ~ ' tokens, ' ~ (u.cache_hit | pct) ~ ' cached', True) %}
+<div class="grid-2">
+  <div>
+    <table class="compact ledger">
+      <caption class="visually-hidden">Token accounting</caption>
+      <tbody>
+        <tr><th scope="row">Prompt</th><td class="num">{{ u.prompt | comma }}</td></tr>
+        {% if u.cached is not none %}
+        <tr class="is-child"><th scope="row">Read from cache</th><td class="num">{{ u.cached | comma }}</td></tr>
         {% endif %}
-      </td></tr>
-      <tr><th>Upstream id</th><td class="mono">{{ row['upstream_request_id'] or 'none' }}</td></tr>
-      {% if row['error'] %}<tr><th>Error</th><td class="mono">{{ row['error'] }}</td></tr>{% endif %}
-    </tbody>
-  </table>
-</section>
+        {% if u.uncached is not none and u.cached %}
+        <tr class="is-child"><th scope="row">Uncached input</th><td class="num">{{ u.uncached | comma }}</td></tr>
+        {% endif %}
+        {% if u.cache_write %}
+        <tr class="is-child"><th scope="row">Written to cache</th><td class="num">{{ u.cache_write | comma }}</td></tr>
+        {% endif %}
+        {% for label, value in page.cache_split.items() %}
+        <tr class="is-child"><th scope="row">Cache write, {{ label }}</th><td class="num">{{ value | comma }}</td></tr>
+        {% endfor %}
+        <tr><th scope="row">Completion</th><td class="num">{{ u.completion | comma }}</td></tr>
+        {% if u.reasoning %}
+        <tr class="is-child"><th scope="row">of which reasoning</th><td class="num">{{ u.reasoning | comma }}</td></tr>
+        {% endif %}
+        <tr class="is-total"><th scope="row">Total</th><td class="num">{{ u.total | comma }}</td></tr>
+      </tbody>
+    </table>
+    {% if u.cache_hit is not none %}
+    <div class="mw-share">
+      <span class="bar"><i style="inline-size: {{ '%.1f' | format(u.cache_hit) }}%"></i></span>
+      <small>{{ u.cache_hit | pct }} of the prompt was read from the provider’s cache</small>
+    </div>
+    {% endif %}
+  </div>
+  <div>
+    <table class="compact ledger">
+      <caption class="visually-hidden">Billing</caption>
+      <tbody>
+        <tr><th scope="row">Charged</th><td class="num">{{ u.cost | money(u.currency) }}</td></tr>
+        {% if u.list_cost is not none %}
+        <tr><th scope="row">List price</th><td class="num">{{ u.list_cost | money(u.currency) }}</td></tr>
+        {% endif %}
+        {% if u.billing_source %}
+        <tr><th scope="row">Billed to</th><td>{{ 'the Go plan' if u.billing_source == 'go' else u.billing_source }}{% if u.allowance is not none %}, {{ u.allowance | money(u.currency) }} of the allowance used{% endif %}</td></tr>
+        {% endif %}
+        <tr><th scope="row">Token source</th><td>
+          {%- if page.estimated %}<span class="pill warn">estimate</span> counted locally ({{ page.token_source }}), the upstream sent no usage block
+          {%- elif u.reported %}reported by the upstream
+          {%- else %}not reported{% endif -%}
+        </td></tr>
+      </tbody>
+    </table>
+    {% if u.reported %}
+    <p class="mw-note">Read from the usage block the upstream returned with this call.</p>
+    {% else %}
+    <p class="mw-note">The stored response carries no usage block, so these are the token counts MidWare committed to its log.</p>
+    {% endif %}
+  </div>
+</div>
+{% endcall %}
 
 {% if messages_locked %}
-<section class="mw-section">
-  <div class="mw-section-head"><div><h2>Messages</h2></div></div>
-  <article class="mw-form-section">
-  <p>Message history is protected. Sign in to view the full request and response.</p>
-  <p><a class="button" href="{{ url_for('account.signin', next=url_for('dashboard.request_detail', request_id=row['id'], messages=1)) }}">Sign in to view messages</a></p>
-  </article>
-</section>
+{% call fold('fold-messages', 'Messages', 'protected', True) %}
+<div class="mw-locked">
+  <p>Message history is protected. Sign in to see the request, the response and the payloads.</p>
+  <p><a class="button border" href="{{ url_for('account.signin', next=url_for('dashboard.request_detail', request_id=row['id'], messages=1)) }}">Sign in to view messages</a></p>
+</div>
+{% endcall %}
 {% else %}
-<section class="mw-section">
-  <div class="mw-section-head"><div><h2>Messages</h2></div></div>
+
+{% call fold('fold-request', 'Request',
+  ((rf.messages ~ ' messages, ') if rf.messages is not none else '') ~ (page.request_bytes | size)) %}
+<table class="compact ledger">
+  <caption class="visually-hidden">What the client sent</caption>
+  <tbody>
+    <tr><th scope="row">Path</th><td class="mono">{{ row['method'] }} /{{ row['request_path'] }}</td></tr>
+    <tr><th scope="row">Model sent</th><td class="mono">{{ row['model_raw'] or rf.model or 'none' }}</td></tr>
+    {% if rf.messages is not none %}<tr><th scope="row">Messages</th><td class="num">{{ rf.messages }}</td></tr>{% endif %}
+    {% if rf.tools is not none %}<tr><th scope="row">Tool schemas</th><td class="num">{{ rf.tools }}</td></tr>{% endif %}
+    {% if rf.stream is not none %}<tr><th scope="row">Streaming</th><td>{{ 'requested' if rf.stream else 'off' }}{% if rf.usage_requested %}, with usage{% endif %}</td></tr>{% endif %}
+    {% if rf.max_tokens is not none %}<tr><th scope="row">Max tokens</th><td class="num">{{ rf.max_tokens | comma }}</td></tr>{% endif %}
+    {% if rf.temperature is not none %}<tr><th scope="row">Temperature</th><td class="num">{{ rf.temperature }}</td></tr>{% endif %}
+    {% if rf.top_p is not none %}<tr><th scope="row">Top P</th><td class="num">{{ rf.top_p }}</td></tr>{% endif %}
+    <tr><th scope="row">Body</th><td>{{ page.request_kind }}, {{ page.request_bytes | size }}</td></tr>
+    <tr><th scope="row">Headers</th><td>not captured by this version</td></tr>
+  </tbody>
+</table>
+{% if page.request_preview %}
+{{ payload_block('request', 'Request body', page.request_preview, page.request_kind, page.request_bytes, page.request_clipped, page.request_reformatted) }}
+{% else %}
+<p class="mw-section-empty">Nothing was captured for this call. The key may have content logging turned off.</p>
+{% endif %}
+{% endcall %}
+
+{% call fold('fold-response', 'Response',
+  (row['status_code'] | string) ~ ', ' ~ ((sf.events ~ ' events, ') if sf.events else '') ~ (page.response_bytes | size)) %}
+<table class="compact ledger">
+  <caption class="visually-hidden">What the server sent back</caption>
+  <tbody>
+    <tr><th scope="row">Status</th><td>{{ row['status_code'] }}{% if row['error'] %}, MidWare error{% endif %}</td></tr>
+    <tr><th scope="row">Body</th><td>{{ sf.kind }}, {{ page.response_bytes | size }}</td></tr>
+    {% if sf.events is not none %}<tr><th scope="row">Stream events</th><td class="num">{{ sf.events | comma }}</td></tr>{% endif %}
+    {% if sf.event_types %}
+    <tr><th scope="row">Event types</th><td class="mono">{% for name, count in sf.event_types %}{{ name }} × {{ count }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+    {% endif %}
+    {% if sf.finish_reasons %}<tr><th scope="row">Finish reason</th><td class="mono">{{ sf.finish_reasons | join(', ') }}</td></tr>{% endif %}
+    {% if sf.model %}<tr><th scope="row">Model echoed</th><td class="mono">{{ sf.model }}</td></tr>{% endif %}
+    {% if sf.object %}<tr><th scope="row">Object</th><td class="mono">{{ sf.object }}</td></tr>{% endif %}
+    {% if row['upstream_request_id'] %}<tr><th scope="row">Upstream id</th><td class="mono">{{ row['upstream_request_id'] }}</td></tr>{% endif %}
+  </tbody>
+</table>
+{% if row['error'] %}
+<p class="mw-error-line mono">{{ row['error'] }}</p>
+{% endif %}
+{% if page.response_preview %}
+{{ payload_block('response', 'Response body', page.response_preview, page.response_kind, page.response_bytes, page.response_clipped, page.response_reformatted) }}
+{% else %}
+<p class="mw-section-empty">The upstream sent no body, or capture stopped before it arrived.</p>
+{% endif %}
+{% endcall %}
+
+{% call fold('fold-connection', 'Connection', row['route_name'] or 'no route') %}
+<table class="compact ledger">
+  <caption class="visually-hidden">Which upstream carried the call</caption>
+  <tbody>
+    <tr><th scope="row">Route</th><td>{{ row['route_name'] or 'none' }}</td></tr>
+    {% if page.route %}
+    <tr><th scope="row">Sign-in</th><td>{{ page.route['provider'] or 'no provider tag' }}</td></tr>
+    <tr><th scope="row">Upstream</th><td class="mono">{{ page.route['target_host'] }}</td></tr>
+    <tr><th scope="row">Route state now</th><td>{{ 'active' if page.route['is_active'] else 'inactive' }}</td></tr>
+    {% if page.route['provider'] %}
+    <tr><th scope="row">Allowance</th><td><span class="mw-allowance" data-balance-url="{{ url_for('admin.route_balance', route_id=page.route['id']) }}">checking</span></td></tr>
+    {% endif %}
+    {% endif %}
+    <tr><th scope="row">API key</th><td>{{ row['api_key_name'] or 'none' }}</td></tr>
+    {% if row['host_prefix'] %}<tr><th scope="row">Routing prefix</th><td class="mono">[{{ row['host_prefix'] }}]</td></tr>{% endif %}
+    <tr><th scope="row">Recorded</th><td class="mono">{{ row['created_at'] | datetime }} UTC</td></tr>
+  </tbody>
+</table>
+{% endcall %}
+
+{% call fold('fold-conversation', 'Conversation',
+  (conversation.messages | length) ~ ' message' ~ ('' if conversation.messages | length == 1 else 's'), True) %}
 <section id="conversation" class="conversation" data-source="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">
   <div class="conversation-toolbar">
-    <button type="button" id="fetch-messages" class="small">Fetch</button>
-    <button type="button" id="expand-all" class="border small">Expand all</button>
-    <button type="button" id="collapse-all" class="border small">Collapse all</button>
+    <button type="button" id="expand-all" class="small border">Expand all</button>
+    <button type="button" id="collapse-all" class="small border">Collapse all</button>
     <small id="conversation-status">
       {{ conversation.messages | length }} message{{ '' if conversation.messages | length == 1 else 's' }}
-      {%- if conversation.messages %}, last user + assistant opened{% endif %}
+      {%- if conversation.messages %}, last user and assistant open{% endif %}
     </small>
   </div>
-  <noscript><p><small>JavaScript is required to unfold messages. <a href="{{ url_for('dashboard.request_messages', request_id=row['id']) }}">Download the raw JSON</a> instead.</small></p></noscript>
+  <noscript><p><small>JavaScript is required to unfold messages. <a href="{{ url_for('dashboard.request_archive', request_id=row['id']) }}">Download the archive</a> instead.</small></p></noscript>
   <div id="message-list" class="message-list"></div>
 </section>
-</section>
+{% endcall %}
 
-<details class="raw-drawer">
-  <summary>Raw payloads</summary>
-  <h3>Request body <small>(prefix stripped before forwarding)</small></h3>
-  <pre class="mono">{{ row['request_body'] or '(not captured)' }}</pre>
-
-  <h3>Response body</h3>
-  <pre class="mono">{{ row['response_body'] or '(not captured)' }}</pre>
-</details>
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='clipboard.js') }}"></script>
 {% if not messages_locked %}
 <script id="conversation-data" type="application/json">{{ conversation | tojson }}</script>
-<script src="{{ url_for('static', filename='request_detail.js') }}"></script>
 {% endif %}
+<script src="{{ url_for('static', filename='request_detail.js') }}"></script>
 {% endblock %}

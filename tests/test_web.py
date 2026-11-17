@@ -343,3 +343,72 @@ def test_setup_form_submits_test_connection_when_unchecked(app):
     client = app.test_client()
     html = client.get("/admin/setup").get_data(as_text=True)
     assert 'name="test_connection" value="0"' in html
+
+
+def test_request_detail_shows_cache_and_cost_from_the_response(configured_client):
+    """The inspector reads the usage block the provider already sent."""
+    import json
+
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    response_body = json.dumps(
+        {
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "total_tokens": 1200,
+                "prompt_tokens_details": {"cached_tokens": 800},
+                "completion_tokens_details": {"reasoning_tokens": 20},
+                "cost": 0.0042,
+                "currency": "USD",
+            },
+        }
+    )
+    request_id = db.record_request(
+        api_key_id=db.list_api_keys()[0]["id"], route_id=None, method="POST",
+        request_path="chat/completions", model="m", status_code=200, latency_ms=1,
+        streamed=False, prompt_tokens=1000, completion_tokens=200, total_tokens=1200,
+        request_body=json.dumps({"model": "m", "messages": [{"role": "user", "content": "Yo"}]}),
+        response_body=response_body,
+    )
+
+    html = client.get(f"/requests/{request_id}").get_data(as_text=True)
+    assert "Read from cache" in html
+    assert "800" in html
+    assert "80.0%" in html
+    assert "$0.0042" in html
+    assert "of which reasoning" in html
+
+
+def test_request_archive_downloads_the_whole_record(configured_client):
+    import json
+
+    client, _ = configured_client
+    db = client.application.extensions["midware_db"]
+    request_id = db.record_request(
+        api_key_id=db.list_api_keys()[0]["id"], route_id=None, method="POST",
+        request_path="chat/completions", model="m", status_code=200, latency_ms=1,
+        streamed=False, prompt_tokens=1, completion_tokens=1, total_tokens=2,
+        request_body=json.dumps({"messages": [{"role": "user", "content": "hello"}]}),
+        response_body=json.dumps({"choices": [{"message": {"content": "back"}}]}),
+    )
+
+    response = client.get(f"/requests/{request_id}/archive.json")
+    assert response.status_code == 200
+    assert "attachment" in response.headers["Content-Disposition"]
+    assert f"midware-request-{request_id}.json" in response.headers["Content-Disposition"]
+
+    body = response.get_json()
+    assert body["request"]["id"] == request_id
+    assert "hello" in body["bodies"]["request"]
+    assert "back" in body["bodies"]["response"]
+    assert body["conversation"]["messages"]
+    assert body["headers"]["captured"] is False
+    assert body["bodies"]["truncated"] == {"request": False, "response": False}
+
+
+def test_request_archive_404s_for_a_missing_request(configured_client):
+    client, _ = configured_client
+    assert client.get("/requests/999/archive.json").status_code == 404
+

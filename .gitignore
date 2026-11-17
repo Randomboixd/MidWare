@@ -15,3 +15,6 @@ instance/
 
 # Docker
 data/
+
+# Hallmark design runs (screenshots and records)
+.hallmark/

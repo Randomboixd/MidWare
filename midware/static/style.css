@@ -1,6 +1,7 @@
 /* Hallmark · shape: app screen · genre: modern-minimal · theme: Vantage (by request) · redesign: full
  * nav: kept, a wordmark left and one row of destinations right · signature: the 52-week scan, a point cloud of measured days
  * states: full, empty, loading (skeleton), error · vantage: terrain/steel · scope: app · contrast: pass · v2.0.0
+ * signature: the request inspector, a verdict row of figures over digest folds
  * built: the project · redesign: full */
 /* Hallmark · pre-emit critique: P_ H_ E_ S_ R_ V_ · weakest: the numbers were four identical cards, now a ruled ledger with one statement figure.
  * Floor: tokens only, no tracked capitals, no eyebrow, tabular figures, a focus ring on every control.
@@ -797,14 +798,20 @@ details.message > summary {
 
 details.message > summary::-webkit-details-marker { display: none; }
 
+/* A chevron, like every other disclosure on the panel: "+" means create. */
 details.message > summary::after {
-  content: "+";
+  content: "";
+  flex: none;
+  inline-size: 0.45rem;
+  block-size: 0.45rem;
   margin-inline-start: var(--space-xs);
-  color: var(--color-muted);
-  font-size: var(--text-sm);
+  border-inline-end: var(--rule-hair) solid var(--color-muted);
+  border-block-end: var(--rule-hair) solid var(--color-muted);
+  transform: translateY(-0.15rem) rotate(45deg);
+  transition: transform var(--dur-micro) var(--ease-out);
 }
 
-details.message[open] > summary::after { content: "−"; }
+details.message[open] > summary::after { transform: translateY(0.1rem) rotate(225deg); }
 
 .message-badge {
   flex: none;
@@ -880,17 +887,272 @@ details.extra[open] > summary { border-block-end: var(--rule-hair) dashed var(--
 
 details.reasoning .msg-text { color: var(--color-muted); }
 
-details.raw-drawer {
-  margin-block-start: var(--space-lg);
-  padding-block-start: var(--space-sm);
-  border-block-start: var(--rule-hair) solid var(--color-rule);
+/* -- request inspector --------------------------------------------------- */
+/* One call, read as a ledger: a figures row for the verdict, then every other
+   layer folded behind a summary that carries its own digest, so a closed fold
+   still says what is inside it. The payload blocks are the only boxes, because
+   a body is the one thing here that is a document rather than a figure. */
+
+.mw-ident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3xs) var(--space-xs);
 }
 
-details.raw-drawer > summary { font-weight: 400; color: var(--color-muted); }
+.mw-back {
+  flex-basis: 100%;
+  margin-block-start: var(--space-2xs);
+}
 
-details.raw-drawer pre {
-  max-block-size: 24rem;
+.mw-back a {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.mw-figures {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-block: var(--rule-hair) solid var(--color-rule);
+  margin-block-end: var(--space-lg);
+}
+
+.mw-figure {
+  display: grid;
+  gap: var(--space-3xs);
+  align-content: start;
+  min-inline-size: 0;
+  padding: var(--space-md) var(--space-md) var(--space-md) 0;
+}
+
+.mw-figure + .mw-figure {
+  padding-inline-start: var(--space-md);
+  border-inline-start: var(--rule-hair) solid var(--color-rule);
+}
+
+.mw-figure-label {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.mw-figure-value {
+  font-size: var(--text-2xl);
+  font-weight: 300;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink);
+}
+
+.mw-figure-value.is-small { font-size: var(--text-lg); letter-spacing: 0; }
+
+.mw-figure-value.is-quiet { color: var(--color-muted); }
+
+.mw-figure-value.is-error { color: var(--color-error); }
+
+.mw-figure-note {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1000px) {
+  .mw-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .mw-figure:nth-child(n + 3) { border-block-start: var(--rule-hair) solid var(--color-rule); }
+
+  .mw-figure:nth-child(odd) {
+    padding-inline-start: 0;
+    border-inline-start: 0;
+  }
+
+  /* An odd count leaves one figure alone on the last row; let it take the row. */
+  .mw-figure:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    border-block-start: var(--rule-hair) solid var(--color-rule);
+  }
+}
+
+@media (max-width: 560px) {
+  .mw-figures { grid-template-columns: minmax(0, 1fr); }
+
+  .mw-figure,
+  .mw-figure + .mw-figure {
+    padding-inline: 0;
+    border-inline-start: 0;
+  }
+
+  .mw-figure + .mw-figure { border-block-start: var(--rule-hair) solid var(--color-rule); }
+}
+
+/* A section that folds. The summary keeps its own digest, so closing a layer
+   never hides what the layer is worth. */
+.mw-fold { border-block-end: var(--rule-hair) solid var(--color-rule); }
+
+.mw-fold-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-md);
+  padding: var(--space-md) 0 var(--space-sm);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.mw-fold-head::-webkit-details-marker { display: none; }
+
+.mw-fold-head::after {
+  content: "";
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-start: var(--space-2xs);
+  border-inline-end: var(--rule-hair) solid var(--color-muted);
+  border-block-end: var(--rule-hair) solid var(--color-muted);
+  transform: translateY(-0.15rem) rotate(45deg);
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+
+.mw-fold[open] > .mw-fold-head::after { transform: translateY(0.1rem) rotate(225deg); }
+
+.mw-fold-head:hover .mw-fold-title { color: var(--color-accent); }
+
+.mw-fold-title {
+  font-size: var(--text-lg);
+  font-weight: 300;
+  letter-spacing: var(--tracking-display);
+  transition: color var(--dur-micro) var(--ease-out);
+}
+
+.mw-fold-digest {
+  margin-inline-start: auto;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.mw-fold-body { padding-block: 0 var(--space-lg); }
+
+.mw-fold-body > .grid-2 { margin-block-start: 0; }
+
+/* A key/value table where the label column is quiet and the figure is not. */
+.ledger th[scope="row"] {
+  inline-size: 38%;
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-data);
+  font-weight: 400;
+  white-space: normal;
+  vertical-align: baseline;
+}
+
+.ledger td { color: var(--color-ink-2); vertical-align: baseline; }
+
+/* A long unbroken value (a host, a prefixed model id) must not widen the table
+   past the phone; the phone clips the page, so the table has to wrap. */
+.ledger td.mono,
+.ledger td .mono { overflow-wrap: anywhere; }
+
+/* A row that breaks down the row above it, not a peer of it. */
+.ledger tr.is-child > th {
+  padding-inline-start: var(--space-lg);
+  font-size: var(--text-sm);
+}
+
+.ledger tr.is-total > th,
+.ledger tr.is-total > td {
+  border-block-start: var(--rule-hair) solid var(--color-rule-2);
+  color: var(--color-ink);
+}
+
+.mw-share {
+  display: grid;
+  gap: var(--space-2xs);
+  margin-block-start: var(--space-sm);
+}
+
+.mw-share small { font-variant-numeric: tabular-nums; }
+
+.mw-note {
+  margin-block-start: var(--space-sm);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.mw-allowance { font-variant-numeric: tabular-nums; }
+
+.mw-locked {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-sm);
+  padding-block: var(--space-sm);
+}
+
+.mw-error-line {
+  margin-block: var(--space-sm) 0;
+  padding: var(--space-sm);
+  border-inline-start: 2px solid var(--color-error);
+  background: color-mix(in oklab, var(--color-error) 8%, transparent);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The payload: the one box on the page, because a body is a document. */
+.payload { margin: var(--space-md) 0 0; }
+
+.payload-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-block-end: var(--space-2xs);
+}
+
+.payload-name {
+  color: var(--color-ink);
+  font-size: var(--text-data);
+}
+
+.payload-size {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.payload-copy { margin-inline-start: auto; }
+
+.payload-code {
+  max-block-size: 32rem;
   overflow: auto;
+  margin: 0;
+  padding: var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-card);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.payload-code code { font-size: inherit; }
+
+.payload-code .tok-k { color: var(--color-accent); }
+.payload-code .tok-s { color: var(--color-ink); }
+.payload-code .tok-n { color: var(--point-hi); }
+.payload-code .tok-b { color: var(--point-mid); }
+.payload-code .tok-p { color: var(--color-muted); }
+.payload-code .tok-e { color: var(--point-hi); }
+
+.payload-note {
+  margin-block-start: var(--space-2xs);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
 }
 
 /* -- premodel preset list ------------------------------------------------ */
@@ -1785,7 +2047,7 @@ tr.is-temporary > td { background: color-mix(in oklab, var(--color-paper-2) 70%,
   block-size: 26px;
   min-block-size: 0;
   margin: 0;
-  padding: 0 1.5rem 0 var(--space-xs);
+  padding: 0 var(--space-lg) 0 var(--space-xs);
   border: var(--rule-hair) solid var(--color-rule-2);
   border-radius: var(--radius-pill);
   background-color: transparent;
