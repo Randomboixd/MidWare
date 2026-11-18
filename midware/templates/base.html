@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b1014">
   <meta name="description" content="MidWare: a self-hosted OpenAI-compatible LLM proxy, with token accounting per key and route.">
   <title>{% block title %}MidWare{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230b1014'/><circle cx='11' cy='12' r='2.6' fill='%23e3f0f6'/><circle cx='21' cy='9' r='1.8' fill='%23a9bcc6'/><circle cx='17' cy='18' r='2.2' fill='%23e3f0f6'/><circle cx='24' cy='22' r='1.6' fill='%23a9bcc6'/><circle cx='9' cy='23' r='2' fill='%23d4ff4f'/></svg>">
@@ -41,6 +42,36 @@
     </nav>
   </header>
 
+  {# The phone's navigation: a thumb-reachable bar, with the quieter
+     destinations behind More. Hidden above 700px, where the header row is the
+     navigation and this would only be a second copy of it. #}
+  {% set can_manage = not admin_auth_enabled or admin_signed_in %}
+  <nav class="mw-tabbar" aria-label="Main">
+    <a class="mw-tab{{ ' active' if here in ('dashboard.index', 'dashboard.activity') }}" href="{{ url_for('dashboard.index') }}"{% if here in ('dashboard.index', 'dashboard.activity') %} aria-current="page"{% endif %}>Home</a>
+    <a class="mw-tab{{ ' active' if here.startswith('dashboard.request') }}" href="{{ url_for('dashboard.requests_page') }}"{% if here.startswith('dashboard.request') %} aria-current="page"{% endif %}>Requests</a>
+    {% if can_manage %}
+    <a class="mw-tab{{ ' active' if here.startswith('admin.route') }}" href="{{ url_for('admin.routes') }}"{% if here.startswith('admin.route') %} aria-current="page"{% endif %}>Routes</a>
+    <a class="mw-tab{{ ' active' if here.startswith('admin.key') }}" href="{{ url_for('admin.keys') }}"{% if here.startswith('admin.key') %} aria-current="page"{% endif %}>Keys</a>
+    <button type="button" class="mw-tab mw-tab-more" id="mw-more" aria-expanded="false" aria-controls="mw-more-panel">More</button>
+    {% elif admin_auth_enabled %}
+    <a class="mw-tab" href="{{ url_for('account.signin') }}">Sign in</a>
+    {% endif %}
+  </nav>
+
+  {% if can_manage %}
+  <div class="mw-more-panel" id="mw-more-panel" hidden>
+    <a href="{{ url_for('msq.index') }}">MSQ</a>
+    <a href="{{ url_for('playground.index') }}">Playground</a>
+    <a href="{{ url_for('admin.premodels') }}">Premodels</a>
+    <a href="{{ url_for('admin.settings') }}">Settings</a>
+    {% if admin_auth_enabled and admin_signed_in %}
+    <form method="post" action="{{ url_for('account.signout') }}" class="mw-more-form">
+      <button type="submit">Sign out</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <main class="responsive">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -56,6 +87,7 @@
   <footer class="mw-footer responsive">
     <small>ver {{ app_version }}</small>
   </footer>
+  <script src="{{ url_for('static', filename='shell.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

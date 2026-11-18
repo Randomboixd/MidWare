@@ -357,10 +357,48 @@ def cache_split(usage: dict[str, Any], response_body: str | None) -> dict[str, i
     return split
 
 
+def error_message(response_body: str | None, limit: int = 400) -> str | None:
+    """The provider's own words for a failed call, for the line under the figures.
+
+    A 4xx or 5xx that MidWare relayed carries the upstream's body verbatim, and
+    the sentence in it is the thing an operator needs before opening anything.
+    MidWare-origin failures never reach here: the row's own ``error`` wins.
+    """
+    if not response_body or not response_body.strip():
+        return None
+    kind = body_kind(response_body)
+    candidates: list[Any] = []
+    if kind in ("json", "json-partial"):
+        try:
+            candidates.append(json.loads(response_body))
+        except (ValueError, TypeError):
+            return None
+    elif kind == "sse":
+        candidates.extend(parse_sse_events(response_body)[-20:])
+    else:
+        text = response_body.strip().splitlines()[0] if response_body.strip() else ""
+        return text[:limit] or None
+    for payload in reversed(candidates):
+        if not isinstance(payload, dict):
+            continue
+        error = payload.get("error")
+        for value in (
+            _dig(error, "message") if isinstance(error, dict) else error,
+            payload.get("message"),
+            _dig(payload, "detail", "message") if isinstance(payload.get("detail"), dict) else payload.get("detail"),
+            payload.get("msg"),
+        ):
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:limit]
+    return None
+
+
 def build_page(row, route=None, key=None) -> dict[str, Any]:
     """One dict the inspector template renders, assembled from one row."""
-    request_body = row["request_body"] if "request_body" in row.keys() else None
-    response_body = row["response_body"] if "response_body" in row.keys() else None
+    # A key with content logging off stores NULL, and so does a call that failed
+    # before a body arrived: read both as the empty string, never as a value.
+    request_body = (row["request_body"] if "request_body" in row.keys() else None) or ""
+    response_body = (row["response_body"] if "response_body" in row.keys() else None) or ""
     usage = usage_detail(response_body)
     source = (row["token_source"] if "token_source" in row.keys() else "") or "upstream"
     # The stored column is what the proxy committed to; when the response no
@@ -375,6 +413,10 @@ def build_page(row, route=None, key=None) -> dict[str, Any]:
             }
         )
     estimated = source not in ("upstream", "none")
+    row_error = row["error"] if "error" in row.keys() else None
+    status = int(row["status_code"] or 0) if "status_code" in row.keys() else 0
+    failed = status >= 400
+    error = row_error or (error_message(response_body) if failed else None)
     request_kind = body_kind(request_body)
     response_kind = body_kind(response_body)
     request_preview, request_clipped, request_reformatted = preview(request_body, request_kind)
@@ -391,13 +433,14 @@ def build_page(row, route=None, key=None) -> dict[str, Any]:
         "inline_limit": INLINE_LIMIT,
         "request": request_facts(request_body),
         "response": response_facts(response_body, streamed=bool(row["streamed"])),
-        "request_body": request_body or "",
-        "response_body": response_body or "",
+        "request_body": request_body,
+        "response_body": response_body,
         "request_kind": request_kind,
         "response_kind": response_kind,
         "request_reformatted": request_reformatted,
         "response_reformatted": response_reformatted,
         "estimated": estimated,
+        "error": error,
         "token_source": source,
         "route": route,
         "key": key,

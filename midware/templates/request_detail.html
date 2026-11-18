@@ -95,6 +95,10 @@
   </div>
 </section>
 
+{% if page.error %}
+<p class="mw-error-line mono">{{ page.error }}</p>
+{% endif %}
+
 {% call fold('fold-usage', 'Usage', (u.total | comma) ~ ' tokens, ' ~ (u.cache_hit | pct) ~ ' cached', True) %}
 <div class="grid-2">
   <div>
@@ -205,9 +209,6 @@
     {% if row['upstream_request_id'] %}<tr><th scope="row">Upstream id</th><td class="mono">{{ row['upstream_request_id'] }}</td></tr>{% endif %}
   </tbody>
 </table>
-{% if row['error'] %}
-<p class="mw-error-line mono">{{ row['error'] }}</p>
-{% endif %}
 {% if page.response_preview %}
 {{ payload_block('response', 'Response body', page.response_preview, page.response_kind, page.response_bytes, page.response_clipped, page.response_reformatted) }}
 {% else %}

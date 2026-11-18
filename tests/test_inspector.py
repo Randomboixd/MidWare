@@ -9,6 +9,7 @@ from midware.inspector import (
     body_kind,
     build_page,
     cache_split,
+    error_message,
     preview,
     request_facts,
     response_facts,
@@ -223,6 +224,38 @@ def test_cache_split_reads_anthropic_ttl_buckets():
     assert cache_split(usage_detail(body), body) == {"5m": 30, "1h": 40}
 
 
+def test_error_message_reads_the_providers_own_words():
+    body = json.dumps({"error": {"message": "Rate limit exceeded, try again", "type": "rate_limit"}})
+
+    assert error_message(body) == "Rate limit exceeded, try again"
+
+
+def test_error_message_reads_a_flat_message_and_a_streamed_error():
+    assert error_message(json.dumps({"message": "model not found"})) == "model not found"
+
+    streamed = sse({"error": {"message": "upstream overloaded"}})
+    assert error_message(streamed) == "upstream overloaded"
+
+
+def test_error_message_is_none_for_a_healthy_body():
+    assert error_message(json.dumps({"choices": [{"message": {"content": "fine"}}]})) is None
+
+
+def test_build_page_shows_the_upstream_error_only_when_the_call_failed():
+    ok_row = {
+        "request_body": "", "response_body": json.dumps({"message": "hello"}),
+        "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2,
+        "streamed": 0, "token_source": "upstream", "status_code": 200, "error": None,
+    }
+    assert build_page(ok_row)["error"] is None
+
+    failed_row = dict(ok_row, status_code=429, response_body=json.dumps({"error": "slow down"}))
+    assert build_page(failed_row)["error"] == "slow down"
+
+    crashed = dict(ok_row, status_code=500, error="httpx.ConnectError: refused")
+    assert build_page(crashed)["error"] == "httpx.ConnectError: refused"
+
+
 def test_build_page_falls_back_to_the_logged_columns():
     """A response with no usage block still shows the counts the proxy logged."""
     row = {
@@ -240,6 +273,28 @@ def test_build_page_falls_back_to_the_logged_columns():
     assert page["usage"]["reported"] is False
     assert page["estimated"] is True
     assert page["request_kind"] == "json"
+
+
+def test_build_page_survives_a_row_with_no_bodies():
+    """Content logging off stores NULL; the page must render, not crash."""
+    row = {
+        "request_body": None,
+        "response_body": None,
+        "prompt_tokens": 1204,
+        "completion_tokens": 210,
+        "total_tokens": 1414,
+        "streamed": 1,
+        "token_source": "upstream",
+        "status_code": 200,
+        "error": None,
+    }
+    page = build_page(row)
+
+    assert page["request_kind"] == "empty"
+    assert page["response_kind"] == "empty"
+    assert page["request_bytes"] == 0
+    assert page["request_preview"] == ""
+    assert page["usage"]["total"] == 1414
 
 
 def test_build_page_marks_an_estimate_and_a_captured_body():

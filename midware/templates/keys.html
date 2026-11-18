@@ -37,7 +37,7 @@
 
   {% if api_keys %}
   <div class="scroll">
-    <table class="compact border">
+    <table class="compact border mw-stack">
       <thead><tr><th>Name</th><th>Key</th><th>Status</th><th class="num">Requests</th><th class="num">Tokens</th><th>Last used</th><th class="num">Actions</th></tr></thead>
       <tbody>
         {% for k in api_keys %}
@@ -46,7 +46,7 @@
             <span class="mw-row-name">{{ k['name'] }}</span>
             {% if k['description'] %}<span class="mw-row-sub" title="{{ k['description'] }}">{{ k['description'] }}</span>{% endif %}
           </td>
-          <td>
+          <td data-label="Key">
             <div class="mw-token">
               {% set masked = '••••••••' ~ k['token'][-4:] %}
               <code class="mw-token-value" role="button" tabindex="0"
@@ -55,17 +55,17 @@
               <button type="button" class="mw-copy" data-copy-token="{{ k['token'] }}" aria-label="Copy this key">Copy</button>
             </div>
           </td>
-          <td class="mw-status">
+          <td class="mw-status" data-label="Status">
             {% if k['enabled'] %}<span class="pill ok">enabled</span>
             {% else %}<span class="pill">disabled</span>{% endif %}
             {% if k['expires_at'] %}
             <span class="pill warn" title="Expires {{ k['expires_at'] | datetime }} UTC">temporary</span>
             {% endif %}
           </td>
-          <td class="num">{{ k['request_count'] }}</td>
-          <td class="num">{{ k['token_count'] | tokens }}</td>
-          <td>{{ k['last_used_at'] | relative }}</td>
-          <td>
+          <td class="num" data-label="Requests">{{ k['request_count'] }}</td>
+          <td class="num" data-label="Tokens">{{ k['token_count'] | tokens }}</td>
+          <td data-label="Last used">{{ k['last_used_at'] | relative }}</td>
+          <td class="mw-cell-actions">
             <div class="mw-row-actions">
               <a class="mw-row-action" href="{{ url_for('admin.key_edit', key_id=k['id']) }}">Edit</a>
               <form method="post" class="inline-form">
