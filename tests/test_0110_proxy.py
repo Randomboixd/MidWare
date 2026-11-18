@@ -336,3 +336,113 @@ def test_rate_usage_claim_group_is_all_or_nothing(configured):
     # An entry with no limits answers trivially and claims nothing.
     third = db.claim_rate_usage_group([("api_key", key_id, {}), ("premodel", premodel_id, {"minute": 1})])
     assert third == [({}, True), ({"minute": 1}, False)]
+
+
+# -- review follow-ups: the settle path, completed -------------------------------
+
+
+class _CloseTracking(StubResponse):
+    """A stub upstream that records whether the proxy closed it."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _workflow_premodel(db, name: str) -> None:
+    workflow = {
+        "version": 1,
+        "reasoning": True,
+        "final": {"messages": [{"kind": "core_context"}], "model_override": ""},
+        "nodes": [
+            {
+                "type": "api_request",
+                "name": "inspect",
+                "system_prompt": "You inspect.",
+                "prompt": "Do it.",
+                "timeout_seconds": 30,
+            }
+        ],
+    }
+    db.create_premodel(
+        name=name,
+        slug=name.lower(),
+        route_id=db.active_route()["id"],
+        model=f"{name.lower()}-model",
+        use_workflow=True,
+        workflow_json=json.dumps(workflow),
+    )
+
+def test_client_disconnect_on_workflow_stream_settles_subcall_spend(configured):
+    """Sub-calls already spent real tokens when the client hangs up on the
+    final stream; their counters must settle like every other ending."""
+    app, token = configured
+    db = app.extensions["midware_db"]
+    key_id = db.list_api_keys()[0]["id"]
+    db.update_api_key(
+        key_id, limit_tokens_enabled=True, limit_tokens_hour=True, max_tokens_hour=100_000
+    )
+    _workflow_premodel(db, "Spend")
+    sub_reply = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 111, "completion_tokens": 222, "total_tokens": 333},
+    }
+    chunks = [
+        b'data: {"id":"1","choices":[{"delta":{"content":"he"}}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    install_stub(
+        app,
+        StubResponse(stream_chunks=chunks, headers={"content-type": "text/event-stream"}),
+        posts=[StubResponse(json_body=sub_reply)],
+    )
+    client = app.test_client()
+
+    response = _streamed_call(
+        client, token, {"model": "<p>-spend", "stream": True, "messages": [{"role": "user", "content": "Hi"}]}
+    )
+    iterator = response.response
+    assert next(iterator)  # the first upstream chunk is on the wire
+    response.close()  # the client hangs up mid-stream
+
+    rows = db.list_requests(limit=5)
+    assert len(rows) == 1
+    assert rows[0]["error"] == "client_disconnected"
+    # The sub-call spend (111 + 222) is settled into the key's token window.
+    assert db.rate_usage_amounts(key_id, "tokens", ("hour",))["hour"] == 333
+
+
+def test_disconnect_at_the_injected_reasoning_event_settles_and_closes(configured):
+    """The workflow's injected reasoning event is the first pause point on the
+    wire; a client hanging up there must be settled too, and the upstream
+    response closed, not left to pool reaping."""
+    app, token = configured
+    db = app.extensions["midware_db"]
+    _workflow_premodel(db, "Think")
+    sub_reply = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "ok", "reasoning_content": "the plan"}}
+        ]
+    }
+    final = _CloseTracking(
+        stream_chunks=[b"data: [DONE]\n\n"],
+        headers={"content-type": "text/event-stream"},
+    )
+    install_stub(app, final, posts=[StubResponse(json_body=sub_reply)])
+    client = app.test_client()
+
+    response = _streamed_call(
+        client, token, {"model": "<p>-think", "stream": True, "messages": [{"role": "user", "content": "Hi"}]}
+    )
+    iterator = response.response
+    first = next(iterator)  # the injected reasoning event is the first pause point
+    assert b"reasoning_content" in first
+    response.close()  # the client hangs up before any upstream byte
+
+    rows = db.list_requests(limit=5)
+    assert len(rows) == 1, "a disconnect at the injected event must still settle one row"
+    assert rows[0]["error"] == "client_disconnected"
+    assert final.closed, "the upstream response must be closed, not leaked"

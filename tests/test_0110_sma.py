@@ -84,12 +84,12 @@ def test_replay_inside_the_acceptance_window_is_refused_on_both_attempts(
     client, db = sma_env
     signing, account_id, token = _active(client, db, scopes=[ROUTE_WRITE])
 
-    # A captured request signed ~the whole skew window ahead of receipt: the
-    # server must accept it (skew 290 <= 300), and it stays acceptable until
-    # the *signed* timestamp ages out at +590 -- long past a receipt-anchored
-    # +360 nonce lifetime.
+    # A captured request signed well ahead of receipt: the server must accept
+    # it (skew 250 <= 300, leaving margin for a slow runner), and it stays
+    # acceptable until the *signed* timestamp ages out at +550 -- long past a
+    # receipt-anchored +360 nonce lifetime.
     start = time.time()
-    stamp = str(int(start) + 290)
+    stamp = str(int(start) + 250)
     nonce = secrets.token_urlsafe(16)
     path = f"{BASE}/interact/routes/create"
     raw = json.dumps({"name": "probed", "target_host": "https://up.example.com"}).encode()

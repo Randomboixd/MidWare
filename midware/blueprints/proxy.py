@@ -913,12 +913,6 @@ def _forward(ctx: dict, path: str) -> Response:
     capture_limit = _capture_limit()
 
     def generate() -> Iterator[bytes]:
-        if workflow_reasoning and upstream.status_code < 400:
-            injected = {
-                "id": "midware-workflow",
-                "choices": [{"delta": {"reasoning_content": workflow_reasoning}}],
-            }
-            yield f"data: {json.dumps(injected, ensure_ascii=False)}\n\n".encode("utf-8")
         buffer = bytearray()
         settled = False  # a stream is settled exactly once, whatever its ending
 
@@ -930,6 +924,14 @@ def _forward(ctx: dict, path: str) -> Response:
             persist(**kwargs)
 
         try:
+            # The workflow's reasoning may open the stream before the upstream
+            # bytes; a client hanging up there is settled like any other pause.
+            if workflow_reasoning and upstream.status_code < 400:
+                injected = {
+                    "id": "midware-workflow",
+                    "choices": [{"delta": {"reasoning_content": workflow_reasoning}}],
+                }
+                yield f"data: {json.dumps(injected, ensure_ascii=False)}\n\n".encode("utf-8")
             for chunk in upstream.iter_bytes():
                 if chunk:
                     if len(buffer) < capture_limit:
@@ -948,6 +950,14 @@ def _forward(ctx: dict, path: str) -> Response:
                     streamed=True,
                     response_body=bytes(buffer).decode("utf-8", "replace"),
                     error="client_disconnected",
+                    # Workflow sub-calls already spent real tokens; settle
+                    # their counters even though the row itself stays at zero.
+                    rate_tokens=(
+                        max(0, int(workflow_usage.get("prompt") or 0))
+                        + max(0, int(workflow_usage.get("completion") or 0))
+                    )
+                    if workflow_usage
+                    else None,
                 )
             except Exception:
                 current_app.logger.warning(
