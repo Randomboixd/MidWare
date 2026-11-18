@@ -75,7 +75,7 @@
     </div>
   </div>
   <div class="heat-legend">
-    <span>{{ heatmap.active_days }} active days</span>
+    <span>{{ heatmap.active_days }} active day{{ '' if heatmap.active_days == 1 else 's' }}</span>
     <span class="heat-scale">fewer</span>
     <span class="swatch" data-level="1"></span>
     <span class="swatch" data-level="2"></span>
@@ -90,24 +90,25 @@
     <h2>Recent requests</h2>
     {% if recent %}
     <div class="scroll">
-      <table class="compact border">
+      <table class="compact border mw-stack">
         <thead>
           <tr><th>When</th><th>Model</th><th>Key</th><th>Status</th><th class="num">Tokens</th><th class="num">Latency</th></tr>
         </thead>
         <tbody>
           {% for r in recent %}
           <tr>
-            <td><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}">{{ r['created_at'] | datetime }}</a></td>
-            <td class="mono">{{ r['model'] or 'none' }}</td>
-            <td>{{ r['api_key_name'] or 'none' }}</td>
-            <td>
+            <td data-label=""><a href="{{ url_for('dashboard.request_detail', request_id=r['id']) }}"
+                   title="{{ r['created_at'] | datetime }} UTC">{{ r['created_at'] | relative }}</a></td>
+            <td class="mono" data-label="Model">{{ r['model'] or 'none' }}</td>
+            <td data-label="Key">{{ r['api_key_name'] or 'none' }}</td>
+            <td data-label="Status">
               <span class="pill {{ 'ok' if r['status_code'] < 400 else ('warn' if r['status_code'] < 500 else 'bad') }}">
                 {{ r['status_code'] }}
               </span>
               {% if r['streamed'] %}<span class="pill">stream</span>{% endif %}
             </td>
-            <td class="num">{{ r['total_tokens'] | tokens }}</td>
-            <td class="num">{{ r['latency_ms'] | ms }}</td>
+            <td class="num" data-label="Tokens">{{ r['total_tokens'] | tokens }}</td>
+            <td class="num" data-label="Latency">{{ r['latency_ms'] | ms }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -124,14 +125,14 @@
     {% if hosts %}
     {% set host_max = (hosts | map(attribute='total_tokens') | max) or 1 %}
     <div class="scroll">
-      <table class="compact border">
+      <table class="compact border mw-stack">
         <thead><tr><th>Host</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
         <tbody>
           {% for h in hosts[:8] %}
           <tr>
-            <td>{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
-            <td class="num">{{ h.requests }}</td>
-            <td class="num">{{ h.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * h.total_tokens / host_max) | round(1) }}%"></i></span></td>
+            <td data-label="Host">{% if h.host == 'default' %}<span class="pill">default</span>{% else %}<span class="pill ok">[{{ h.host }}]</span>{% endif %}</td>
+            <td class="num" data-label="Req">{{ h.requests }}</td>
+            <td class="num" data-label="Tokens">{{ h.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * h.total_tokens / host_max) | round(1) }}%"></i></span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -145,14 +146,14 @@
     {% if models %}
     {% set model_max = (models | map(attribute='total_tokens') | max) or 1 %}
     <div class="scroll">
-      <table class="compact border">
+      <table class="compact border mw-stack">
         <thead><tr><th>Model</th><th class="num">Req</th><th class="num">Tokens</th></tr></thead>
         <tbody>
           {% for m in models[:8] %}
           <tr>
-            <td class="mono">{{ m.model }}</td>
-            <td class="num">{{ m.requests }}</td>
-            <td class="num">{{ m.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * m.total_tokens / model_max) | round(1) }}%"></i></span></td>
+            <td class="mono" data-label="Model">{{ m.model }}</td>
+            <td class="num" data-label="Req">{{ m.requests }}</td>
+            <td class="num" data-label="Tokens">{{ m.total_tokens | tokens }}<span class="bar"><i style="inline-size:{{ (100 * m.total_tokens / model_max) | round(1) }}%"></i></span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -167,13 +168,13 @@
     <p><small>{{ model_slugs | length }} slug(s); copy one straight into your client.
        The default route’s models have no prefix.</small></p>
     <div class="scroll">
-      <table class="compact border">
+      <table class="compact border mw-stack">
         <thead><tr><th>Route</th><th>Model</th></tr></thead>
         <tbody>
           {% for m in model_slugs[:12] %}
           <tr>
-            <td>{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
-            <td class="mono">{{ m.slug }}</td>
+            <td data-label="Route">{% if m.is_default %}<span class="pill ok">default</span>{% else %}<span class="pill">[{{ m.route_name }}]</span>{% endif %}</td>
+            <td class="mono" data-label="Model">{{ m.slug }}</td>
           </tr>
           {% endfor %}
         </tbody>

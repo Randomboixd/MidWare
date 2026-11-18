@@ -8,7 +8,9 @@
 
   var button = document.getElementById("mw-more");
   var panel = document.getElementById("mw-more-panel");
+
   if (!button || !panel) {
+    startAtToday();
     return;
   }
 
@@ -46,4 +48,19 @@
       setOpen(false);
     });
   });
+
+  startAtToday();
 })();
+
+/* A year of days is a wide strip; on a phone the interesting end is today, so
+ * start there instead of at a year ago. Defined outside, because a page without
+ * the More button still has the scan. */
+function startAtToday() {
+  var scan = document.querySelector(".heatmap-wrap");
+  if (!scan || !window.matchMedia("(max-width: 700px)").matches) {
+    return;
+  }
+  window.requestAnimationFrame(function () {
+    scan.scrollLeft = scan.scrollWidth;
+  });
+}
