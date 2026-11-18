@@ -665,18 +665,23 @@ def settings():
             flash(saved, "success")
             return redirect(url_for("admin.settings"))
 
+        plain_http_refused = False
         if request.form.get("sma_present"):
             # The master switch lives in the features form; this submit carries
             # only the transport opt-in. It stays consistent on a forged
             # submit by refusing the opt-in while the master switch is off.
             if request.form.get("sma_allow_present"):
                 master_on = db.sma_enabled(current_app.config["SMA_ENABLED"])
-                db.set_sma_allow_plain_http(master_on and _form_bool("sma_allow_plain_http"))
+                opt_in = _form_bool("sma_allow_plain_http")
+                plain_http_refused = opt_in and not master_on
+                db.set_sma_allow_plain_http(master_on and opt_in)
 
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
         saved = f"Settings saved. Request log limit set to {log_limit}."
+        if plain_http_refused:
+            saved += " Plain HTTP stays off while the API is off."
         if "premodel_prefix" in request.form:
             prefix = normalize_prefix(request.form.get("premodel_prefix"))
             if prefix is None:

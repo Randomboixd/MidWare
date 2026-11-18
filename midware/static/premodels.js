@@ -14,7 +14,6 @@
   var modelList = document.getElementById("premodel-models");
   var paramsEnabled = document.getElementById("params-enabled");
   var paramsPanel = document.getElementById("params-panel");
-  var limitsToggle = document.getElementById("limits-toggle");
   var limitsPanel = document.getElementById("limits-panel");
   var limitTokens = document.getElementById("limit-tokens");
   var limitTokensPanel = document.getElementById("limit-tokens-panel");
@@ -135,7 +134,7 @@
         bits.push("depth " + prompt.injection_depth);
         bits.push("order " + prompt.injection_order);
       }
-      meta.textContent = bits.join(" · ");
+      meta.textContent = bits.join(", ");
       row.appendChild(box);
       row.appendChild(title);
       row.appendChild(meta);
@@ -149,7 +148,7 @@
     syncJson();
     render();
     if (source) {
-      presetStatus.textContent = source + " · " + presetStatus.textContent;
+      presetStatus.textContent = source + ": " + presetStatus.textContent;
     }
   }
 
@@ -206,13 +205,6 @@
   if (paramsEnabled) {
     paramsEnabled.addEventListener("change", updateParamsPanel);
     updateParamsPanel();
-  }
-
-  if (limitsToggle && limitsPanel) {
-    limitsToggle.addEventListener("click", function () {
-      limitsPanel.hidden = false;
-      limitsToggle.hidden = true;
-    });
   }
 
   function syncLimitPanels() {
