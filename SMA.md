@@ -31,7 +31,14 @@ API**. Two switches:
 | Allow over plain HTTP | off | Off → HTTP gets `403 insecure_transport`; HTTPS always works. |
 
 If MidWare runs behind a TLS terminator, the admin sets
-`MIDWARE_TRUST_PROXY_HOPS` so the server sees the original scheme.
+`MIDWARE_TRUST_PROXY_HOPS` so the server sees the original scheme. If it runs
+behind a reverse proxy, the admin should also set `MIDWARE_PUBLIC_URL` (for
+example `https://midware.example.com`): the consent link returned by
+`ActivateSystemAccount` is built from it. Without it the link follows the
+request's `Host` header and scheme, which the caller can forge — a malicious
+enrollment would get back a link aimed at its own pixel-perfect copy of the
+consent page — and a proxy that does not set `X-Forwarded-Proto` downgrades it
+to `http://`.
 
 The admin also needs a control-panel login. The consent page is guarded by it,
 and approval is refused while no account exists.
@@ -175,9 +182,13 @@ Rules that bite:
   pass it as `data=`/`content=`. The library in section 7 does that.
 - **An empty body is `b""`**, digest
   `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
-- A nonce may be used **once per account, forever**. Reuse is
-  `401 replayed_nonce`. Do not reuse a nonce across a retry: generate a fresh one
-  and a fresh timestamp for every attempt.
+- A nonce may be used **once per account**. The server remembers it until 60 s
+  after the request's timestamp is no longer acceptable — the full clock-skew
+  window plus 60 s, anchored to the *signed timestamp*, never to the moment
+  the request arrived. A captured request therefore cannot be replayed
+  anywhere inside its acceptance window, including one signed up to 300 s into
+  the future. Reuse is `401 replayed_nonce`. Do not reuse a nonce across a
+  retry: generate a fresh one and a fresh timestamp for every attempt.
 
 ### 3.3 Server responses
 
@@ -336,12 +347,16 @@ link (only the newest works).
 
 The admin must be signed into the MidWare control panel to open it, and must be
 on HTTPS (or the plain-HTTP opt-in must be on). The link is single-use and lives
-15 minutes. The page reads `This will allow "<name>" by "<company>" to:`, lists
+15 minutes. Its origin is `MIDWARE_PUBLIC_URL` when set (see section 1), and
+otherwise derived from the request's Host and scheme. The page reads `This will
+allow "<name>" by "<company>" to:`, lists
 each permission as a sentence with the raw scope id underneath, and marks the
 abusable ones **DANGEROUS** with a one-line reason. Company is self-declared and
 labelled as such; it is not verified.
 
-If the request contains any scope in the dangerous namespace, the page grows a
+If the request contains any dangerous scope — anything in the
+`midware.dangerous.` namespace, or one of the flagged scopes section 5 lists
+under "dangerous today" — the page grows a
 red panel listing those scopes with what each one enables, and a password field
 above the buttons; the button reads **Accept** instead of **Allow**. The POST
 carries the password and the server verifies it with the admin account's
@@ -549,7 +564,11 @@ The hidden `MSQ Measurements` system key is never visible or toggleable here
 ```
 
 `route_id` must exist. `max_ttft_ms`/`max_total_ms` use `-1` to disable a budget.
-`hardcore_json` may be an object (stored canonically) or a JSON string. A probe
+`hardcore_json` may be an object (stored canonically) or a JSON string.
+`interval_seconds` is clamped to at least the scheduler's wake interval
+(`MIDWARE_MSQ_SCHEDULER_INTERVAL`, 60 s by default), on create and update alike:
+a recorder pays a real upstream probe per tick, so this API will not mint one
+faster than the panel's own one-minute minimum. A probe
 spends real upstream tokens, so `run` is throttled and every run is audited.
 
 #### `GET /interact/msq/<id>/checks`
@@ -756,32 +775,41 @@ delete.
 | Scope | Grants |
 | --- | --- |
 | `midware.read:routes` | List/get routes (never the upstream key) |
-| `midware.write:routes` | Create and delete routes |
-| `midware.edit:routes` | Update route fields |
-| `midware.write:apikeys` | Mint keys, restricted to named routes/models |
+| `midware.write:routes` | Create and delete routes — **dangerous** |
+| `midware.edit:routes` | Update route fields — **dangerous** |
+| `midware.write:apikeys` | Mint keys, restricted to named routes/models — **dangerous** |
 | `midware.read:apikeysowned` | Read keys this account minted |
-| `midware.edit:apikeysowned` | Update/delete keys this account minted |
+| `midware.edit:apikeysowned` | Update/delete keys this account minted — **dangerous** |
 | `midware.read:apikeystatus` | Read whether any API key is enabled or disabled |
-| `midware.write:apikeystatus` | Enable/disable any API key, including ones it did not create |
+| `midware.write:apikeystatus` | Enable/disable any API key, including ones it did not create — **dangerous** |
 | `midware.read:msq` | Read recorders |
-| `midware.write:msq` | Create/delete recorders, run a probe |
-| `midware.edit:msq` | Update a recorder |
+| `midware.write:msq` | Create/delete recorders, run a probe — **dangerous**: can start probes that spend your upstream credit and delete any recorder |
+| `midware.edit:msq` | Update a recorder — **dangerous** |
 | `midware.read:requests` | Read the request log — metadata only, never prompts or responses |
 | `midware.read:usage` | Read usage totals, daily series and breakdowns |
 | `midware.read:models` | Read the cached model catalogue per route |
-| `midware.dangerous.read:request_content` | Read captured request/response text for keys **this account owns** |
+| `midware.dangerous.read:request_content` | Read captured request/response text for keys **this account owns** — **dangerous** |
 
 The consent page renders these as sentences, not ids ("Read request data"), and
 marks the ones that can be abused with a **DANGEROUS** badge and a one-line
-reason. It is presentation only: the grant is still the scope list, and the
-tamper hash covers the set.
+reason. The badge is not decoration: a dangerous scope cannot be granted with a
+single click. The consent page shows every dangerous scope in a red panel, and
+the approval only takes effect when the admin re-types their MidWare password
+in the same form. A wrong or missing password changes nothing, and the attempt
+budget is the *sign-in* budget — a consent link cannot be used to brute-force
+the password, because a lockout burns the link.
 
-Scopes in the `midware.dangerous.` namespace are dangerous by naming
-convention. They cannot be granted with a single click: the consent page shows
-them in a red panel and the approval only takes effect when the admin re-types
-their MidWare password in the same form. A wrong or missing password changes
-nothing, and the attempt budget is the *sign-in* budget — a consent link cannot
-be used to brute-force the password, because a lockout burns the link.
+Dangerous today: everything in the `midware.dangerous.` namespace (dangerous by
+naming convention, so the gate never depends on somebody remembering to update
+a list), plus the scopes marked **dangerous** in the table above:
+
+- `midware.write:routes` — can add a route that points at a host it controls
+- `midware.edit:routes` — can repoint an existing route or swap its upstream key
+- `midware.write:apikeys` — can mint credentials that spend your upstream quota
+- `midware.edit:apikeysowned` — can widen what the keys it minted may reach
+- `midware.write:apikeystatus` — can disable every key on the server, including yours
+- `midware.write:msq` — can start probes that spend your upstream credit and delete any recorder
+- `midware.edit:msq` — can change scoring so failures look like passes
 
 Not grantable: `midware.write:self`. Every account can call
 `DisableSystemAccount` and read `interact/self` without asking.
@@ -806,6 +834,7 @@ An untouched enrollment, or an approved one that is never exchanged, becomes
 | Thing | Value (env override) |
 | --- | --- |
 | Clock skew allowed | 300 s (`MIDWARE_SMA_NONCE_WINDOW_SECONDS`) |
+| Nonce retention | the later of receipt and the signed timestamp, + 360 s |
 | Pending account lifetime | 24 h (`MIDWARE_SMA_PENDING_TTL_SECONDS`) |
 | Consent link lifetime | 15 min (`MIDWARE_SMA_ACTIVATION_TTL_SECONDS`) |
 | Enrollments per address | 5/hour (`MIDWARE_SMA_ENROLL_PER_HOUR`) |
@@ -817,6 +846,7 @@ An untouched enrollment, or an approved one that is never exchanged, becomes
 | Request log page | 500 rows maximum |
 | Usage window | 365 days maximum |
 | Request content | 256 KiB per body by default, 8 MiB ceiling |
+| Consent link origin | `MIDWARE_PUBLIC_URL` when set, else the request's Host/scheme |
 
 A denied account keeps its pending token so `status` can report `denied`, but
 nothing else accepts it. An expired enrollment has its token hashes cleared, so

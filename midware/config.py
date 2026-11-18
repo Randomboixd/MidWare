@@ -115,6 +115,15 @@ TRUSTED_PROXIES = tuple(
 # it is opt-in even when the peer is trusted.
 TRUST_FORWARDED_FOR = _env_bool("MIDWARE_TRUST_FORWARDED_FOR", False)
 
+# The origin (scheme + host [+ port]) this MidWare is reachable on from the
+# outside, e.g. "https://midware.example.com". Set it when a reverse proxy or
+# TLS terminator serves MidWare: URLs the server hands out for a browser to
+# open elsewhere (the SMA consent link) are built from it, so a forged Host
+# header cannot point the admin at an attacker's copy of a page. Empty means
+# derive them from the request, which is only correct when clients talk to
+# MidWare directly.
+PUBLIC_URL = os.environ.get("MIDWARE_PUBLIC_URL", "")
+
 # -- System Management Accounts (SMA) ---------------------------------------
 # A signed, scoped API for automation under /_midware/api. Requests carry an
 # Ed25519 signature over the method, path, body digest, timestamp and a nonce,

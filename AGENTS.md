@@ -373,7 +373,10 @@ Do not break these; several have regression tests.
   `SMA_ACTIVATION_TTL_SECONDS`); the admin opens `/_midware/authorize/<token>`,
   which is admin-guarded, shows the stored scopes plus the requester's address and
   redirect host, warns on plain HTTP, and requires a session CSRF token on a
-  POST-only decision. Approval flips `pending -> approved` atomically (`WHERE
+  POST-only decision. The handed-back consent URL is pinned to
+  `MIDWARE_PUBLIC_URL` (config `PUBLIC_URL`) when set, so a forged `Host`
+  header cannot aim the admin at a phishing copy; unset means the request's
+  own Host/scheme, correct only for unproxied installs. Approval flips `pending -> approved` atomically (`WHERE
   state='pending'`); a payload-digest mismatch is refused with 409 instead of
   granting the edited scopes. Denial retires the consent link but keeps the
   pending token so `status` can report `denied`. `exchange` (signed, `approved`

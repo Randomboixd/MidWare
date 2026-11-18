@@ -93,7 +93,11 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
         "Enable or disable any API key, including keys this account did not create."
     ),
     READ_MSQ: "Read Model Service Quality recorders and their results.",
-    WRITE_MSQ: "Add and delete MSQ recorders, and run checks now.",
+    WRITE_MSQ: (
+        "Add and delete MSQ recorders, and run checks now. Every tick is a real "
+        "upstream call, so this can start probes that spend your upstream "
+        "credit and delete any recorder."
+    ),
     EDIT_MSQ: "Change an MSQ recorder's prompt, model, schedule or scoring.",
     READ_REQUESTS: (
         "Read the request log: model, route, key name, status, latency and token "
@@ -138,6 +142,7 @@ SCOPE_DANGER: dict[str, str] = {
     WRITE_APIKEYS: "Can mint credentials that spend your upstream quota",
     EDIT_APIKEYS_OWNED: "Can widen what the keys it minted may reach",
     WRITE_APIKEYS_STATUS: "Can disable every key on the server, including yours",
+    WRITE_MSQ: "Can start probes that spend your upstream credit and delete any recorder",
     EDIT_MSQ: "Can change scoring so failures look like passes",
     READ_REQUEST_CONTENT: "Can read the text of conversations this app carried",
 }
@@ -154,6 +159,7 @@ SCOPE_CONSEQUENCE: dict[str, str] = {
     WRITE_APIKEYS_STATUS: "It can switch off every API key on this server.",
     EDIT_ROUTES: "It can redirect your traffic to another host.",
     WRITE_ROUTES: "It can add a route that points anywhere it likes.",
+    WRITE_MSQ: "It can start probes that spend your upstream credit and delete any recorder.",
     EDIT_MSQ: "It can make failing routes look healthy.",
     EDIT_APIKEYS_OWNED: "It can widen what the keys it created may reach.",
 }

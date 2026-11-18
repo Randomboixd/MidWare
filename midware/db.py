@@ -1663,14 +1663,23 @@ class Database:
             return cur.rowcount
 
     def consume_system_nonce(self, account_id: int, nonce: str, expires_at: str) -> bool:
-        """Record a nonce; ``False`` means it was already presented (a replay)."""
+        """Record a nonce; ``False`` means it was already presented (a replay).
+
+        Expired rows are pruned *before* the insert. Pruning after would let a
+        refused replay delete its own row, so the next identical replay would
+        execute instead of being refused. Pruning before is safe only because
+        the caller anchors retention past the request's acceptance window: a
+        row that is expired here belongs to a request whose timestamp is
+        already stale, which the clock check rejects before the nonce is
+        consulted.
+        """
         now = to_iso(utcnow())
         with self.write() as conn:
+            conn.execute("DELETE FROM system_nonces WHERE expires_at <= ?", (now,))
             cur = conn.execute(
                 "INSERT OR IGNORE INTO system_nonces (account_id, nonce, expires_at) VALUES (?, ?, ?)",
                 (account_id, nonce, expires_at),
             )
-            conn.execute("DELETE FROM system_nonces WHERE expires_at <= ?", (now,))
             return cur.rowcount == 1
 
     def record_system_event(

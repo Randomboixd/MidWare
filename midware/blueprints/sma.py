@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -411,7 +411,15 @@ def _authenticate(db: Any, body: bytes) -> Any:
     )
 
     # Only now, after the signature proves possession, is the nonce burned.
-    if not db.consume_system_nonce(int(account["id"]), nonce, sma.expiry(window + 60)):
+    # Retention is anchored to the *signed* timestamp, not to receipt:
+    # clock_skew accepts a timestamp up to ``window`` seconds in the future,
+    # and such a request stays acceptable until it ages out, so a
+    # receipt-anchored row would expire while replays of the request are
+    # still valid. The +60 s margin keeps the row alive past the whole
+    # acceptance window even when the clocks disagree at the edges.
+    signed_at = datetime.fromtimestamp(float(timestamp), timezone.utc)
+    anchor = max(utcnow(), signed_at)
+    if not db.consume_system_nonce(int(account["id"]), nonce, sma.expiry(window + 60, now=anchor)):
         raise sma.SmaError("replayed_nonce", "That request was already used.", 401)
 
     g.sma_nonce = nonce
@@ -614,6 +622,23 @@ def enroll() -> Any:
 # -- activation --------------------------------------------------------------
 
 
+def _external_url(endpoint: str, **values: Any) -> str:
+    """An absolute URL meant to be opened somewhere other than this request.
+
+    ``url_for(..., _external=True)`` resolves against the request's Host
+    header and scheme, and an unauthenticated enrollment can forge both: a
+    consent link handed back on the attacker's origin is a phishing page the
+    admin will actually sign into. A deployment states its real origin once
+    via ``PUBLIC_URL``; deriving from the request stays the fallback, which is
+    correct only when clients reach MidWare directly.
+    """
+    public = (current_app.config.get("PUBLIC_URL") or "").strip()
+    path = url_for(endpoint, **values)
+    if public:
+        return f"{public.rstrip('/')}{path}"
+    return url_for(endpoint, **values, _external=True)
+
+
 @api_bp.post("/ActivateSystemAccount")
 def activate() -> Any:
     db = get_db()
@@ -629,7 +654,7 @@ def activate() -> Any:
     return jsonify(
         {
             "state": account["state"],
-            "authorization_url": url_for("sma_consent.consent", token=token, _external=True),
+            "authorization_url": _external_url("sma_consent.consent", token=token),
             "expires_at": expires,
         }
     )
@@ -1140,7 +1165,11 @@ def _msq_fields(db: Any, body: dict[str, Any], *, creating: bool) -> dict[str, A
                 raise sma.SmaError("route_not_found", "No such route.", 404)
             fields["route_id"] = route_id
     if "interval_seconds" in body:
-        fields["interval_seconds"] = max(1, _int_field(body, "interval_seconds", 3600))
+        # Each tick is a paid upstream probe, and the scheduler only wakes
+        # every MSQ_SCHEDULER_INTERVAL seconds anyway: an SMA caller cannot
+        # tighten a recorder below that, matching the panel's own minimum.
+        floor = max(1, int(current_app.config["MSQ_SCHEDULER_INTERVAL"]))
+        fields["interval_seconds"] = max(floor, _int_field(body, "interval_seconds", 3600))
     for key in ("system_prompt", "user_prompt", "slop_list"):
         if key in body:
             fields[key] = _str_field(body, key)
