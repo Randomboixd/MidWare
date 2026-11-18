@@ -9,10 +9,8 @@
     <h1>Model Service Quality</h1>
     <p>Periodic probes that score how well a model is answering over time.</p>
   </div>
-  {% if not msq_disabled %}
-  <p style="margin:0">
-    <a class="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ Recorder</a>
-  </p>
+  {% if not msq_disabled and cards %}
+  <a class="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ recorder</a>
   {% endif %}
 </div>
 
@@ -40,25 +38,69 @@
 {% endif %}
 
 {% if cards %}
-<div class="msq-grid">
-  {% for card in cards %}
-  {% set r = card.recorder %}
-  {% set ev = card.evaluation %}
-  {% set latest = ev.latest %}
-  <article class="msq-card">
-    <header class="msq-card-head">
-      <div>
-        <a href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}"><strong>{{ r['name'] }}</strong></a>
-        <div class="msq-sub mono">
-          {{ card.route_name or 'no route' }}, {{ r['model'] or 'none' }}
-          {% if not r['enabled'] %}<span class="pill warn">paused</span>{% endif %}
-        </div>
+{% for card in cards %}
+{% set r = card.recorder %}
+{% set ev = card.evaluation %}
+{% set latest = ev.latest %}
+<details class="mw-fold msq-recorder" open>
+  <summary class="mw-fold-head">
+    <a class="mw-fold-title" href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}">{{ r['name'] }}</a>
+    <span class="mw-meta">
+      {{ card.route_name or 'no route' }}, {{ r['model'] or 'none' }}
+      {%- if not r['enabled'] %} <span class="pill warn">paused</span>{% endif %}
+    </span>
+    <span class="pill {{ 'ok' if ev.status == 'working' else ('bad' if ev.status in ('degraded', 'failing') else 'warn') }}"
+          title="{{ ev.sample_count }} check(s) in the last {{ ev.age_hours }}h">
+      {{ ev.label }}
+    </span>
+    <span class="mw-fold-digest">
+      {%- if ev.average_score is not none %}avg {{ '%.0f' | format(ev.average_score) }}{% else %}no data{% endif %},
+      last run {{ r['last_run_at'] | relative if r['last_run_at'] else 'never' }}
+    </span>
+  </summary>
+  <div class="mw-fold-body">
+    <section class="mw-figures" aria-label="Latest check at a glance">
+      <div class="mw-figure">
+        <span class="mw-figure-label">Score</span>
+        {% if latest %}
+        <span class="mw-figure-value{{ ' is-error' if not latest['ok'] }}">{{ '%.0f' | format(latest['score']) }}</span>
+        {% else %}
+        <span class="mw-figure-value is-quiet">no data</span>
+        {% endif %}
       </div>
-      <span class="pill {{ 'ok' if ev.status == 'working' else ('bad' if ev.status in ('degraded', 'failing') else 'warn') }}"
-            title="{{ ev.sample_count }} check(s) in the last {{ ev.age_hours }}h">
-        {{ ev.label }}
-      </span>
-    </header>
+      <div class="mw-figure">
+        <span class="mw-figure-label">Avg</span>
+        {% if ev.average_score is not none %}
+        <span class="mw-figure-value is-small">{{ '%.0f' | format(ev.average_score) }}</span>
+        {% else %}
+        <span class="mw-figure-value is-small is-quiet">no data</span>
+        {% endif %}
+      </div>
+      <div class="mw-figure">
+        <span class="mw-figure-label">TTFT</span>
+        {% if latest %}
+        <span class="mw-figure-value is-small">{{ latest['ttft_ms'] | ms }}</span>
+        {% else %}
+        <span class="mw-figure-value is-small is-quiet">no data</span>
+        {% endif %}
+      </div>
+      <div class="mw-figure">
+        <span class="mw-figure-label">Total</span>
+        {% if latest %}
+        <span class="mw-figure-value is-small">{{ latest['total_ms'] | ms }}</span>
+        {% else %}
+        <span class="mw-figure-value is-small is-quiet">no data</span>
+        {% endif %}
+      </div>
+      <div class="mw-figure">
+        <span class="mw-figure-label">Tok/s</span>
+        {% if latest and latest['tokens_per_second'] %}
+        <span class="mw-figure-value is-small">{{ '%.1f' | format(latest['tokens_per_second']) }}</span>
+        {% else %}
+        <span class="mw-figure-value is-small is-quiet">no data</span>
+        {% endif %}
+      </div>
+    </section>
 
     {% if card.hardcore %}
     <div class="msq-hardcore">
@@ -67,19 +109,6 @@
       {% if card.hardcore.get('needle') %}<span class="pill">needle</span>{% endif %}
     </div>
     {% endif %}
-
-    <div class="msq-metrics">
-      <div><span class="msq-metric-label">Score</span>
-        <span class="msq-metric-value">{{ '%.0f' | format(latest['score']) if latest else 'no data' }}</span></div>
-      <div><span class="msq-metric-label">Avg</span>
-        <span class="msq-metric-value">{{ '%.0f' | format(ev.average_score) if ev.average_score is not none else 'no data' }}</span></div>
-      <div><span class="msq-metric-label">TTFT</span>
-        <span class="msq-metric-value">{{ latest['ttft_ms'] | ms if latest else 'no data' }}</span></div>
-      <div><span class="msq-metric-label">Total</span>
-        <span class="msq-metric-value">{{ latest['total_ms'] | ms if latest else 'no data' }}</span></div>
-      <div><span class="msq-metric-label">Tok/s</span>
-        <span class="msq-metric-value">{{ '%.1f' | format(latest['tokens_per_second']) if latest and latest['tokens_per_second'] else 'no data' }}</span></div>
-    </div>
 
     <div class="msq-chart" data-recorder="{{ r['id'] }}" data-threshold="{{ threshold }}">
       <svg class="msq-chart-svg" viewBox="0 0 300 90" preserveAspectRatio="none" role="img"
@@ -90,34 +119,36 @@
       {% endif %}
     </div>
 
-    <footer class="msq-actions">
-      <small>Every {{ (r['interval_seconds'] / 60) | round(1) }} min ·
-        last run {{ r['last_run_at'] | relative if r['last_run_at'] else 'never' }}</small>
-      <div class="msq-buttons">
-        <a class="button border small" href="{{ url_for('msq.recorder_edit', recorder_id=r['id']) }}">Edit</a>
+    <footer class="msq-foot">
+      <span class="mw-meta">every {{ (r['interval_seconds'] / 60) | round(1) }} min,
+        last run {{ r['last_run_at'] | relative if r['last_run_at'] else 'never' }}</span>
+      <div class="msq-foot-actions">
         <form method="post" class="inline-form" action="{{ url_for('msq.recorder_run', recorder_id=r['id']) }}">
-          <button type="submit" class="border small">Run now</button>
+          <button type="submit" class="mw-row-action">Run now</button>
         </form>
         <form method="post" class="inline-form" action="{{ url_for('msq.recorder_delete', recorder_id=r['id']) }}"
               data-confirm-name="{{ r['name'] }}"
               onsubmit="return confirm('Delete recorder &quot;' + this.dataset.confirmName + '&quot; and its history?')">
-          <button type="submit" class="border small error-text">Delete</button>
+          <button type="submit" class="mw-row-action error-text">Delete</button>
         </form>
       </div>
     </footer>
-  </article>
-  {% endfor %}
-</div>
+  </div>
+</details>
+{% endfor %}
 {% else %}
-<p>No MSQ recorders yet. <a href="{{ url_for('msq.recorder_new') }}">Create one</a> to start
-   tracking a model's quality.</p>
+<div class="mw-empty">
+  <p>A recorder asks one model a fixed question on a schedule, measures the answer
+     and scores it over time. Nothing is being watched yet.</p>
+  <a class="button border" href="{{ url_for('msq.recorder_new') }}">Create a recorder</a>
+</div>
 {% endif %}
 {% endif %}
 
 <details class="mw-reference">
   <summary>How scoring works</summary>
   <p>Each probe scores 0-100: it starts at 100 and subtracts for slow first tokens, slow totals,
-     stray non-Latin symbols and configured slop words. Hover a chart point to see the exact
+     stray non-Latin symbols and configured slop words. Touch or hover a chart point to see the exact
      deductions. A recorder stays <em>under examination</em> until it has 24 hours of history,
      then turns <strong>Working</strong> or <strong>Degraded</strong> from its recent average.</p>
   <p>Recorders with <strong>hardcore checks</strong> enabled can turn <strong>Failing</strong>

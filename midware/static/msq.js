@@ -46,11 +46,11 @@
 
   function fmtMs(value) {
     if (value === null || value === undefined || value === "") {
-      return "—";
+      return "none";
     }
     var ms = Number(value);
     if (isNaN(ms)) {
-      return "—";
+      return "none";
     }
     if (ms >= 1000) {
       return (ms / 1000).toFixed(2) + "s";
@@ -80,7 +80,7 @@
 
     var head = document.createElement("div");
     head.className = "msq-tip-head";
-    head.textContent = fmtTime(point.t) + " · " + Math.round(point.score) + "/100";
+    head.textContent = fmtTime(point.t) + ", " + Math.round(point.score) + "/100";
     wrap.appendChild(head);
 
     var rows = document.createElement("div");
@@ -89,7 +89,7 @@
       "TTFT: " + fmtMs(point.ttft_ms),
       "Total: " + fmtMs(point.total_ms),
       "Tokens: " + (point.completion_tokens || 0),
-      "Tok/s: " + (point.tokens_per_second ? point.tokens_per_second.toFixed(1) : "—")
+      "Tok/s: " + (point.tokens_per_second ? point.tokens_per_second.toFixed(1) : "none")
     ].forEach(function (line) {
       var row = document.createElement("div");
       row.textContent = line;
@@ -201,10 +201,19 @@
       tip.style.left = left + "px";
     }
 
-    container.addEventListener("mousemove", show);
-    container.addEventListener("mouseleave", function () {
+    function hide() {
       tip.hidden = true;
-    });
+    }
+
+    // The mouse path: hover a point, read its deductions.
+    container.addEventListener("mousemove", show);
+    container.addEventListener("mouseleave", hide);
+    // The touch path: a finger cannot hover, so the tooltip follows the press
+    // and the drag (touch-action on the chart keeps vertical drags scrolling);
+    // lifting the finger lifts the pointer, which hides the tip again.
+    container.addEventListener("pointerdown", show);
+    container.addEventListener("pointermove", show);
+    container.addEventListener("pointerleave", hide);
   }
 
   var dataScript = document.getElementById("msq-data");

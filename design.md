@@ -40,6 +40,13 @@ waived); keep it true when the system changes.
   figure of its contents in the summary, right aligned. A closed section that
   says nothing is a section nobody opens. The mechanical reader that keeps
   `requests` small pays for it later in clicks.
+- **A switch row states its consequence.** The name on the left, one quiet line
+  under it saying what turning it off does, the switch right aligned. Siblings
+  sit in one ruled list and save through the form they belong to.
+- **A monitored model is an open fold over its chart.** One `.mw-fold` per
+  recorder, open by default: the summary keeps the name, route, verdict and
+  average; the body is a ruled figures row, the chart, and a quiet footer
+  holding the schedule and the text actions. The wall of monitors stays a wall.
 - **One box per page: the payload.** `.payload` is the only bordered container
   in the inspector, because a body is a document rather than a figure. Inside it
   the syntax colours are tokens (`--color-accent` keys, `--point-hi` figures),

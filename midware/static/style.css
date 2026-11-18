@@ -583,7 +583,6 @@ fieldset > legend {
 .mw-page-head > *,
 .grid-2 > *,
 .stat-grid > *,
-.msq-grid > *,
 .mw-form-grid > *,
 .mw-limit-grid > * { margin-block-start: 0; }
 
@@ -1201,61 +1200,33 @@ label.preset-prompt.is-empty { opacity: 0.55; }
 }
 
 /* -- MSQ ----------------------------------------------------------------- */
+/* A recorder is one open fold: the summary carries the name, route, verdict
+   and average, the body is a ruled figures row over the hand-rolled chart,
+   closed by a quiet footer that holds the schedule and the two text actions.
+   The card grid is gone on purpose: a wall of monitors is a list, not tiles. */
 
-.msq-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--space-md);
-  align-items: start;
+.msq-recorder .msq-chart {
+  margin-block-start: var(--space-sm);
+  /* A finger pressing the chart reads the point it holds; vertical drags
+     still scroll the page, so the wall stays thumb-navigable. */
+  touch-action: pan-y;
 }
 
-.msq-card {
-  margin: 0;
-  padding: var(--space-md);
+.msq-foot {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  background: var(--color-paper-2);
-  border: var(--rule-hair) solid var(--color-rule);
-  border-radius: var(--radius-card);
-  box-shadow: none;
-  color: var(--color-ink-2);
-}
-
-.msq-card-head {
-  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  align-items: start;
-  gap: var(--space-sm);
-  min-block-size: 0;
-  padding: 0;
+  gap: var(--space-xs) var(--space-md);
+  margin-block-start: var(--space-md);
+  padding-block-start: var(--space-sm);
+  border-block-start: var(--rule-hair) solid var(--color-rule);
 }
 
-.msq-sub {
-  margin-block-start: var(--space-3xs);
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-}
-
-.msq-metrics {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.msq-foot-actions {
+  display: flex;
+  align-items: center;
   gap: var(--space-2xs);
-  text-align: start;
-}
-
-.msq-metric-label {
-  display: block;
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.msq-metric-value {
-  font-size: var(--text-data);
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
 }
 
 .msq-chart { position: relative; }
@@ -1332,22 +1303,6 @@ label.preset-prompt.is-empty { opacity: 0.55; }
   margin: 0;
   color: var(--color-muted);
   font-size: var(--text-sm);
-}
-
-.msq-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  margin-block-start: auto;
-  padding-block-start: var(--space-xs);
-  border-block-start: var(--rule-hair) solid var(--color-rule);
-  min-block-size: 0;
-}
-
-.msq-buttons {
-  display: flex;
-  gap: var(--space-2xs);
-  flex-wrap: wrap;
 }
 
 /* -- sign in with service ------------------------------------------------ */
@@ -2520,6 +2475,20 @@ tr.is-temporary > td { background: color-mix(in oklab, var(--color-paper-2) 70%,
   .mw-stack .mw-token > code { flex: 1 1 auto; }
 
   .mw-stack button.mw-copy {
+    min-block-size: 44px;
+    padding-inline: var(--space-sm);
+  }
+
+  /* A recorder's fold head wraps onto lines that still read, and the footer's
+     text actions become thumb targets like every other row action. */
+  .msq-recorder .mw-meta,
+  .msq-recorder .mw-fold-digest {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .msq-foot .mw-row-action {
     min-block-size: 44px;
     padding-inline: var(--space-sm);
   }
