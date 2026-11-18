@@ -81,7 +81,8 @@
           <button type="submit" class="border small">Run now</button>
         </form>
         <form method="post" class="inline-form" action="{{ url_for('msq.recorder_delete', recorder_id=r['id']) }}"
-              onsubmit="return confirm('Delete recorder &quot;{{ r['name'] }}&quot; and its history?')">
+              data-confirm-name="{{ r['name'] }}"
+              onsubmit="return confirm('Delete recorder &quot;' + this.dataset.confirmName + '&quot; and its history?')">
           <button type="submit" class="border small error-text">Delete</button>
         </form>
       </div>

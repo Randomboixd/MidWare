@@ -5,8 +5,9 @@
 <div class="mw-page-head">
   <div>
     <h1>API keys</h1>
-    <p>Client credentials. Send one as <code>Authorization: Bearer &lt;key&gt;</code> or <code>x-api-key: &lt;key&gt;</code>.
-       Each key can carry its own CORS and provider/premodel limits.</p>
+    <p>Client credentials. Send one as <code>Authorization: Bearer mw-xxxxxxxx</code> or
+       <code>x-api-key: mw-xxxxxxxx</code>. Each key can carry its own CORS and
+       provider/premodel limits.</p>
   </div>
   <a class="button" href="{{ url_for('admin.key_new') }}">Create API key</a>
 </div>
@@ -18,7 +19,8 @@
   <details class="mw-connect-more">
     <summary>How to send a key</summary>
     <p>Point any OpenAI-compatible client at the base URL above, then send one of the keys
-       below as the API key in <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+       below as the API key in <code>Authorization: Bearer mw-xxxxxxxx</code> or
+       <code>x-api-key: mw-xxxxxxxx</code>.</p>
     <p>Developing an app? The <a href="{{ url_for('playground.index') }}">Playground</a>
      chats with any model through this MidWare, on a temporary key, and writes the
      matching call for you as you type.</p>
@@ -95,6 +97,7 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='clipboard.js') }}"></script>
+<script src="{{ url_for('static', filename='token.js') }}"></script>
 <script>
 (function () {
   "use strict";
@@ -107,31 +110,6 @@
       });
     });
   }
-  document.addEventListener("click", function (event) {
-    var copy = event.target.closest("[data-copy-token]");
-    if (copy) {
-      window.mwCopy(copy.getAttribute("data-copy-token")).then(function (ok) {
-        window.mwFlash(copy, ok ? "Copied" : "Copy failed");
-      });
-      return;
-    }
-    var value = event.target.closest("[data-reveal-token]");
-    if (value) {
-      var full = value.getAttribute("data-reveal-token");
-      value.textContent = value.textContent === full ? value.getAttribute("data-masked") : full;
-    }
-  });
-  document.addEventListener("keydown", function (event) {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    var value = event.target.closest("[data-reveal-token]");
-    if (!value) {
-      return;
-    }
-    event.preventDefault();
-    value.click();
-  });
 })();
 </script>
 {% endblock %}

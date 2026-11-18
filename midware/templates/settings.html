@@ -152,7 +152,8 @@
           <td>{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
           <td>
             <div class="mw-row-actions">
-              <form method="post" class="inline-form" onsubmit="return confirm('Revoke {{ account.name }}? Keys it created will be deleted.')">
+              <form method="post" class="inline-form" data-confirm-name="{{ account.name }}"
+                    onsubmit="return confirm('Revoke ' + this.dataset.confirmName + '? Keys it created will be deleted.')">
                 <input type="hidden" name="action" value="revoke_system_account">
                 <input type="hidden" name="system_account_id" value="{{ account.id }}">
                 <button type="submit" class="mw-row-action error-text">Revoke</button>

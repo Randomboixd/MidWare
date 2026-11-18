@@ -19,7 +19,15 @@
   </div>
 </div>
 
-{% if key %}<p>Token: <span class="mono token">{{ key['token'] }}</span></p>{% endif %}
+{% if key %}
+<div class="mw-token">
+  {% set masked = '••••••••' ~ key['token'][-4:] %}
+  <code class="mw-token-value" role="button" tabindex="0"
+        data-reveal-token="{{ key['token'] }}" data-masked="{{ masked }}"
+        title="Click to show the whole key">{{ masked }}</code>
+  <button type="button" class="mw-copy" data-copy-token="{{ key['token'] }}" aria-label="Copy this key">Copy</button>
+</div>
+{% endif %}
 
 <form method="post" id="key-form">
   <section class="mw-form-section">
@@ -259,5 +267,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='clipboard.js') }}"></script>
 <script src="{{ url_for('static', filename='keys.js') }}"></script>
+<script src="{{ url_for('static', filename='token.js') }}"></script>
 {% endblock %}

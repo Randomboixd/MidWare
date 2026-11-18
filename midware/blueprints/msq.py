@@ -83,6 +83,12 @@ def _form_defaults() -> dict:
 
 
 def _form_from_row(row) -> dict:
+    """Template-shaped form values.
+
+    Takes a recorder row, or the fields dict `_read_form` built from a
+    submitted form (the same key names), so a validation error re-renders
+    exactly what the user submitted instead of the defaults.
+    """
     hardcore = parse_json_object(row["hardcore_json"])
     return {
         "name": row["name"],
@@ -188,7 +194,11 @@ def _save(db, existing):
     if errors:
         for message in errors:
             flash(message, "error")
-        return _render_form(db, fields, existing)
+        # The fields dict is row-shaped, so the same mapper the edit page
+        # uses keeps every submitted value on the error page. Re-rendering
+        # the raw fields would silently reset the form to its defaults, and
+        # fixing only the invalid field would then save those defaults.
+        return _render_form(db, _form_from_row(fields), existing)
     if existing is None:
         db.create_msq_recorder(**fields)
         flash(f"MSQ recorder '{fields['name']}' created.", "success")

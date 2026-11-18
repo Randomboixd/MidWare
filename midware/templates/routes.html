@@ -84,7 +84,8 @@
               {% endif %}
               <button type="button" class="mw-row-action"
                       onclick="document.getElementById('edit-{{ r['id'] }}').open = true">Edit</button>
-              <form method="post" class="inline-form" onsubmit="return confirm('Delete route &quot;{{ r['name'] }}&quot;?')">
+              <form method="post" class="inline-form" data-confirm-name="{{ r['name'] }}"
+                    onsubmit="return confirm('Delete route &quot;' + this.dataset.confirmName + '&quot;?')">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="route_id" value="{{ r['id'] }}">
                 <button type="submit" class="mw-row-action error-text">Delete</button>

@@ -46,7 +46,8 @@
           <td>
             <div class="mw-row-actions">
               <a class="mw-row-action" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
-              <form method="post" class="inline-form" onsubmit="return confirm('Delete premodel &quot;{{ p['name'] }}&quot;?')">
+              <form method="post" class="inline-form" data-confirm-name="{{ p['name'] }}"
+                    onsubmit="return confirm('Delete premodel &quot;' + this.dataset.confirmName + '&quot;?')">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="premodel_id" value="{{ p['id'] }}">
                 <button type="submit" class="mw-row-action error-text">Delete</button>
