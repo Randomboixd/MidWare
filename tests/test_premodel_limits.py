@@ -36,7 +36,6 @@ def test_premodel_form_renders_limit_controls(configured_client):
 
     assert page.status_code == 200
     for marker in (
-        b'id="limits-toggle"',
         b'id="limits-panel"',
         b'id="limit-tokens"',
         b'id="limit-requests"',
@@ -46,6 +45,8 @@ def test_premodel_form_renders_limit_controls(configured_client):
         b'name="max_requests_week"',
     ):
         assert marker in page.data
+    # The limits are a fold now: closed with an 'off' digest on a new premodel.
+    assert b'<span class="mw-fold-digest">off</span>' in page.data
 
 
 def test_premodel_create_stores_limits(configured_client):

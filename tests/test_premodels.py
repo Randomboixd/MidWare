@@ -548,7 +548,7 @@ def test_new_premodel_page_renders(configured):
     client = app.test_client()
     html = client.get("/admin/premodels/new").get_data(as_text=True)
     assert "Accept MWVARS" in html
-    assert "Sampling overrides" in html
+    assert "Sampling" in html
     assert "params-panel" in html
     assert "premodels.js" in html
 
