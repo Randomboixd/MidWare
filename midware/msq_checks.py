@@ -180,6 +180,16 @@ class StreamAudit:
         if isinstance(event, dict):
             self._absorb(event)
 
+    def finish(self) -> None:
+        """Score whatever is still buffered: real streams sometimes end without
+        a trailing separator, and dropping the final event (often the
+        ``[DONE]`` marker or the chunk carrying ``finish_reason``) would flag
+        a healthy stream as truncated."""
+        if self._line.strip():
+            self._consume_line(self._line.rstrip(b"\r"))
+        self._line = b""
+        self._flush()
+
     def _absorb(self, event: dict[str, Any]) -> None:
         if not self.first_token and _event_text(event):
             self.first_token = True

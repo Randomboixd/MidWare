@@ -671,6 +671,31 @@ class Database:
                 (key, value),
             )
 
+    def claim_meta(self, key: str, max_age_seconds: float) -> bool:
+        """Atomically plant a timestamped claim in ``meta`` unless a live one exists.
+
+        A claim is an ISO timestamp; an empty value counts as released, and one
+        older than ``max_age_seconds`` counts as crashed and is taken over. The
+        compare-and-set is arbitrated by SQLite itself — a conditional update,
+        then a unique-key insert whose ``IntegrityError`` loses the race — so
+        two threads can never both believe they hold the claim.
+        """
+        now = utcnow()
+        stamp = to_iso(now)
+        cutoff = to_iso(now - timedelta(seconds=max(1.0, float(max_age_seconds))))
+        with self.write() as conn:
+            cur = conn.execute(
+                "UPDATE meta SET value = ? WHERE key = ? AND (value IS NULL OR value < ?)",
+                (stamp, key, cutoff),
+            )
+            if cur.rowcount:
+                return True
+            try:
+                conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, stamp))
+            except sqlite3.IntegrityError:
+                return False  # lost the race: another worker planted a claim
+            return True
+
     def issue_setup_code(self) -> str:
         """Return the persisted claim code, creating it once if absent.
 
@@ -860,6 +885,10 @@ class Database:
 
     def count_models(self) -> int:
         return int(self._scalar("SELECT COUNT(*) FROM models"))
+
+    def count_route_models(self, route_id: int) -> int:
+        """Rows a route currently has — what a bad refresh must not wipe."""
+        return int(self._scalar("SELECT COUNT(*) FROM models WHERE route_id = ?", (route_id,)))
 
     # -- premodels ----------------------------------------------------------
 
@@ -1105,16 +1134,6 @@ class Database:
             )
             return int(cur.rowcount) > 0
 
-    def mark_msq_ran(self, recorder_id: int, now: datetime | None = None) -> None:
-        now = now or utcnow()
-        recorder = self.get_msq_recorder(recorder_id)
-        interval = max(1, int(recorder["interval_seconds"])) if recorder else 3600
-        with self.write() as conn:
-            conn.execute(
-                "UPDATE msq_recorders SET last_run_at = ?, next_run_at = ? WHERE id = ?",
-                (to_iso(now), to_iso(now + timedelta(seconds=interval)), recorder_id),
-            )
-
     def record_msq_check(
         self,
         *,
@@ -1131,7 +1150,19 @@ class Database:
         penalties: Any = None,
         response_excerpt: str | None = None,
         error: str | None = None,
+        now: datetime | None = None,
+        reschedule: bool = False,
+        history_limit: int = 0,
     ) -> int:
+        """Insert one probe result, optionally pruning history and rescheduling.
+
+        ``reschedule`` pushes ``next_run_at`` forward inside the *same*
+        transaction as the insert, so a probe whose upstream call already
+        happened is never written without its reschedule (or vice versa).
+        ``history_limit`` (when above zero) keeps only the newest N rows for
+        this recorder, bounding the ``msq_checks`` table on the DB volume.
+        """
+        now = now or utcnow()
         with self.write() as conn:
             cur = conn.execute(
                 """
@@ -1143,7 +1174,7 @@ class Database:
                 """,
                 (
                     recorder_id,
-                    to_iso(utcnow()),
+                    to_iso(now),
                     int(status_code),
                     int(bool(ok)),
                     ttft_ms,
@@ -1158,7 +1189,27 @@ class Database:
                     error,
                 ),
             )
-            return int(cur.lastrowid)
+            check_id = int(cur.lastrowid or 0)
+            limit = int(history_limit)
+            if limit > 0:
+                conn.execute(
+                    "DELETE FROM msq_checks WHERE recorder_id = ? AND id NOT IN "
+                    "(SELECT id FROM msq_checks WHERE recorder_id = ? "
+                    "ORDER BY id DESC LIMIT ?)",
+                    (recorder_id, recorder_id, limit),
+                )
+            if reschedule:
+                interval = 3600
+                row = conn.execute(
+                    "SELECT interval_seconds FROM msq_recorders WHERE id = ?", (recorder_id,)
+                ).fetchone()
+                if row is not None:
+                    interval = max(1, int(row["interval_seconds"]))
+                conn.execute(
+                    "UPDATE msq_recorders SET last_run_at = ?, next_run_at = ? WHERE id = ?",
+                    (to_iso(now), to_iso(now + timedelta(seconds=interval)), recorder_id),
+                )
+            return check_id
 
     def list_msq_checks(self, recorder_id: int, limit: int = 168) -> list[sqlite3.Row]:
         """The most recent ``limit`` checks, oldest first (chart order)."""

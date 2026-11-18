@@ -168,6 +168,9 @@ this development environment, so Docker changes are verified by reading only.
   penalties JSON, response_excerpt, error)` — one probe result; `penalties` is a JSON
   list of `{"reason", "points", "kind", "passed"}` (the checked-to-be-clean cases are
   stored with `passed: true`, `points: 0`) that the chart tooltip reads back verbatim.
+  `record_msq_check` prunes the recorder to the newest `MSQ_HISTORY_LIMIT` rows in
+  the same transaction that writes the check and pushes `next_run_at` forward, so the
+  table is bounded on disk and a paid probe is never discarded unscheduled.
 - `usage_daily(day, api_key_id, route_id, requests, prompt_tokens, completion_tokens,
   total_tokens, latency_ms_total, PK(day, api_key_id, route_id))` — the permanent
   usage ledger, upserted inside `record_request`. `api_key_id`/`route_id` use `-1`

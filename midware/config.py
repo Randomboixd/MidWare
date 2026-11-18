@@ -172,9 +172,10 @@ MSQ_MIN_CHECKS = _env_int("MIDWARE_MSQ_MIN_CHECKS", 3)
 # Average score below this, over the examination window, means "Degraded".
 MSQ_DEGRADED_THRESHOLD = float(os.environ.get("MIDWARE_MSQ_DEGRADED_THRESHOLD", "70"))
 
-# How many recent checks each recorder keeps for evaluation (the chart reads
-# from the same window but only draws MSQ_CHART_LIMIT of them).
-MSQ_HISTORY_LIMIT = _env_int("MIDWARE_MSQ_HISTORY_LIMIT", 168)
+# How many recent checks each recorder keeps, both for evaluation and on
+# disk: every probe write prunes the recorder's history to this many rows (the
+# chart reads the same window but only draws MSQ_CHART_LIMIT of them).
+MSQ_HISTORY_LIMIT = _env_int("MIDWARE_MSQ_HISTORY_LIMIT", 500)
 
 # How many of those checks each recorder's chart actually draws (newest N).
 MSQ_CHART_LIMIT = _env_int("MIDWARE_MSQ_CHART_LIMIT", 10)

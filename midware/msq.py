@@ -222,6 +222,7 @@ def run_recorder(app, recorder) -> dict[str, Any]:
     route = db.get_route(recorder["route_id"]) if recorder["route_id"] else None
     if route is None:
         return _store_failure(
+            app,
             db,
             recorder,
             "No route is configured for this recorder.",
@@ -240,7 +241,7 @@ def run_recorder(app, recorder) -> dict[str, Any]:
     client = app.extensions.get("midware_http")
     if client is None:
         return _store_failure(
-            db, recorder, "No HTTP client is available.", status_code=0, now=now, hardcore=hardcore
+            app, db, recorder, "No HTTP client is available.", status_code=0, now=now, hardcore=hardcore
         )
 
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -267,7 +268,7 @@ def run_recorder(app, recorder) -> dict[str, Any]:
             error=error,
             model=model,
         )
-        return _store_failure(db, recorder, error, status_code=0, now=now, hardcore=hardcore)
+        return _store_failure(app, db, recorder, error, status_code=0, now=now, hardcore=hardcore)
 
     if response.status_code >= 400:
         raw = _safe_content(response)
@@ -286,6 +287,7 @@ def run_recorder(app, recorder) -> dict[str, Any]:
             model=model,
         )
         return _store_failure(
+            app,
             db,
             recorder,
             f"Upstream returned HTTP {response.status_code}.",
@@ -313,6 +315,9 @@ def run_recorder(app, recorder) -> dict[str, Any]:
     except Exception as exc:
         stream_error = f"{type(exc).__name__}: {exc}"
     _safe_close(response)
+    # The final frame often arrives without a trailing separator; without the
+    # flush a healthy stream scores as truncated.
+    audit.finish()
 
     total_ms = int((time.perf_counter() - started) * 1000)
     text = _decode(completion_text(bytes(buffer)))
@@ -386,6 +391,7 @@ def run_recorder(app, recorder) -> dict[str, Any]:
         model=model,
     )
     return _record(
+        app,
         db,
         recorder,
         status_code=response.status_code,
@@ -581,6 +587,7 @@ def _maybe_log_probe(
 
 
 def _record(
+    app,
     db,
     recorder,
     *,
@@ -598,6 +605,9 @@ def _record(
     error: str | None,
     now: datetime,
 ) -> dict[str, Any]:
+    # One transaction covers the check insert, its history prune and the
+    # reschedule: a probe whose upstream call already happened is never
+    # thrown away, and a recorder never re-runs off an unsaved check.
     db.record_msq_check(
         recorder_id=recorder["id"],
         status_code=status_code,
@@ -612,8 +622,10 @@ def _record(
         penalties=findings,
         response_excerpt=excerpt,
         error=error,
+        now=now,
+        reschedule=True,
+        history_limit=int(app.config.get("MSQ_HISTORY_LIMIT", 500)),
     )
-    db.mark_msq_ran(recorder["id"], now)
     return {
         "recorder_id": recorder["id"],
         "ok": ok,
@@ -650,6 +662,7 @@ def _decode(raw: Any) -> str:
 
 
 def _store_failure(
+    app,
     db,
     recorder,
     error: str,
@@ -664,6 +677,7 @@ def _store_failure(
     score, findings = score_check(ok=False, status_code=status_code, error=error)
     hard_fail = bool((hardcore or {}).get("stream_integrity"))
     return _record(
+        app,
         db,
         recorder,
         status_code=status_code,
@@ -774,14 +788,27 @@ _scheduler_started = False
 
 
 def run_due(app, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Run every recorder whose next check is due. Used by the scheduler and tests."""
+    """Run every recorder whose next check is due. Used by the scheduler and tests.
+
+    One recorder blowing up (a locked database, a poisoned row) is logged and
+    skipped: it must not abort every later recorder in the same tick.
+    """
     db = app.extensions["midware_db"]
     now = now or utcnow()
     results: list[dict[str, Any]] = []
     for recorder in db.due_msq_recorders(now):
-        if not db.claim_msq_recorder(recorder["id"], now):
-            continue
-        results.append(run_recorder(app, recorder))
+        try:
+            if not db.claim_msq_recorder(recorder["id"], now):
+                continue
+            results.append(run_recorder(app, recorder))
+        except Exception as exc:
+            app.logger.warning(
+                "MidWare MSQ recorder %s (%s) failed: %s",
+                recorder["id"],
+                recorder["name"],
+                exc,
+                exc_info=True,
+            )
     return results
 
 

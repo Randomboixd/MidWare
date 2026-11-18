@@ -18,6 +18,13 @@ from typing import Any, Iterable
 _MODEL_LIST_KEYS = ("data", "models", "result", "results", "items")
 _ID_KEYS = ("id", "model", "model_id", "name", "slug")
 
+# In-flight refresh claim in ``meta``: while one refresh worker runs, every
+# request-path retry must see "someone is already on it" instead of piling on
+# another thread. A claim is released when the worker ends and expires by TTL
+# if the process died mid-refresh.
+REFRESH_CLAIM_KEY = "models_refresh_in_flight"
+REFRESH_CLAIM_TTL_SECONDS = 900
+
 
 def extract_model_ids(payload: Any) -> list[str]:
     """Pull model identifiers out of the many shapes providers return.
@@ -146,15 +153,34 @@ def refresh_all(app) -> dict[str, Any]:
             if error:
                 results.append({"route_id": route["id"], "route_name": route["name"], "count": 0, "error": error})
                 continue
+            existing = db.count_route_models(route["id"])
+            if not model_ids and existing:
+                # A 200 whose body carries no recognizable model list (a WAF
+                # error page, an {"object": "list"} without "data") must not be
+                # applied as "this route has no models": wiping the catalogue
+                # would empty /v1/models for the route and 403 every key
+                # restricted to it until the next refresh. Keep the rows we
+                # have and report the failure instead.
+                results.append(
+                    {
+                        "route_id": route["id"],
+                        "route_name": route["name"],
+                        "count": existing,
+                        "error": f"empty model list from {representative['target_host']}",
+                    }
+                )
+                continue
             count = db.replace_models(route["id"], model_ids)
             results.append({"route_id": route["id"], "route_name": route["name"], "count": count, "error": None})
 
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if results and all(result["error"] for result in results):
-        db.set_meta("models_refresh_error", results[0]["error"])
-    else:
-        db.set_meta("models_refresh_error", "")
-        db.set_meta("models_refreshed_at", stamp)
+    first_error = next((result["error"] for result in results if result["error"]), None)
+    # The marker is stamped even after a failed run, and the failure is kept in
+    # models_refresh_error: retries then become interval-based (the next
+    # refresh_if_stale sees a fresh marker) instead of one background thread
+    # per request while an upstream is down.
+    db.set_meta("models_refresh_error", first_error or "")
+    db.set_meta("models_refreshed_at", stamp)
 
     return {
         "at": stamp,
@@ -164,19 +190,42 @@ def refresh_all(app) -> dict[str, Any]:
     }
 
 
-def refresh_in_background(app) -> None:
+def refresh_in_background(app) -> bool:
+    """Spawn the catalogue refresh thread unless one is already running.
+
+    The in-flight claim in ``meta`` (compare-and-set) is what keeps a slow or
+    failing upstream from turning every request into its own refresh thread,
+    each holding a sqlite connection for a fresh 30 s connect. Returns True
+    when a worker was actually started.
+    """
+    db = app.extensions["midware_db"]
+    if not db.claim_meta(REFRESH_CLAIM_KEY, max_age_seconds=REFRESH_CLAIM_TTL_SECONDS):
+        return False
+
     def run() -> None:
         with app.app_context():
             try:
                 refresh_all(app)
             except Exception as exc:  # never let a background refresh crash the server
                 app.logger.warning("MidWare model refresh failed: %s", exc)
+            finally:
+                try:
+                    db.set_meta(REFRESH_CLAIM_KEY, "")
+                except Exception:
+                    # Claim bookkeeping must never crash the worker; a claim
+                    # that cannot be released still expires by its TTL.
+                    app.logger.debug("model refresh claim release failed", exc_info=True)
 
     threading.Thread(target=run, name="midware-model-refresh", daemon=True).start()
+    return True
 
 
 def refresh_if_stale(app, max_age_hours: float = 24.0) -> bool:
-    """Kick off a background refresh when the catalogue is older than ``max_age_hours``."""
+    """Kick off a background refresh when the catalogue is older than ``max_age_hours``.
+
+    Returns True only when a refresh was actually started: one already in
+    flight (the meta claim) is as good as having started it ourselves.
+    """
     db = app.extensions["midware_db"]
     if not db.list_routes():
         return False
@@ -193,5 +242,4 @@ def refresh_if_stale(app, max_age_hours: float = 24.0) -> bool:
             stale = True
     if not stale:
         return False
-    refresh_in_background(app)
-    return True
+    return refresh_in_background(app)
