@@ -645,36 +645,38 @@ def settings():
         if action == "features":
             msq_on = _form_bool("msq_enabled")
             premodels_on = _form_bool("premodels_enabled")
+            sma_on = _form_bool("sma_enabled")
             db.set_msq_enabled(msq_on)
             db.set_premodels_enabled(premodels_on)
+            db.set_sma_enabled(sma_on)
+            if not sma_on:
+                # The transport opt-in is meaningless without the master switch;
+                # keep the stored pair consistent even on a forged submit.
+                db.set_sma_allow_plain_http(False)
             saved = "Features saved. MSQ is " + (
                 "enabled." if msq_on else "disabled; monitoring has stopped."
             )
             saved += " Premodels are " + (
                 "enabled." if premodels_on else "disabled; existing clients keep working."
             )
+            saved += " System Management Accounts API is " + (
+                "enabled." if sma_on else "disabled."
+            )
             flash(saved, "success")
             return redirect(url_for("admin.settings"))
 
         if request.form.get("sma_present"):
-            enabled = _form_bool("sma_enabled")
-            db.set_sma_enabled(enabled)
-            if not enabled:
-                # The child switch is meaningless without the master switch; keep
-                # the stored pair consistent even on a forged submit.
-                db.set_sma_allow_plain_http(False)
-            elif request.form.get("sma_allow_present"):
-                db.set_sma_allow_plain_http(_form_bool("sma_allow_plain_http"))
+            # The master switch lives in the features form; this submit carries
+            # only the transport opt-in. It stays consistent on a forged
+            # submit by refusing the opt-in while the master switch is off.
+            if request.form.get("sma_allow_present"):
+                master_on = db.sma_enabled(current_app.config["SMA_ENABLED"])
+                db.set_sma_allow_plain_http(master_on and _form_bool("sma_allow_plain_http"))
 
         log_limit = _form_int("request_log_limit", db.request_log_limit())
         db.set_setting("request_log_limit", str(log_limit))
         db.prune_requests()
         saved = f"Settings saved. Request log limit set to {log_limit}."
-        if request.form.get("sma_present"):
-            saved += (
-                " System Management Accounts API is "
-                + ("enabled." if db.sma_enabled(current_app.config["SMA_ENABLED"]) else "disabled.")
-            )
         if "premodel_prefix" in request.form:
             prefix = normalize_prefix(request.form.get("premodel_prefix"))
             if prefix is None:

@@ -2,7 +2,12 @@
  * nav: kept, a wordmark left and one row of destinations right · signature: the 52-week scan, a point cloud of measured days
  * states: full, empty, loading (skeleton), error · vantage: terrain/steel · scope: app · contrast: pass · v2.0.0
  * signature: the request inspector, a verdict row of figures over digest folds
- * built: the project · redesign: full */
+ * built: the project · redesign: full
+ * rebuilt in the admin pass: settings, premodels, the premodel form, the MSQ panel and its form. The feature toggles are
+ *   one ruled switch list, the row tables stack under 700px, the MSQ recorders are open folds carrying a figures row and
+ *   their chart, and the two forms fold by weight with a digest in every summary. The field primitive's edge was redrawn
+ *   in a muted lean (a plain hairline is 1.3:1 and cannot read as an edge) and the switch/check focus ring moved onto the
+ *   row itself, because the ring used to sit on a pseudo-element the keyboard path never showed. */
 /* Hallmark · pre-emit critique: P_ H_ E_ S_ R_ V_ · weakest: the numbers were four identical cards, now a ruled ledger with one statement figure.
  * Floor: tokens only, no tracked capitals, no eyebrow, tabular figures, a focus ring on every control.
  * waive 19: "Starcannon-Unleashed-12B" is a live model id in the catalogue, not copy.
@@ -1755,13 +1760,14 @@ code.wf-var {
   white-space: nowrap;
 }
 
-/* Action buttons that sit in a row: text, not a second layer of pills. */
+/* Action buttons that sit in a row: text, not a second layer of pills. They
+   still stand at the small end of the control floor, never below it. */
 button.mw-row-action,
 a.mw-row-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-block-size: 28px;
+  min-block-size: 32px;
   padding: 0 var(--space-xs);
   border: 0;
   border-radius: var(--radius-card);
@@ -2395,6 +2401,7 @@ tr.is-temporary > td { background: color-mix(in oklab, var(--color-paper-2) 70%,
     border: var(--rule-hair) solid var(--color-rule-2);
     border-radius: var(--radius-card);
     background: var(--color-paper-3);
+    color: var(--color-ink);
   }
 
   .mw-more-panel a,
@@ -2438,7 +2445,7 @@ tr.is-temporary > td { background: color-mix(in oklab, var(--color-paper-2) 70%,
     display: flex;
     align-items: baseline;
     gap: var(--space-2xs);
-    padding: 3px 0;
+    padding: var(--space-2xs) 0;
     border: 0;
     text-align: start;
   }

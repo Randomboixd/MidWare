@@ -946,7 +946,6 @@ def test_plain_http_opt_in_round_trips_through_settings(secured):
         "/admin/settings",
         data={
             "sma_present": "1",
-            "sma_enabled": "1",
             "sma_allow_present": "1",
             "sma_allow_plain_http": "1",
             "request_log_limit": "10",
@@ -957,9 +956,26 @@ def test_plain_http_opt_in_round_trips_through_settings(secured):
     # Turning the master switch off also clears the transport opt-in.
     client.post(
         "/admin/settings",
-        data={"sma_present": "1", "request_log_limit": "10"},
+        data={"action": "features", "msq_enabled": "1", "premodels_enabled": "1"},
     )
     assert db.sma_enabled(True) is False
+    assert db.sma_allow_plain_http(False) is False
+
+
+def test_plain_http_opt_in_refused_while_master_is_off(secured):
+    """The transport opt-in saves only while the master switch is on, so a
+    forged submit cannot leave the nested pair inconsistent."""
+    app, client, db = secured
+    db.set_sma_enabled(False)
+    client.post(
+        "/admin/settings",
+        data={
+            "sma_present": "1",
+            "sma_allow_present": "1",
+            "sma_allow_plain_http": "1",
+            "request_log_limit": "10",
+        },
+    )
     assert db.sma_allow_plain_http(False) is False
 
 
@@ -993,15 +1009,21 @@ def test_settings_toggle_round_trips(secured):
     assert page.status_code == 200
     assert b"System Management Accounts API" in page.data
     assert db.sma_enabled(True) is True
+    # The master switch is a Features row now, so it saves under that action.
     response = client.post(
         "/admin/settings",
-        data={"sma_present": "1", "request_log_limit": "10"},
+        data={"action": "features", "msq_enabled": "1", "premodels_enabled": "1"},
     )
     assert response.status_code == 302
     assert db.sma_enabled(True) is False
     client.post(
         "/admin/settings",
-        data={"sma_present": "1", "sma_enabled": "1", "request_log_limit": "10"},
+        data={
+            "action": "features",
+            "msq_enabled": "1",
+            "premodels_enabled": "1",
+            "sma_enabled": "1",
+        },
     )
     assert db.sma_enabled(True) is True
 

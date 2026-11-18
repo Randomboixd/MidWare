@@ -58,6 +58,58 @@
 <section class="mw-section">
   <div class="mw-section-head">
     <div>
+      <h2>Features</h2>
+      <span class="mw-meta">Turn whole surfaces on and off</span>
+    </div>
+  </div>
+  <form method="post" class="mw-form-section">
+    <input type="hidden" name="action" value="features">
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Model Service Quality
+        <span class="mw-hint">Turning this off closes the MSQ panel and its SMA endpoints, and also
+          stops the scheduled monitoring probes. Recorders and their history stay put and resume
+          when it is turned back on.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="msq_enabled" value="1" aria-label="Model Service Quality"
+               {% if msq_enabled %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Premodels
+        <span class="mw-hint">Turning this off hides premodels from the model catalogue and closes the
+          admin pages. Existing clients sending <code>{{ premodel_prefix }}slug</code> keep working.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="premodels_enabled" value="1" aria-label="Premodels"
+               {% if premodels_enabled %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        System Management Accounts API
+        <span class="mw-hint">Signed, scoped access for automation at <code>/_midware/api/v1</code>.
+          Turning this off refuses every call, including pending activations.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="sma_enabled" value="1" aria-label="System Management Accounts API"
+               {% if sma_enabled %}checked{% endif %}>
+        <span></span>
+      </label>
+    </div>
+    <div class="mw-inline-actions">
+      <button type="submit">Save features</button>
+    </div>
+  </form>
+</section>
+
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
       <h2>Storage and addressing</h2>
       <span class="mw-meta">What is kept, and how clients name a premodel</span>
     </div>
@@ -89,73 +141,40 @@
 <section class="mw-section">
   <div class="mw-section-head">
     <div>
-      <h2>Features</h2>
-      <span class="mw-meta">Turn whole surfaces on and off</span>
-    </div>
-  </div>
-  <form method="post" class="mw-form-section">
-    <input type="hidden" name="action" value="features">
-    <label class="checkbox">
-      <input type="checkbox" name="msq_enabled" value="1" {% if msq_enabled %}checked{% endif %}>
-      <span>Model Service Quality</span>
-    </label>
-    <small class="mw-hint">Turning this off closes the MSQ panel and its SMA endpoints, and also
-      stops the scheduled monitoring probes. Recorders and their history stay put and resume
-      when it is turned back on.</small>
-
-    <label class="checkbox" style="margin-top:1rem">
-      <input type="checkbox" name="premodels_enabled" value="1" {% if premodels_enabled %}checked{% endif %}>
-      <span>Premodels</span>
-    </label>
-    <small class="mw-hint">Turning this off hides premodels from the model catalogue and closes the
-      admin pages. Existing clients sending <code>{{ premodel_prefix }}slug</code> keep working.</small>
-
-    <div class="mw-inline-actions">
-      <button type="submit">Save features</button>
-    </div>
-  </form>
-</section>
-
-<section class="mw-section">
-  <div class="mw-section-head">
-    <div>
-      <h2>System Management Accounts API</h2>
-      <span class="mw-meta">Signed, scoped access for automation</span>
+      <h2>System Management Accounts</h2>
+      <span class="mw-meta">Enrolled accounts, and the transport the API answers on</span>
     </div>
   </div>
   <form method="post" class="mw-form-section">
     <input type="hidden" name="sma_present" value="1">
     <input type="hidden" name="request_log_limit" value="{{ log_limit }}">
     {% if premodel_prefix %}<input type="hidden" name="premodel_prefix" value="{{ premodel_prefix }}">{% endif %}
-    <label class="checkbox">
-      <input type="checkbox" name="sma_enabled" value="1" {% if sma_enabled %}checked{% endif %}>
-      <span>System Management Accounts API</span>
-    </label>
-    <small class="mw-hint">Signed, scoped access for automation at <code>/_midware/api/v1</code>.
-      Turning this off refuses every call, including pending activations.</small>
-
-    <label class="checkbox" style="margin-top:1rem">
-      <input type="checkbox" name="sma_allow_plain_http" value="1"
-             {% if sma_allow_plain_http %}checked{% endif %}>
-      <span>Allow over plain HTTP</span>
-    </label>
-    <input type="hidden" name="sma_allow_present" value="1">
-    <small class="mw-hint">Off by default: the API answers over HTTPS, and refuses
-      plain HTTP. Turn this on only if this instance lives on a trusted network
-      without TLS, and on plain HTTP an attacker who can watch the connection can
-      relay a signed request while it is fresh.</small>
+    <div class="mw-check-row">
+      <div class="mw-check-text">
+        Allow over plain HTTP
+        <span class="mw-hint">Off by default: the API answers over HTTPS, and refuses
+          plain HTTP. Turn this on only if this instance lives on a trusted network
+          without TLS, and on plain HTTP an attacker who can watch the connection can
+          relay a signed request while it is fresh.</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" name="sma_allow_plain_http" value="1" aria-label="Allow over plain HTTP"
+               {% if sma_allow_plain_http %}checked{% endif %}>
+        <span></span>
+      </label>
+      <input type="hidden" name="sma_allow_present" value="1">
+    </div>
     {% if not sma_https %}
     <small class="mw-hint">This page is being served over plain HTTP.</small>
     {% endif %}
-
     <div class="mw-inline-actions">
-      <button type="submit">Save settings</button>
+      <button type="submit">Save</button>
     </div>
   </form>
 
   {% if sma_accounts %}
   <div class="scroll">
-    <table class="compact border">
+    <table class="compact border mw-stack">
       <thead>
         <tr>
           <th>Account</th>
@@ -175,12 +194,12 @@
             <span class="mw-row-name">{{ account.name }}</span>
             <span class="mw-row-sub mono">{{ account.key_fingerprint }}</span>
           </td>
-          <td>{{ account.company }}</td>
-          <td>{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<span class="mw-row-sub">expires {{ account.expires_at | datetime }}</span>{% endif %}</td>
-          <td><span class="mw-row-sub" title="{{ entry.scopes | join(', ') if entry.scopes else 'none' }}">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</span></td>
-          <td>{{ account.created_at | datetime }}</td>
-          <td>{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
-          <td>
+          <td data-label="Company">{{ account.company }}</td>
+          <td data-label="State">{{ account.state }}{% if account.state == 'pending' and account.expires_at %}<span class="mw-row-sub">expires {{ account.expires_at | datetime }}</span>{% endif %}</td>
+          <td data-label="Permissions"><span class="mw-row-sub" title="{{ entry.scopes | join(', ') if entry.scopes else 'none' }}">{{ entry.scopes | join(', ') if entry.scopes else 'none' }}</span></td>
+          <td data-label="Requested">{{ account.created_at | datetime }}</td>
+          <td data-label="Last used">{{ account.last_used_at | datetime if account.last_used_at else 'never' }}</td>
+          <td class="mw-cell-actions">
             <div class="mw-row-actions">
               <form method="post" class="inline-form" data-confirm-name="{{ account.name }}"
                     onsubmit="return confirm('Revoke ' + this.dataset.confirmName + '? Keys it created will be deleted.')">

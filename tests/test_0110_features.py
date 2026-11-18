@@ -241,9 +241,10 @@ def _checked(page_html, name):
     return re.search(rf'name="{name}"[^>]*\bchecked\b', page_html)
 
 
-def test_settings_features_form_persists_both_toggles(configured_client):
-    """A Features section on the settings page carries both checkboxes,
-    saves them under its own action, and renders the stored values."""
+def test_settings_features_form_persists_all_three_toggles(configured_client):
+    """The Features form is one ruled switch list carrying MSQ, premodels and
+    the System Management Accounts API master switch; it saves all three under
+    its own action and renders the stored values."""
     client, _ = configured_client
     db = _db(client)
 
@@ -251,6 +252,7 @@ def test_settings_features_form_persists_both_toggles(configured_client):
     assert 'name="action" value="features"' in page
     assert _checked(page, "msq_enabled")
     assert _checked(page, "premodels_enabled")
+    assert _checked(page, "sma_enabled")
     # the labels state the consequences of turning each toggle off
     assert "stops the scheduled monitoring" in page
     assert "keep working" in page
@@ -260,14 +262,22 @@ def test_settings_features_form_persists_both_toggles(configured_client):
     assert "Features saved" in saved.get_data(as_text=True)
     assert db.msq_enabled() is False
     assert db.premodels_enabled() is False
+    assert db.sma_enabled(True) is False
 
     page = client.get("/admin/settings").get_data(as_text=True)
     assert not _checked(page, "msq_enabled")
     assert not _checked(page, "premodels_enabled")
+    assert not _checked(page, "sma_enabled")
 
     client.post(
         "/admin/settings",
-        data={"action": "features", "msq_enabled": "1", "premodels_enabled": "1"},
+        data={
+            "action": "features",
+            "msq_enabled": "1",
+            "premodels_enabled": "1",
+            "sma_enabled": "1",
+        },
     )
     assert db.msq_enabled() is True
     assert db.premodels_enabled() is True
+    assert db.sma_enabled(True) is True
