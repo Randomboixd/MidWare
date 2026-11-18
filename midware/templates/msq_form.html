@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit' if recorder else 'New' }} MSQ recorder - MidWare{% endblock %}
 
+{% set hc = [] %}
+{% if form.get('hc_stream_integrity') %}{% set _ = hc.append('integrity') %}{% endif %}
+{% if form.get('hc_text_forensics') %}{% set _ = hc.append('forensics') %}{% endif %}
+{% if form.get('hc_needle') %}{% set _ = hc.append('needle') %}{% endif %}
+{% set hc_digest = hc | join(', ') if hc else 'off' %}
+{% set budgets = [] %}
+{% set ttft_budget = form.get('max_ttft_seconds', 30) %}
+{% set total_budget = form.get('max_total_seconds', 60) %}
+{% if ttft_budget and ttft_budget > 0 %}{% set _ = budgets.append('ttft ' ~ ttft_budget ~ 's') %}{% endif %}
+{% if total_budget and total_budget > 0 %}{% set _ = budgets.append('total ' ~ total_budget ~ 's') %}{% endif %}
+{% set qa_digest = budgets | join(', ') if budgets else 'off' %}
+
 {% block content %}
 {% include "_msq_warning.html" %}
 
@@ -42,28 +54,38 @@
     <small class="mw-hint">A slug discovered on that provider.</small>
   </section>
 
-  <details class="mw-reference" open>
-    <summary>Advanced</summary>
-    <div class="field label border">
-      <textarea name="system_prompt" id="msq-system-prompt" rows="4" placeholder=" ">{{ form.get('system_prompt', '') }}</textarea>
-      <label for="msq-system-prompt">System prompt</label>
-    </div>
-    <div class="field label border">
-      <textarea name="user_prompt" id="msq-user-prompt" rows="4" placeholder=" ">{{ form.get('user_prompt', '') }}</textarea>
-      <label for="msq-user-prompt">User prompt</label>
-    </div>
-    <small class="mw-hint">Sent on every check. Ask for enough output to be measurable.</small>
+  <details class="mw-fold" open>
+    <summary class="mw-fold-head">
+      <h2 class="mw-fold-title">Prompts</h2>
+      <span class="mw-fold-digest">every {{ '%g' | format(form.get('interval_minutes', 60)) }} min</span>
+    </summary>
+    <div class="mw-fold-body">
+      <div class="field label border">
+        <textarea name="system_prompt" id="msq-system-prompt" rows="4" placeholder=" ">{{ form.get('system_prompt', '') }}</textarea>
+        <label for="msq-system-prompt">System prompt</label>
+      </div>
+      <div class="field label border">
+        <textarea name="user_prompt" id="msq-user-prompt" rows="4" placeholder=" ">{{ form.get('user_prompt', '') }}</textarea>
+        <label for="msq-user-prompt">User prompt</label>
+      </div>
+      <small class="mw-hint">Sent on every check. Ask for enough output to be measurable.</small>
 
-    <div class="field label border">
-      <input type="number" name="interval_minutes" id="msq-interval" min="1" step="1"
-             value="{{ form.get('interval_minutes', 60) }}" placeholder=" ">
-      <label for="msq-interval">Check frequency (minutes)</label>
+      <div class="field label border">
+        <input type="number" name="interval_minutes" id="msq-interval" min="1" step="1"
+               value="{{ form.get('interval_minutes', 60) }}" placeholder=" ">
+        <label for="msq-interval">Check frequency (minutes)</label>
+      </div>
+      <small class="mw-hint">Default 60 (one hour). Anything from 1 minute upward.</small>
     </div>
-    <small class="mw-hint">Default 60 (one hour). Anything from 1 minute upward.</small>
+  </details>
 
-    <details class="mw-reference">
-      <summary>Quality assurance</summary>
-      <div class="mw-check-row" style="margin-top:0.6rem">
+  <details class="mw-fold"{% if qa_digest != 'off' %} open{% endif %}>
+    <summary class="mw-fold-head">
+      <h2 class="mw-fold-title">Quality assurance</h2>
+      <span class="mw-fold-digest">{{ qa_digest }}</span>
+    </summary>
+    <div class="mw-fold-body">
+      <div class="mw-check-row">
         <div class="mw-check-text">
           Ignore thinking blocks
           <span class="mw-hint">Score only the visible answer. Reasoning models draft and repeat
@@ -78,7 +100,7 @@
         <input type="hidden" name="ignore_thinking" value="0">
       </div>
 
-      <div class="mw-check-row" style="margin-top:0.6rem">
+      <div class="mw-check-row">
         <div class="mw-check-text">
           Penalize non-Latin symbols
           <span class="mw-hint">Flags Chinese and other non-Latin scripts in an English answer.</span>
@@ -112,10 +134,15 @@
         </div>
       </div>
       <small class="mw-hint">Slower responses are penalized. -1 disables a budget.</small>
-    </details>
+    </div>
+  </details>
 
-    <details class="mw-reference">
-      <summary>Hardcore checks (optional)</summary>
+  <details class="mw-fold"{% if hc_digest != 'off' %} open{% endif %}>
+    <summary class="mw-fold-head">
+      <h2 class="mw-fold-title">Hardcore checks</h2>
+      <span class="mw-fold-digest">{{ hc_digest }}</span>
+    </summary>
+    <div class="mw-fold-body">
       <small class="mw-hint">Higher-signal probes, all off by default. Failures here can mark the
         model <strong>Failing</strong> immediately instead of waiting for the average.</small>
 
@@ -158,10 +185,10 @@
         <small class="mw-hint">Also save the long-context needle request and answer to your
           history. Only applies while request recording is on.</small>
       </div>
-    </details>
+    </div>
   </details>
 
-  <div class="mw-check-row" style="margin-top:1rem">
+  <div class="mw-check-row">
     <div class="mw-check-text">
       Collect MSQ Requests for this recorder
       <span class="mw-hint">Logs each probe under the auto-created <strong>MSQ Measurements</strong>
@@ -175,7 +202,7 @@
     <input type="hidden" name="collect_requests" value="0">
   </div>
 
-  <div class="mw-check-row" style="margin-top:0.6rem">
+  <div class="mw-check-row">
     <div class="mw-check-text">
       Enabled (probes run on schedule)
     </div>
