@@ -28,7 +28,7 @@ import httpx
 
 from .conversation import _collect_reasoning
 from .premodels import FALLBACK_MACRO_RE, MACRO_RE
-from .upstream import HOP_BY_HOP, apply_provider_headers, upstream_url
+from .upstream import CLIENT_CREDENTIAL_HEADERS, HOP_BY_HOP, apply_provider_headers, upstream_url
 
 WORKFLOW_MAX_INTERMEDIATE = 8
 WORKFLOW_MAX_FINAL_BLOCKS = 20
@@ -79,7 +79,7 @@ CALL_FALLBACK_RE = re.compile(
     r"@@\s*(?P<name>[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+)\s*"
     r"\(\s*(?P<q>['\"])(?P<arg>[^'\"]*)(?P=q)\s*\)\s*@@"
 )
-STRIPPED_REQUEST_HEADERS = HOP_BY_HOP | {"authorization", "x-api-key"}
+STRIPPED_REQUEST_HEADERS = HOP_BY_HOP | CLIENT_CREDENTIAL_HEADERS
 
 # The JavaScript node's runtime. Everything crosses the Python/JS boundary as a
 # JSON string because mini-racer only converts primitives and JS handles on

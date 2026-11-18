@@ -380,6 +380,14 @@ class _RateLimitHit(Exception):
         self.counts = counts
 
 
+class _RateLimitGroupHit(Exception):
+    """Internal: unwinds a group claim, keeping each entry's in-transaction counts."""
+
+    def __init__(self, counts: dict[int, dict[str, int]]):
+        super().__init__("rate limit hit")
+        self.counts = counts
+
+
 def rate_window_start(window: str, now: datetime | None = None) -> datetime:
     """Inclusive UTC start of a fixed rate-limit window in RATE_WINDOWS.
 
@@ -1867,6 +1875,80 @@ class Database:
             # the bumps were rolled back, so report what is actually stored
             return {window: amount - 1 for window, amount in hit.counts.items()}, False
         return counts, True
+
+    def claim_rate_usage_group(
+        self,
+        group: list[tuple[str, int, dict[str, int]]],
+        now: datetime | None = None,
+    ) -> list[tuple[dict[str, int], bool]]:
+        """Count one request against every ``(subject, id, {window: max})`` at once.
+
+        A request can have to claim quota on several subjects at the same
+        time — the caller's key *and* the premodel it addresses. One
+        transaction bumps every subject's request windows and rolls back all
+        of the bumps if any one lands over its cap, so a rejection never
+        eats another subject's quota: all windows or none, across the whole
+        group. Each entry answers ``(counts, ok)`` like ``_rate_usage_claim``;
+        ``counts`` is what is actually stored, and ``ok`` is False only for
+        the entries that were over their cap.
+        """
+        results: list[tuple[dict[str, int], bool]] = [({}, True)] * len(group)
+        live = [
+            (index, subject, subject_id, limits)
+            for index, (subject, subject_id, limits) in enumerate(group)
+            if limits
+        ]
+        if not live:
+            return results
+        claimed: dict[int, dict[str, int]] = {}
+        try:
+            with self.write() as conn:
+                for index, subject, subject_id, limits in live:
+                    table, id_column = self._RATE_TABLES[subject]
+                    for window in limits:
+                        start = to_iso(rate_window_start(window, now))
+                        conn.execute(
+                            f"""
+                            INSERT INTO {table} ({id_column}, kind, window, window_start, amount)
+                            VALUES (?, 'requests', ?, ?, 1)
+                            ON CONFLICT({id_column}, kind, window, window_start)
+                            DO UPDATE SET amount = amount + 1
+                            """,
+                            (subject_id, window, start),
+                        )
+                    claimed[index] = {
+                        window: int(
+                            conn.execute(
+                                f"SELECT amount FROM {table} "
+                                f"WHERE {id_column} = ? AND kind = 'requests' "
+                                f"AND window = ? AND window_start = ?",
+                                (subject_id, window, to_iso(rate_window_start(window, now))),
+                            ).fetchone()[0]
+                        )
+                        for window in limits
+                    }
+                if any(
+                    claimed[index][window] > limits[window]
+                    for index, _subject, _subject_id, limits in live
+                    for window in limits
+                ):
+                    raise _RateLimitGroupHit(claimed)
+                for _index, subject, _subject_id, _limits in live:
+                    self._prune_rate_usage(conn, self._RATE_TABLES[subject][0], now)
+        except _RateLimitGroupHit as hit:
+            # Every bump was rolled back, so report stored counts; only the
+            # subjects actually over their cap read as failures.
+            for index, counts in hit.counts.items():
+                limits = group[index][2]
+                over = any(counts[window] > limits[window] for window in limits)
+                results[index] = (
+                    {window: amount - 1 for window, amount in counts.items()},
+                    not over,
+                )
+            return results
+        for index, counts in claimed.items():
+            results[index] = (counts, True)
+        return results
 
     def rate_usage_amounts(
         self, api_key_id: int, kind: str, windows: tuple[str, ...], now: datetime | None = None

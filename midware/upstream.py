@@ -23,6 +23,28 @@ HOP_BY_HOP = {
     "host",
 }
 
+# Headers that describe MidWare's *inbound* side and must never be replayed
+# upstream or handed to a workflow's variable scope: the caller's MidWare
+# credential (accepted via Authorization, x-api-key or x-midware-key), the
+# admin session cookie, and reverse-proxy plumbing that would misdescribe
+# MidWare's own egress. Everything else a client sends still passes through.
+CLIENT_CREDENTIAL_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-key",
+        "x-midware-key",
+        "cookie",
+        "proxy-authorization",
+        "forwarded",
+        "x-real-ip",
+        "x-forwarded-proto",
+        "x-forwarded-host",
+        "x-forwarded-for",
+        "x-forwarded-port",
+        "x-forwarded-ssl",
+    }
+)
+
 
 def split_target(route) -> tuple[str, str]:
     """Split a configured target host into its base URL and path prefix."""

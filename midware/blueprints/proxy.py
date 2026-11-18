@@ -30,6 +30,7 @@ from ..images import IMAGE_CONTENT_TYPES, load_image, rewrite_image_body
 from ..premodels import apply_premodel_messages, apply_sampling_params, extract_premodel_prefix
 from ..tokens import estimate_usage, prompt_estimate
 from ..upstream import (
+    CLIENT_CREDENTIAL_HEADERS,
     HOP_BY_HOP,
     apply_provider_headers,
     split_target,
@@ -129,41 +130,39 @@ def _rate_limit_error(window: str, message: str, code: str) -> Response:
     return response
 
 
-def _rate_limit_check(db, subject, subject_id: int, label: str, *, amounts, claim) -> tuple[Response, str] | None:
+def _token_limit_error(subject, subject_id: int, label: str, *, amounts) -> tuple[Response, str] | None:
     """Reject a call that would push ``subject`` (a key or premodel row) past quota.
 
-    Request counters are claimed atomically (all windows or none) so a rejected
-    attempt never eats quota; token counters are settled after the response in
-    ``_persist`` because only the upstream knows the final usage. ``amounts`` /
-    ``claim`` are the matching db helpers — key and premodel counters live in
-    separate tables and are checked independently (key first).
+    Token counters are settled after the response in ``_persist`` because only
+    the upstream knows the final usage, so this check claims nothing: it reads
+    the settled totals. Request counters are the claiming kind — see the
+    grouped claim in ``_forward``.
     """
     token_windows = _enabled_token_windows(subject)
-    if token_windows:
-        counts = amounts(subject_id, "tokens", token_windows)
-        for window in token_windows:
-            limit = int(subject[f"max_tokens_{window}"] or 0)
-            if counts[window] >= limit:
-                message = (
-                    f"Token limit reached for this {label}: {counts[window]}/{limit} "
-                    f"tokens used this {window}."
-                )
-                return _rate_limit_error(window, message, "token_limit_exceeded"), "token_limit_exceeded"
-
-    request_limits = _enabled_request_limits(subject)
-    if request_limits:
-        counts, ok = claim(subject_id, request_limits)
-        if not ok:
-            window = next(w for w in request_limits if counts[w] >= request_limits[w])
+    if not token_windows:
+        return None
+    counts = amounts(subject_id, "tokens", token_windows)
+    for window in token_windows:
+        limit = int(subject[f"max_tokens_{window}"] or 0)
+        if counts[window] >= limit:
             message = (
-                f"Request limit reached for this {label}: {counts[window]}/"
-                f"{request_limits[window]} requests sent this {window}."
+                f"Token limit reached for this {label}: {counts[window]}/{limit} "
+                f"tokens used this {window}."
             )
-            return (
-                _rate_limit_error(window, message, "request_limit_exceeded"),
-                "request_limit_exceeded",
-            )
+            return _rate_limit_error(window, message, "token_limit_exceeded"), "token_limit_exceeded"
     return None
+
+
+def _request_limit_error(
+    limits: dict[str, int], counts: dict[str, int], label: str
+) -> tuple[Response, str]:
+    """The 429 for a claimed request window that came back at its cap."""
+    window = next(w for w in limits if counts[w] >= limits[w])
+    message = (
+        f"Request limit reached for this {label}: {counts[window]}/"
+        f"{limits[window]} requests sent this {window}."
+    )
+    return _rate_limit_error(window, message, "request_limit_exceeded"), "request_limit_exceeded"
 
 
 def _authorize(ctx: dict) -> tuple[dict, int] | None:
@@ -238,7 +237,7 @@ def _extract_host_prefix(payload: dict | None) -> tuple[str | None, int | None]:
     return name or None, route_id
 
 
-def _filtered_headers(headers, drop: set[str] | None = None):
+def _filtered_headers(headers, drop: set[str] | frozenset[str] | None = None):
     drop = drop or set()
     for name, value in headers.items():
         lower = name.lower()
@@ -276,14 +275,15 @@ def _merge_reasoning_body(body: bytes | None, reasoning: str) -> bytes:
 def _prepare_headers(route, force_sse: bool) -> dict[str, str]:
     """Build upstream headers, swapping the client's MidWare key for the route key.
 
-    The route's stored credential wins. If a route was saved without one we fall
-    back to whatever the caller sent so the server can still act as a pass-through.
+    Only the route's stored credential ever travels upstream. A route saved
+    without one sends no credential at all: the caller's MidWare key is never
+    forwarded, so keyless upstreams keep working while keyed ones answer 401
+    honestly instead of accepting a foreign token.
     """
-    client_auth = request.headers.get("Authorization")
-    client_api_key = request.headers.get("x-api-key")
-
     headers = dict(
-        _filtered_headers(request.headers, drop={"authorization", "x-api-key", "accept-encoding"})
+        _filtered_headers(
+            request.headers, drop=CLIENT_CREDENTIAL_HEADERS | {"accept-encoding"}
+        )
     )
     headers.setdefault("Accept-Encoding", "identity")
 
@@ -295,10 +295,6 @@ def _prepare_headers(route, force_sse: bool) -> dict[str, str]:
             headers["x-api-key"] = upstream_key
         else:
             headers["Authorization"] = f"Bearer {upstream_key}"
-    elif client_auth:
-        headers["Authorization"] = client_auth
-    elif client_api_key:
-        headers["x-api-key"] = client_api_key
 
     if force_sse:
         headers["Accept"] = "text/event-stream"
@@ -787,27 +783,31 @@ def _forward(ctx: dict, path: str) -> Response:
         return response
 
     api_key = ctx["api_key"]
-    rate_error = _rate_limit_check(
-        db,
-        api_key,
-        api_key["id"],
-        "API key",
-        amounts=db.rate_usage_amounts,
-        claim=db.rate_usage_claim,
+
+    # Token caps read settled totals; request caps claim. The key and premodel
+    # request claims share one all-or-nothing transaction, so a rejection on
+    # either side never eats the other's quota.
+    token_error = _token_limit_error(
+        api_key, api_key["id"], "API key", amounts=db.rate_usage_amounts
     )
-    if rate_error:
-        return reject(rate_error)
-    if premodel is not None:
-        rate_error = _rate_limit_check(
-            db,
-            premodel,
-            premodel["id"],
-            "premodel",
-            amounts=db.premodel_rate_usage_amounts,
-            claim=db.premodel_rate_usage_claim,
+    if token_error is None and premodel is not None:
+        token_error = _token_limit_error(
+            premodel, premodel["id"], "premodel", amounts=db.premodel_rate_usage_amounts
         )
-        if rate_error:
-            return reject(rate_error)
+    if token_error is not None:
+        return reject(token_error)
+
+    claims: list[tuple[str, int, dict[str, int], str]] = [
+        ("api_key", api_key["id"], _enabled_request_limits(api_key), "API key")
+    ]
+    if premodel is not None:
+        claims.append(
+            ("premodel", premodel["id"], _enabled_request_limits(premodel), "premodel")
+        )
+    results = db.claim_rate_usage_group([(s, i, l) for s, i, l, _ in claims])
+    for (_subject, _subject_id, limits, label), (counts, ok) in zip(claims, results):
+        if not ok:
+            return reject(_request_limit_error(limits, counts, label))
 
     workflow_usage: dict | None = None
     workflow_reasoning = ""
@@ -920,30 +920,84 @@ def _forward(ctx: dict, path: str) -> Response:
             }
             yield f"data: {json.dumps(injected, ensure_ascii=False)}\n\n".encode("utf-8")
         buffer = bytearray()
+        settled = False  # a stream is settled exactly once, whatever its ending
+
+        def settle(**kwargs) -> None:
+            nonlocal settled
+            if settled:
+                return
+            settled = True
+            persist(**kwargs)
+
         try:
             for chunk in upstream.iter_bytes():
                 if chunk:
                     if len(buffer) < capture_limit:
                         buffer.extend(chunk[: capture_limit - len(buffer)])
                     yield chunk
-        except httpx.HTTPError as exc:  # client dropped or upstream reset
+        except GeneratorExit:
+            # The client hung up mid-stream. The request still happened, so it
+            # is settled once with whatever was delivered; bookkeeping must
+            # never mask the close itself.
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            try:
+                settle(
+                    model=model,
+                    status_code=upstream.status_code,
+                    latency_ms=latency_ms,
+                    streamed=True,
+                    response_body=bytes(buffer).decode("utf-8", "replace"),
+                    error="client_disconnected",
+                )
+            except Exception:
+                current_app.logger.warning(
+                    "MidWare failed to record a client-disconnected stream", exc_info=True
+                )
+            raise
+        except httpx.HTTPError as exc:  # the upstream stream broke mid-flight
             upstream.close()
             latency_ms = int((time.perf_counter() - started) * 1000)
-            persist(
-                model=model,
-                status_code=upstream.status_code,
-                latency_ms=latency_ms,
-                streamed=True,
-                response_body=bytes(buffer).decode("utf-8", "replace"),
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            error_text = f"{type(exc).__name__}: {exc}"
+            try:
+                # 502, not the 200 already sent: a truncated stream is a
+                # failure, and its partial capture keeps the delivered bytes.
+                settle(
+                    model=model,
+                    status_code=502,
+                    latency_ms=latency_ms,
+                    streamed=True,
+                    response_body=bytes(buffer).decode("utf-8", "replace"),
+                    error=error_text,
+                    # Workflow sub-calls already spent real tokens; settle
+                    # their counters even though the row itself stays at zero.
+                    rate_tokens=(
+                        max(0, int(workflow_usage.get("prompt") or 0))
+                        + max(0, int(workflow_usage.get("completion") or 0))
+                    )
+                    if workflow_usage
+                    else None,
+                )
+            except Exception:
+                current_app.logger.warning(
+                    "MidWare failed to record a broken stream", exc_info=True
+                )
+            # One terminal event so a live client can tell truncation from a
+            # clean finish; guarded because that client may already be gone.
+            try:
+                yield f"data: {json.dumps({'error': error_text})}\n\n".encode(
+                    "utf-8", "replace"
+                )
+            except Exception:
+                current_app.logger.debug(
+                    "MidWare could not deliver the truncation event", exc_info=True
+                )
             return
         finally:
             upstream.close()
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         try:
-            persist(
+            settle(
                 model=model,
                 status_code=upstream.status_code,
                 latency_ms=latency_ms,
