@@ -1146,6 +1146,21 @@ def _msq_recorder(db: Any, recorder_id: int) -> Any:
     return row
 
 
+def _msq_feature_guard(db: Any) -> None:
+    """Refuse the whole SMA MSQ surface while the feature toggle is off.
+
+    The account and its scopes are in order; the admin switched the feature
+    off, so this is a refusal, not a permissions question. Recorder rows are
+    untouched and the surface returns the moment the toggle does.
+    """
+    if not db.msq_enabled():
+        raise sma.SmaError(
+            "feature_disabled",
+            "MSQ is disabled on this MidWare server. Enable it in Settings.",
+            403,
+        )
+
+
 def _msq_fields(db: Any, body: dict[str, Any], *, creating: bool) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     if creating or "name" in body:
@@ -1191,6 +1206,7 @@ def _msq_fields(db: Any, body: dict[str, Any], *, creating: bool) -> dict[str, A
 @scoped(sma.READ_MSQ)
 def list_msq() -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     _audit("msq.list", status=200)
     return jsonify({"data": [_msq_payload(row) for row in db.list_msq_recorders()]})
 
@@ -1199,6 +1215,7 @@ def list_msq() -> Any:
 @scoped(sma.READ_MSQ)
 def get_msq(recorder_id: int) -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     _audit("msq.get", target=recorder_id, status=200)
     return jsonify(_msq_payload(_msq_recorder(db, recorder_id)))
 
@@ -1207,6 +1224,7 @@ def get_msq(recorder_id: int) -> Any:
 @scoped(sma.WRITE_MSQ)
 def create_msq() -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     body = _json_body()
     fields = _msq_fields(db, body, creating=True)
     recorder_id = db.create_msq_recorder(**fields)
@@ -1218,6 +1236,7 @@ def create_msq() -> Any:
 @scoped(sma.EDIT_MSQ)
 def update_msq(recorder_id: int) -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     _msq_recorder(db, recorder_id)
     fields = _msq_fields(db, _json_body(), creating=False)
     if not fields:
@@ -1231,6 +1250,7 @@ def update_msq(recorder_id: int) -> Any:
 @scoped(sma.WRITE_MSQ)
 def delete_msq(recorder_id: int) -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     row = _msq_recorder(db, recorder_id)
     db.delete_msq_recorder(recorder_id)
     _audit("msq.delete", target=recorder_id, status=200, detail=row["name"])
@@ -1241,6 +1261,7 @@ def delete_msq(recorder_id: int) -> Any:
 @scoped(sma.WRITE_MSQ)
 def run_msq(recorder_id: int) -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     recorder = _msq_recorder(db, recorder_id)
     last = parse_iso(recorder["last_run_at"])
     if last is not None and (utcnow() - last).total_seconds() < 30:
@@ -1571,6 +1592,7 @@ def request_content(request_id: int) -> Any:
 @scoped(sma.READ_MSQ)
 def msq_checks(recorder_id: int) -> Any:
     db = get_db()
+    _msq_feature_guard(db)
     _msq_recorder(db, recorder_id)
     limit = _arg_int("limit", 20, minimum=1, maximum=_MAX_CHECKS)
     since_raw = _arg_instant("since", exclusive_end=False)

@@ -8,7 +8,7 @@
     <p>Model presets bound to a connection. Call one by sending its slug as the
        model: <code>{{ premodel_prefix }}slug</code>.</p>
   </div>
-  {% if premodels %}
+  {% if premodels and not premodels_disabled %}
   <a class="button" href="{{ url_for('admin.premodel_new') }}">New premodel</a>
   {% endif %}
 </div>
@@ -17,13 +17,20 @@
   <div class="mw-section-head">
     <div>
       <h2>Configured premodels</h2>
-      {% if premodels %}
+      {% if premodels and not premodels_disabled %}
       <span class="mw-meta">{{ premodels | length }} premodel{{ '' if premodels | length == 1 else 's' }}, addressed as <code>{{ premodel_prefix }}slug</code></span>
       {% endif %}
     </div>
   </div>
 
-  {% if premodels %}
+  {% if premodels_disabled %}
+  <div class="mw-empty">
+    <p>Premodels are turned off. A preset pins one connection, one model and a
+       prompt behind a single slug; that surface is closed until it is turned
+       back on. Existing clients keep working.</p>
+    <a class="button border" href="{{ url_for('admin.settings') }}">Turn on premodels in Settings</a>
+  </div>
+  {% elif premodels %}
   <div class="scroll">
     <table class="compact border">
       <thead>

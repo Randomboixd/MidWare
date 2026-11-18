@@ -571,6 +571,12 @@ a recorder pays a real upstream probe per tick, so this API will not mint one
 faster than the panel's own one-minute minimum. A probe
 spends real upstream tokens, so `run` is throttled and every run is audited.
 
+While the MSQ feature is turned off in Settings, every `/interact/msq`
+endpoint — list, get, create, update, delete, run and checks — answers
+`403` with the `feature_disabled` code instead of doing any work. Recorder
+rows, schedules and history are untouched, and the surface (and the
+scheduler) resume the moment the feature is turned back on.
+
 #### `GET /interact/msq/<id>/checks`
 
 Query: `limit` (default 20, max 200), `since` (ISO 8601, inclusive).

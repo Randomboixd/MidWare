@@ -421,30 +421,34 @@ def _models_catalogue(ctx: dict) -> Response:
     active = db.active_route()
     active_id = active["id"] if active else None
     prefix = _premodel_prefix(db)
-    for premodel in db.list_premodels():
-        if not _premodel_allowed(limits, premodel):
-            continue
-        if not _route_allowed(limits, premodel["route_id"]):
-            continue
-        effective_route_id = premodel["route_id"] or active_id
-        if not _model_allowed(limits, effective_route_id, premodel["model"]):
-            continue
-        route = routes.get(premodel["route_id"])
-        data.append(
-            {
-                "id": f"{prefix}{premodel['slug']}",
-                "object": "model",
-                "created": 0,
-                "owned_by": route["name"] if route else "premodel",
-                "midware": {
-                    "premodel": premodel["slug"],
-                    "model": premodel["model"],
-                    "route_id": premodel["route_id"],
-                    "route": route["name"] if route else None,
-                    "description": premodel["description"],
-                },
-            }
-        )
+    # The toggle hides the listing surface only. Premodel resolution in
+    # /v1/chat/completions is deliberately unaffected: a slug already
+    # configured in an existing client keeps working.
+    if db.premodels_enabled():
+        for premodel in db.list_premodels():
+            if not _premodel_allowed(limits, premodel):
+                continue
+            if not _route_allowed(limits, premodel["route_id"]):
+                continue
+            effective_route_id = premodel["route_id"] or active_id
+            if not _model_allowed(limits, effective_route_id, premodel["model"]):
+                continue
+            route = routes.get(premodel["route_id"])
+            data.append(
+                {
+                    "id": f"{prefix}{premodel['slug']}",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": route["name"] if route else "premodel",
+                    "midware": {
+                        "premodel": premodel["slug"],
+                        "model": premodel["model"],
+                        "route_id": premodel["route_id"],
+                        "route": route["name"] if route else None,
+                        "description": premodel["description"],
+                    },
+                }
+            )
 
     payload = {"object": "list", "data": data}
     return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json")

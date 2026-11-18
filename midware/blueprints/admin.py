@@ -642,6 +642,19 @@ def settings():
                     "success",
                 )
             return redirect(url_for("admin.settings"))
+        if action == "features":
+            msq_on = _form_bool("msq_enabled")
+            premodels_on = _form_bool("premodels_enabled")
+            db.set_msq_enabled(msq_on)
+            db.set_premodels_enabled(premodels_on)
+            saved = "Features saved. MSQ is " + (
+                "enabled." if msq_on else "disabled; monitoring has stopped."
+            )
+            saved += " Premodels are " + (
+                "enabled." if premodels_on else "disabled; existing clients keep working."
+            )
+            flash(saved, "success")
+            return redirect(url_for("admin.settings"))
 
         if request.form.get("sma_present"):
             enabled = _form_bool("sma_enabled")
@@ -677,6 +690,8 @@ def settings():
         log_limit=db.request_log_limit(),
         premodel_prefix=_premodel_prefix(db),
         default_premodel_prefix=current_app.config["DEFAULT_PREMODEL_PREFIX"],
+        msq_enabled=db.msq_enabled(),
+        premodels_enabled=db.premodels_enabled(),
         sma_enabled=db.sma_enabled(current_app.config["SMA_ENABLED"]),
         sma_allow_plain_http=db.sma_allow_plain_http(
             current_app.config["SMA_ALLOW_PLAIN_HTTP"]
@@ -900,6 +915,19 @@ def _save_premodel(db, existing):
 @bp.route("/premodels", methods=["GET", "POST"])
 def premodels():
     db = get_db()
+    if not db.premodels_enabled():
+        # The surface is closed, not emptied: rows survive, and a slug already
+        # configured in a client keeps resolving at /v1/chat/completions.
+        if request.method == "POST":
+            flash("Premodels are turned off. Enable them in Settings to manage presets.", "error")
+            return redirect(url_for("admin.premodels"))
+        return render_template(
+            "premodels.html",
+            premodels=[],
+            route_names={},
+            premodel_prefix=_premodel_prefix(db),
+            premodels_disabled=True,
+        )
     if request.method == "POST":
         if request.form.get("action") == "delete":
             db.delete_premodel(request.form.get("premodel_id", type=int))
@@ -912,12 +940,16 @@ def premodels():
         premodels=db.list_premodels(),
         route_names={route["id"]: route["name"] for route in routes},
         premodel_prefix=_premodel_prefix(db),
+        premodels_disabled=False,
     )
 
 
 @bp.route("/premodels/new", methods=["GET", "POST"])
 def premodel_new():
     db = get_db()
+    if not db.premodels_enabled():
+        flash("Premodels are turned off. Enable them in Settings to manage presets.", "error")
+        return redirect(url_for("admin.premodels"))
     if request.method == "POST":
         return _save_premodel(db, None)
     return _render_premodel_form(db, {}, None)
@@ -926,6 +958,9 @@ def premodel_new():
 @bp.route("/premodels/<int:premodel_id>/edit", methods=["GET", "POST"])
 def premodel_edit(premodel_id: int):
     db = get_db()
+    if not db.premodels_enabled():
+        flash("Premodels are turned off. Enable them in Settings to manage presets.", "error")
+        return redirect(url_for("admin.premodels"))
     existing = db.get_premodel(premodel_id)
     if existing is None:
         abort(404)

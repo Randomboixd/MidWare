@@ -9,11 +9,29 @@
     <h1>Model Service Quality</h1>
     <p>Periodic probes that score how well a model is answering over time.</p>
   </div>
+  {% if not msq_disabled %}
   <p style="margin:0">
     <a class="button" href="{{ url_for('msq.recorder_new') }}">Create MSQ Recorder</a>
   </p>
+  {% endif %}
 </div>
 
+{% if msq_disabled %}
+<div class="mw-section">
+  <div class="mw-section-head">
+    <div>
+      <h2>Monitoring is stopped</h2>
+      <span class="mw-meta">Model Service Quality is turned off</span>
+    </div>
+  </div>
+  <div class="mw-empty">
+    <p>Model Service Quality is turned off, so its recorders are closed here and
+       scheduled monitoring has stopped. Recorders, schedules and history stay
+       put and resume the moment it is turned back on.</p>
+    <a class="button border" href="{{ url_for('admin.settings') }}">Turn on MSQ in Settings</a>
+  </div>
+</div>
+{% else %}
 {% if not route_count %}
 <article class="flash flash-error" role="alert">
   No upstream route configured. <a href="{{ url_for('admin.routes') }}">Add a route</a>
@@ -93,6 +111,7 @@
 {% else %}
 <p>No MSQ recorders yet. <a href="{{ url_for('msq.recorder_new') }}">Create one</a> to start
    tracking a model's quality.</p>
+{% endif %}
 {% endif %}
 
 <details class="mw-reference">

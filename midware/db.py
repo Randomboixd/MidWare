@@ -1779,6 +1779,24 @@ class Database:
     def set_sma_allow_plain_http(self, enabled: bool) -> None:
         self.set_setting("sma_allow_plain_http", "1" if enabled else "0")
 
+    def premodels_enabled(self, default: bool = True) -> bool:
+        raw = self.get_setting("premodels_enabled")
+        if raw is None:
+            return default
+        return raw == "1"
+
+    def set_premodels_enabled(self, enabled: bool) -> None:
+        self.set_setting("premodels_enabled", "1" if enabled else "0")
+
+    def msq_enabled(self, default: bool = True) -> bool:
+        raw = self.get_setting("msq_enabled")
+        if raw is None:
+            return default
+        return raw == "1"
+
+    def set_msq_enabled(self, enabled: bool) -> None:
+        self.set_setting("msq_enabled", "1" if enabled else "0")
+
     # -- stored images --------------------------------------------------------
 
     def create_stored_image(self, api_key_id: int, ext: str, retention_days: int) -> str:

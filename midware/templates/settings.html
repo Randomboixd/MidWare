@@ -89,6 +89,36 @@
 <section class="mw-section">
   <div class="mw-section-head">
     <div>
+      <h2>Features</h2>
+      <span class="mw-meta">Turn whole surfaces on and off</span>
+    </div>
+  </div>
+  <form method="post" class="mw-form-section">
+    <input type="hidden" name="action" value="features">
+    <label class="checkbox">
+      <input type="checkbox" name="msq_enabled" value="1" {% if msq_enabled %}checked{% endif %}>
+      <span>Model Service Quality</span>
+    </label>
+    <small class="mw-hint">Turning this off closes the MSQ panel and its SMA endpoints, and also
+      stops the scheduled monitoring probes. Recorders and their history stay put and resume
+      when it is turned back on.</small>
+
+    <label class="checkbox" style="margin-top:1rem">
+      <input type="checkbox" name="premodels_enabled" value="1" {% if premodels_enabled %}checked{% endif %}>
+      <span>Premodels</span>
+    </label>
+    <small class="mw-hint">Turning this off hides premodels from the model catalogue and closes the
+      admin pages. Existing clients sending <code>{{ premodel_prefix }}slug</code> keep working.</small>
+
+    <div class="mw-inline-actions">
+      <button type="submit">Save features</button>
+    </div>
+  </form>
+</section>
+
+<section class="mw-section">
+  <div class="mw-section-head">
+    <div>
       <h2>System Management Accounts API</h2>
       <span class="mw-meta">Signed, scoped access for automation</span>
     </div>

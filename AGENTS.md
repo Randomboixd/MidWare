@@ -869,7 +869,7 @@ Do not break these; several have regression tests.
   approve accounts directly through `db.update_system_account`; tests that go
   through the consent page use the `secured` fixture (credentials + `/signin`).
 - Keep the suite green and add a test for every behaviour change. Current baseline:
-  `657 passed` — **update this number whenever the test count changes.**
+  `666 passed` — **update this number whenever the test count changes.**
 
 ## Conventions
 

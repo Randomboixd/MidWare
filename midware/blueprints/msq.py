@@ -240,6 +240,17 @@ def _dashboard(db) -> list[dict]:
 @bp.route("/", methods=["GET"])
 def index():
     db = get_db()
+    if not db.msq_enabled():
+        # The rows survive: turning MSQ off stops the monitoring, it does not
+        # delete the recorders, so this page says where to turn it back on.
+        return render_template(
+            "msq.html",
+            cards=[],
+            charts={},
+            route_count=len(db.list_routes()),
+            threshold=current_app.config["MSQ_DEGRADED_THRESHOLD"],
+            msq_disabled=True,
+        )
     cards = _dashboard(db)
     charts = {str(card["recorder"]["id"]): card["points"] for card in cards}
     return render_template(
@@ -248,12 +259,16 @@ def index():
         charts=charts,
         route_count=len(db.list_routes()),
         threshold=current_app.config["MSQ_DEGRADED_THRESHOLD"],
+        msq_disabled=False,
     )
 
 
 @bp.route("/new", methods=["GET", "POST"])
 def recorder_new():
     db = get_db()
+    if not db.msq_enabled():
+        flash("MSQ is turned off. Enable it in Settings to manage recorders.", "error")
+        return redirect(url_for("msq.index"))
     if request.method == "POST":
         return _save(db, None)
     return _render_form(db, _form_defaults(), None)
@@ -262,6 +277,9 @@ def recorder_new():
 @bp.route("/<int:recorder_id>/edit", methods=["GET", "POST"])
 def recorder_edit(recorder_id: int):
     db = get_db()
+    if not db.msq_enabled():
+        flash("MSQ is turned off. Enable it in Settings to manage recorders.", "error")
+        return redirect(url_for("msq.index"))
     existing = db.get_msq_recorder(recorder_id)
     if existing is None:
         abort(404)
@@ -273,6 +291,9 @@ def recorder_edit(recorder_id: int):
 @bp.route("/<int:recorder_id>/delete", methods=["POST"])
 def recorder_delete(recorder_id: int):
     db = get_db()
+    if not db.msq_enabled():
+        flash("MSQ is turned off. Enable it in Settings to manage recorders.", "error")
+        return redirect(url_for("msq.index"))
     recorder = db.get_msq_recorder(recorder_id)
     if recorder is None:
         abort(404)
@@ -284,6 +305,9 @@ def recorder_delete(recorder_id: int):
 @bp.route("/<int:recorder_id>/run", methods=["POST"])
 def recorder_run(recorder_id: int):
     db = get_db()
+    if not db.msq_enabled():
+        flash("MSQ is turned off. Enable it in Settings to manage recorders.", "error")
+        return redirect(url_for("msq.index"))
     recorder = db.get_msq_recorder(recorder_id)
     if recorder is None:
         abort(404)

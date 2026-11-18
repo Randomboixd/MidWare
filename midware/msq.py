@@ -794,6 +794,10 @@ def run_due(app, now: datetime | None = None) -> list[dict[str, Any]]:
     skipped: it must not abort every later recorder in the same tick.
     """
     db = app.extensions["midware_db"]
+    # Read the setting on every tick, never cached: disabling MSQ stops the
+    # monitoring, and re-enabling must resume without a restart.
+    if not db.msq_enabled():
+        return []
     now = now or utcnow()
     results: list[dict[str, Any]] = []
     for recorder in db.due_msq_recorders(now):
