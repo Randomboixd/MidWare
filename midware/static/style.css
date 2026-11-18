@@ -2494,7 +2494,8 @@ tr.is-temporary > td { background: color-mix(in oklab, var(--color-paper-2) 70%,
   /* A URL is worth reading in full on the page that exists to show upstreams,
      so it wraps instead of trailing off in an ellipsis. */
   .mw-stack .mw-row-target,
-  .mw-stack .mw-row-sub.mono {
+  .mw-stack .mw-row-sub.mono,
+  .mw-stack td.mono {
     overflow-wrap: anywhere;
     white-space: normal;
     overflow: visible;

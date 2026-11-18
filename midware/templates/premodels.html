@@ -32,25 +32,25 @@
   </div>
   {% elif premodels %}
   <div class="scroll">
-    <table class="compact border">
+    <table class="compact border mw-stack">
       <thead>
-        <tr><th>Name</th><th>Description</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th class="num">Actions</th></tr>
+        <tr><th>Name</th><th>Slug</th><th>Connection</th><th>Model</th><th>Merge</th><th class="num">Actions</th></tr>
       </thead>
       <tbody>
         {% for p in premodels %}
         <tr class="mw-row">
           <td class="mw-cell-name">
             <a class="mw-row-name" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">{{ p['name'] }}</a>
+            <span class="mw-row-sub" title="{{ p['description'] or 'none' }}">{{ p['description'] or 'none' }}</span>
           </td>
-          <td><span class="mw-row-sub" title="{{ p['description'] or 'none' }}">{{ p['description'] or 'none' }}</span></td>
-          <td class="mono">{{ premodel_prefix }}{{ p['slug'] }}</td>
-          <td>{{ route_names.get(p['route_id'], 'none') }}</td>
-          <td class="mono">{{ p['model'] }}</td>
-          <td>
+          <td class="mono" data-label="Slug">{{ premodel_prefix }}{{ p['slug'] }}</td>
+          <td data-label="Connection">{{ route_names.get(p['route_id'], 'none') }}</td>
+          <td class="mono" data-label="Model">{{ p['model'] }}</td>
+          <td data-label="Merge">
             {% if p['use_workflow'] %}<span class="pill">workflow</span>
             {% else %}<span class="pill">{{ p['merge_mode'] }}</span>{% endif %}
           </td>
-          <td>
+          <td class="mw-cell-actions">
             <div class="mw-row-actions">
               <a class="mw-row-action" href="{{ url_for('admin.premodel_edit', premodel_id=p['id']) }}">Edit</a>
               <form method="post" class="inline-form" data-confirm-name="{{ p['name'] }}"
@@ -78,13 +78,13 @@
 <details class="mw-reference">
   <summary>Calling a premodel</summary>
   <p>Send the slug as the whole <code>model</code> value. Trailing text after the slug overrides
-     the premodel's model, and a <code>[Host]</code> prefix still wins for routing.</p>
+     the premodel’s model, and a <code>[Host]</code> prefix still wins for routing.</p>
   <pre class="mono">{
   "model": "{{ premodel_prefix }}programming-model",
   "messages": [...]
 }</pre>
   <ul>
-    <li><code>{{ premodel_prefix }}slug</code> → the premodel's connection and model.</li>
+    <li><code>{{ premodel_prefix }}slug</code> → the premodel’s connection and model.</li>
     <li>Unknown slug → <code>404 unknown_premodel</code>.</li>
   </ul>
   <p>Premodels alias models, bind a system prompt, or accept a SillyTavern preset.</p>
